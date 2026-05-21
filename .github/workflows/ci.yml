@@ -170,9 +170,13 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p flat
+          find artifacts -type f -exec cp {} flat/ \;
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: flat/*
           generate_release_notes: true
