@@ -169,14 +169,26 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4.3.0
         with:
-          path: artifacts
-
-      - name: Flatten artifacts
-        run: |
-          mkdir -p flat
-          find artifacts -type f -exec cp {} flat/ \;
+          name: binary-linux-amd64
+          path: release-assets
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: binary-linux-arm64
+          path: release-assets
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: binary-darwin-amd64
+          path: release-assets
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: binary-darwin-arm64
+          path: release-assets
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: binary-windows-amd64
+          path: release-assets
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: flat/*
+          files: release-assets/*
           generate_release_notes: true
