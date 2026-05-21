@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { Activity, Plug, Unplug, Loader2, AlertCircle, Radio, GitCompare, Code } from "lucide-react";
 import type { ConnectionParams } from "../api/connection";
+import { setConnectionHeaders } from "../api/connection";
 import { testConnection } from "../api/client";
 
 export function Layout({
@@ -24,6 +25,7 @@ export function Layout({
   const handleConnect = async () => {
     setTesting(true);
     setError("");
+    setConnectionHeaders(params);
     try {
       await testConnection();
       onConnect(params);
