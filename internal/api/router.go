@@ -28,6 +28,10 @@ func Router(cfg *config.Config, api *API, frontendFS fs.FS) http.Handler {
 		w.Write([]byte("ok"))
 	})
 
+	r.Get("/api/version", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"version": cfg.Version})
+	})
+
 	if cfg.DevMode {
 		proxyURL, _ := url.Parse("http://localhost:5173")
 		proxy := httputil.NewSingleHostReverseProxy(proxyURL)

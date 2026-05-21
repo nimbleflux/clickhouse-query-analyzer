@@ -14,6 +14,7 @@ type Config struct {
 	ClickHousePass string
 	ClickHouseDB   string
 	DevMode        bool
+	Version        string
 }
 
 func Parse() *Config {

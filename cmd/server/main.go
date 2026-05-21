@@ -17,6 +17,8 @@ import (
 	"github.com/bartcode/clickhouse-query-analyzer/internal/config"
 )
 
+var version = "dev"
+
 //go:embed all:frontend
 var frontendEmbed embed.FS
 
@@ -27,8 +29,9 @@ func getFrontendFS() fs.FS {
 
 func main() {
 	cfg := config.Parse()
+	cfg.Version = version
 
-	log.Printf("ClickHouse Query Analyzer starting...")
+	log.Printf("ClickHouse Query Analyzer %s", version)
 	log.Printf("  Port: %d", cfg.Port)
 	log.Printf("  Dev mode: %v", cfg.DevMode)
 

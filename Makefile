@@ -1,6 +1,8 @@
 .PHONY: dev dev-backend dev-frontend build clean docker dev-clickhouse seed
 
 BINARY := clickhouse-query-analyzer
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X main.version=$(VERSION)
 
 dev: dev-clickhouse-wait dev-frontend dev-backend
 
@@ -33,13 +35,13 @@ build-frontend:
 	cp -r web/dist/* cmd/server/frontend/
 
 build-backend: build-frontend
-	CGO_ENABLED=0 go build -ldflags="-s -w" -o $(BINARY) ./cmd/server
+	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BINARY) ./cmd/server
 
 clean:
 	rm -rf $(BINARY) cmd/server/frontend web/dist
 
 docker:
-	docker build -t clickhouse-query-analyzer .
+	docker build --build-arg VERSION=$(VERSION) -t clickhouse-query-analyzer .
 
 seed:
 	@for i in $$(seq 1 30); do \

@@ -20,6 +20,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set version
+        id: version
+        run: echo "version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-go@v5
         with:
@@ -27,7 +33,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: web/package-lock.json
 
@@ -46,7 +52,10 @@ jobs:
         run: go vet ./...
 
       - name: Go build
-        run: CGO_ENABLED=0 go build -ldflags="-s -w" -o clickhouse-query-analyzer ./cmd/server
+        run: CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o clickhouse-query-analyzer ./cmd/server
+
+      - name: Print version
+        run: ./clickhouse-query-analyzer --help 2>&1; echo "---"; echo "Version: ${{ steps.version.outputs.version }}"
 
   docker:
     needs: build
@@ -54,6 +63,12 @@ jobs:
     if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set version
+        id: version
+        run: echo "version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -79,6 +94,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -101,6 +117,12 @@ jobs:
             goarch: amd64
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set version
+        id: version
+        run: echo "version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-go@v5
         with:
@@ -108,7 +130,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: web/package-lock.json
 
@@ -128,7 +150,7 @@ jobs:
         run: |
           EXT=""
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
-          go build -ldflags="-s -w" -o "clickhouse-query-analyzer-${GOOS}-${GOARCH}${EXT}" ./cmd/server
+          go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o "clickhouse-query-analyzer-${GOOS}-${GOARCH}${EXT}" ./cmd/server
 
       - uses: actions/upload-artifact@v4
         with:
