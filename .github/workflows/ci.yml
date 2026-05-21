@@ -55,7 +55,9 @@ jobs:
         run: CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o clickhouse-query-analyzer ./cmd/server
 
       - name: Print version
-        run: ./clickhouse-query-analyzer --help 2>&1; echo "---"; echo "Version: ${{ steps.version.outputs.version }}"
+        run: |
+          ./clickhouse-query-analyzer --help 2>&1 || true
+          echo "Version: ${{ steps.version.outputs.version }}"
 
   docker:
     needs: build
