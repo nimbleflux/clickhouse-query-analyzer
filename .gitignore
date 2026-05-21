@@ -1,0 +1,14 @@
+# Go
+clickhouse-query-analyzer
+*.exe
+
+# Frontend
+web/dist/
+web/node_modules/
+
+# Embedded frontend copy (except .gitkeep for embed)
+cmd/server/frontend/*
+!cmd/server/frontend/.gitkeep
+
+# Dev
+dev/data/

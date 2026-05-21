@@ -1,0 +1,1 @@
+{"root":["./src/main.tsx","./src/utils.ts","./src/vite-env.d.ts","./src/api/client.ts","./src/api/connection.ts","./src/api/types.ts","./src/components/flamegraph.tsx","./src/components/layout.tsx","./src/pages/livemonitor.tsx","./src/pages/querycompare.tsx","./src/pages/querydetail.tsx","./src/pages/queryeditor.tsx","./src/pages/querylist.tsx"],"version":"6.0.3"}

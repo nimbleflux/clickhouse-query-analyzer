@@ -1,0 +1,8 @@
+clickhouse-query-analyzer
+cmd/server/frontend/*
+!cmd/server/frontend/.gitkeep
+web/dist/
+web/node_modules/
+dev/
+.git/
+*.md
