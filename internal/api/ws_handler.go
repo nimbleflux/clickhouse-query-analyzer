@@ -7,7 +7,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/bartcode/clickhouse-query-analyzer/internal/clickhouse"
+	"github.com/nimbleflux/clickhouse-query-analyzer/internal/clickhouse"
 )
 
 func (a *API) LiveMonitor(w http.ResponseWriter, r *http.Request) {

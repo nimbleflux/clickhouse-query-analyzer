@@ -1,4 +1,4 @@
-module github.com/bartcode/clickhouse-query-analyzer
+module github.com/nimbleflux/clickhouse-query-analyzer
 
 go 1.26.0
 

@@ -12,9 +12,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bartcode/clickhouse-query-analyzer/internal/api"
-	"github.com/bartcode/clickhouse-query-analyzer/internal/clickhouse"
-	"github.com/bartcode/clickhouse-query-analyzer/internal/config"
+"github.com/nimbleflux/clickhouse-query-analyzer/internal/api"
+
+	"github.com/nimbleflux/clickhouse-query-analyzer/internal/clickhouse"
+
+	"github.com/nimbleflux/clickhouse-query-analyzer/internal/config"
 )
 
 var version = "dev"

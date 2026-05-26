@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/bartcode/clickhouse-query-analyzer/internal/clickhouse"
+	"github.com/nimbleflux/clickhouse-query-analyzer/internal/clickhouse"
 )
 
 func (a *API) Connect(w http.ResponseWriter, r *http.Request) {

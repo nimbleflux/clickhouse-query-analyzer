@@ -9,7 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chiMW "github.com/go-chi/chi/v5/middleware"
 
-	"github.com/bartcode/clickhouse-query-analyzer/internal/config"
+	"github.com/nimbleflux/clickhouse-query-analyzer/internal/config"
 )
 
 func Router(cfg *config.Config, api *API, frontendFS fs.FS) http.Handler {

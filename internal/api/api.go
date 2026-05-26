@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"reflect"
 
-	"github.com/bartcode/clickhouse-query-analyzer/internal/clickhouse"
+	"github.com/nimbleflux/clickhouse-query-analyzer/internal/clickhouse"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

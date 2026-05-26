@@ -31,15 +31,15 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 ### Docker
 
 ```bash
-docker pull ghcr.io/bartcode/clickhouse-query-analyzer:latest
-docker run -p 8080:8080 ghcr.io/bartcode/clickhouse-query-analyzer:latest
+docker pull ghcr.io/nimbleflux/clickhouse-query-analyzer:latest
+docker run -p 8080:8080 ghcr.io/nimbleflux/clickhouse-query-analyzer:latest
 ```
 
 Open http://localhost:8080 and enter your ClickHouse connection details in the top bar.
 
 ### Binary
 
-Download from [Releases](https://github.com/bartcode/clickhouse-query-analyzer/releases) for your platform:
+Download from [Releases](https://github.com/nimbleflux/clickhouse-query-analyzer/releases) for your platform:
 
 ```bash
 # Linux/macOS
