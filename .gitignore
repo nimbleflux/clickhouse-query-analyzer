@@ -12,3 +12,5 @@ cmd/server/frontend/*
 
 # Dev
 dev/data/
+.DS_Store
+

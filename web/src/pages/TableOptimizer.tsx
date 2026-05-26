@@ -185,7 +185,7 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
 
       {/* Controls */}
       <div className="mb-6 flex flex-wrap items-end gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3 py-1.5">
           <label className="flex items-center gap-1.5 text-xs">
             <input type="radio" checked={mode === "single"} onChange={() => setMode("single")} className="accent-[var(--color-accent)]" />
             Single table

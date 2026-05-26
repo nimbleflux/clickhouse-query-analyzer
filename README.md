@@ -10,7 +10,6 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 - **Thread Breakdown** — Per-thread role inference (Coordinator, Scan+Filter, Aggregator, I/O Pool), pipeline visualization from EXPLAIN PIPELINE, top DB functions from trace data
 - **SQL Editor** — CodeMirror 6 editor with schema browser sidebar, column type display, copy-on-hover cells, and "View Analysis" link to jump to profiling data
 - **Query Comparison** — Side-by-side diff of two queries including ProfileEvents metrics
-- **Live Monitor** — WebSocket-based real-time query feed
 - **EXPLAIN** — Execution plan, pipeline, and syntax views
 - **Cluster Support** — Auto-detects `system.clusters`, uses `clusterAllReplicas`
 - **Table Optimizer** — Analyze single tables, entire databases, or all databases for ClickHouse optimization opportunities including LowCardinality, integer right-sizing, Nullable removal, ORDER BY/PARTITION BY suggestions, skipping indices, codec recommendations, and table health checks. Generates copy-ready ALTER TABLE DDL. Bulk analysis streams results in real-time via SSE.
@@ -20,11 +19,20 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 ### Query Analyzer
 ![Query Analyzer](docs/screenshot-query-analyzer.png)
 
+### Memory Overview
+![Memory Overview](docs/screenshot-memory-overview.png)
+
+### Flame Graph
+![Flame Graph](docs/screenshot-flamegraph.png)
+
 ### SQL Editor
 ![SQL Editor](docs/screenshot-sql-editor.png)
 
 ### Query Comparison
 ![Query Comparison](docs/screenshot-query-comparison.png)
+
+### Table Optimizer
+![Table Optimizer](docs/screenshot-table-optimizer.png)
 
 ## Quick Start
 

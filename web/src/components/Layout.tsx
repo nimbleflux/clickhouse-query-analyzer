@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { Activity, Plug, Unplug, Loader2, AlertCircle, Radio, GitCompare, Code, Sun, Moon, Wrench } from "lucide-react";
+import { Plug, Unplug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench } from "lucide-react";
 import type { ConnectionParams } from "../api/connection";
 import { setConnectionHeaders } from "../api/connection";
 import { testConnection } from "../api/client";
@@ -63,20 +63,21 @@ export function Layout({
       <nav className="border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-14 items-center justify-between">
-            <Link to="/" className="flex items-center gap-2 text-[var(--color-text-primary)] no-underline">
-              <Activity className="h-6 w-6 text-[var(--color-accent)]" />
-              <span className="text-lg font-semibold">ClickHouse Query Analyzer</span>
-            </Link>
+              <Link to="/" className="flex items-center gap-2 text-[var(--color-text-primary)] no-underline">
+                <svg className="h-7 w-7 text-[var(--color-accent)]" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M16 3L3 15v13h26V15L16 3z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
+                  <rect x="9.5" y="20" width="3.5" height="6" rx="1" fill="currentColor"/>
+                  <rect x="14.25" y="16" width="3.5" height="10" rx="1" fill="currentColor"/>
+                  <rect x="19" y="18" width="3.5" height="8" rx="1" fill="currentColor"/>
+                </svg>
+                <span className="text-lg font-semibold">ClickHouse Query Analyzer</span>
+              </Link>
             <div className="flex items-center gap-4 text-sm">
               {connected && (
                 <>
                   <Link to="/editor" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
                     <Code className="h-3.5 w-3.5" />
                     Editor
-                  </Link>
-                  <Link to="/live" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
-                    <Radio className="h-3.5 w-3.5" />
-                    Live
                   </Link>
                   <Link to="/compare" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
                     <GitCompare className="h-3.5 w-3.5" />

@@ -516,12 +516,12 @@ function StorageTab({ events }: { events: Record<string, number> }) {
 
       {storageEvents.compression.length > 0 && (
         <ChartSection title="Compression">
-          <ResponsiveContainer width="100%" height={storageEvents.compression.length * 40 + 40}>
+          <ResponsiveContainer width="100%" height={storageEvents.compression.length * 40 + 80}>
             <BarChart data={storageEvents.compression} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
               <XAxis type="number" tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" tickFormatter={(v: number) => formatBytes(v)} />
               <YAxis dataKey="name" type="category" width={160} tick={{ fontSize: 10 }} stroke="var(--color-text-secondary)" />
-              <Tooltip contentStyle={{ backgroundColor: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }} formatter={(v) => formatBytes(Number(v))} />
+              <Tooltip contentStyle={{ backgroundColor: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12, zIndex: 50 }} formatter={(v) => formatBytes(Number(v))} />
               <Bar dataKey="compressed" fill="#3b82f6" name="Compressed" />
               <Bar dataKey="uncompressed" fill="#60a5fa" name="Uncompressed" />
               <Legend />

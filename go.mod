@@ -4,7 +4,6 @@ go 1.26.0
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
-	github.com/coder/websocket v1.8.14
 	github.com/go-chi/chi/v5 v5.2.5
 )
 

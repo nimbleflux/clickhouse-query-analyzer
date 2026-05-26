@@ -6,7 +6,6 @@ import { Layout } from "./components/Layout";
 import { QueryList } from "./pages/QueryList";
 import { QueryDetail } from "./pages/QueryDetail";
 import { QueryCompare } from "./pages/QueryCompare";
-import { LiveMonitor } from "./pages/LiveMonitor";
 import { QueryEditor } from "./pages/QueryEditor";
 import { TableOptimizer } from "./pages/TableOptimizer";
 import { loadConnection, saveConnection, setConnectionHeaders } from "./api/connection";
@@ -62,7 +61,6 @@ function App() {
           <Route path="/editor" element={<QueryEditor />} />
           <Route path="/query/:queryId" element={<QueryDetail />} />
           <Route path="/compare" element={<QueryCompare />} />
-          <Route path="/live" element={<LiveMonitor />} />
           <Route path="/optimizer" element={<TableOptimizer connected={connected} />} />
         </Route>
       </Routes>
