@@ -172,4 +172,85 @@ export interface QueryResult {
   query_id: string;
 }
 
+export interface OptColumn {
+  name: string;
+  type: string;
+  default_kind: string;
+  default_expression: string;
+  is_in_partition_key: boolean;
+  is_in_order_by_key: boolean;
+  is_in_primary_key: boolean;
+  distinct_count?: number;
+  total_sampled?: number;
+  null_count?: number;
+  min_value?: string;
+  max_value?: string;
+  avg_diff?: number;
+}
+
+export interface PartInfo {
+  partition: string;
+  parts_count: number;
+  rows: number;
+  bytes_on_disk: number;
+}
+
+export interface IndexInfo {
+  name: string;
+  type: string;
+  expr: string;
+  granularity: number;
+}
+
+export interface Recommendation {
+  category: string;
+  severity: string;
+  confidence: string;
+  title: string;
+  description: string;
+  current?: string;
+  suggested?: string;
+  impact?: string;
+  ddl?: string;
+  requires_recreate: boolean;
+}
+
+export interface TableAnalysis {
+  database: string;
+  table: string;
+  engine: string;
+  total_rows: number;
+  total_bytes: number;
+  partition_key: string;
+  order_by_key: string;
+  primary_key: string;
+  sampling_key: string;
+  columns: OptColumn[];
+  parts: PartInfo[];
+  existing_indices: IndexInfo[];
+  recommendations: Recommendation[];
+  analyzed_at: string;
+  error?: string;
+}
+
+export interface BulkProgress {
+  current: number;
+  total: number;
+  database: string;
+  table: string;
+}
+
+export interface BulkDone {
+  analyzed: number;
+  skipped: number;
+  errors: number;
+}
+
+export interface BulkEvent {
+  type: "progress" | "result" | "done";
+  progress?: BulkProgress;
+  result?: TableAnalysis;
+  done?: BulkDone;
+}
+
 

@@ -11,6 +11,8 @@ import type {
   ThreadSummary,
   ThreadProfile,
   QueryResult,
+  TableAnalysis,
+  BulkEvent,
 } from "./types";
 import { getConnectionHeaders } from "./connection";
 
@@ -111,4 +113,70 @@ export async function fetchTables(db: string): Promise<{ tables: { name: string;
 
 export async function fetchColumns(db: string, table: string): Promise<{ columns: { name: string; type: string }[] }> {
   return fetchJSON(`${BASE}/schema/${encodeURIComponent(db)}/${encodeURIComponent(table)}/columns`);
+}
+
+export async function fetchTableAnalysis(db: string, table: string): Promise<TableAnalysis> {
+  return fetchJSON<TableAnalysis>(`${BASE}/optimizer/${encodeURIComponent(db)}/${encodeURIComponent(table)}`);
+}
+
+export function streamBulkAnalysis(
+  scope: "database" | "all",
+  db: string,
+  filters?: { engine?: string; min_rows?: number; min_bytes?: number },
+  onEvent?: (event: BulkEvent) => void,
+  onError?: (error: Error) => void,
+): AbortController {
+  const ctrl = new AbortController();
+  const params = new URLSearchParams();
+  if (filters?.engine) params.set("engine", filters.engine);
+  if (filters?.min_rows) params.set("min_rows", String(filters.min_rows));
+  if (filters?.min_bytes) params.set("min_bytes", String(filters.min_bytes));
+
+  let url: string;
+  if (scope === "database") {
+    url = `${BASE}/optimizer/${encodeURIComponent(db)}?${params}`;
+  } else {
+    url = `${BASE}/optimizer?${params}`;
+  }
+
+  (async () => {
+    try {
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        headers: getConnectionHeaders(),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(body.error || res.statusText);
+      }
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const evt: BulkEvent = JSON.parse(line.slice(6));
+              onEvent?.(evt);
+            } catch {}
+          }
+        }
+      }
+    } catch (e) {
+      if (!ctrl.signal.aborted) {
+        onError?.(e instanceof Error ? e : new Error(String(e)));
+      }
+    }
+  })();
+
+  return ctrl;
 }

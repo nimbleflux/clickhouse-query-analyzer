@@ -63,6 +63,9 @@ func apiRoutes(api *API) http.Handler {
 	r.Get("/queries/{queryID}/views", api.GetQueryViews)
 	r.Post("/queries/{queryID}/explain", api.GetExplain)
 	r.Get("/live", api.LiveMonitor)
+	r.Get("/optimizer/{db}/{table}", api.AnalyzeTableHandler)
+	r.Get("/optimizer/{db}", api.AnalyzeDatabaseHandler)
+	r.Get("/optimizer", api.AnalyzeAllHandler)
 
 	return r
 }

@@ -8,6 +8,7 @@ import { QueryDetail } from "./pages/QueryDetail";
 import { QueryCompare } from "./pages/QueryCompare";
 import { LiveMonitor } from "./pages/LiveMonitor";
 import { QueryEditor } from "./pages/QueryEditor";
+import { TableOptimizer } from "./pages/TableOptimizer";
 import { loadConnection, saveConnection, setConnectionHeaders } from "./api/connection";
 import type { ConnectionParams } from "./api/connection";
 import { testConnection } from "./api/client";
@@ -62,6 +63,7 @@ function App() {
           <Route path="/query/:queryId" element={<QueryDetail />} />
           <Route path="/compare" element={<QueryCompare />} />
           <Route path="/live" element={<LiveMonitor />} />
+          <Route path="/optimizer" element={<TableOptimizer connected={connected} />} />
         </Route>
       </Routes>
     </BrowserRouter>

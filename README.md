@@ -13,6 +13,7 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 - **Live Monitor** — WebSocket-based real-time query feed
 - **EXPLAIN** — Execution plan, pipeline, and syntax views
 - **Cluster Support** — Auto-detects `system.clusters`, uses `clusterAllReplicas`
+- **Table Optimizer** — Analyze single tables, entire databases, or all databases for ClickHouse optimization opportunities including LowCardinality, integer right-sizing, Nullable removal, ORDER BY/PARTITION BY suggestions, skipping indices, codec recommendations, and table health checks. Generates copy-ready ALTER TABLE DDL. Bulk analysis streams results in real-time via SSE.
 
 ## Screenshots
 

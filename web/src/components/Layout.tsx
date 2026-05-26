@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { Activity, Plug, Unplug, Loader2, AlertCircle, Radio, GitCompare, Code, Sun, Moon } from "lucide-react";
+import { Activity, Plug, Unplug, Loader2, AlertCircle, Radio, GitCompare, Code, Sun, Moon, Wrench } from "lucide-react";
 import type { ConnectionParams } from "../api/connection";
 import { setConnectionHeaders } from "../api/connection";
 import { testConnection } from "../api/client";
@@ -81,6 +81,10 @@ export function Layout({
                   <Link to="/compare" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
                     <GitCompare className="h-3.5 w-3.5" />
                     Compare
+                  </Link>
+                  <Link to="/optimizer" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
+                    <Wrench className="h-3.5 w-3.5" />
+                    Optimizer
                   </Link>
                 </>
               )}
