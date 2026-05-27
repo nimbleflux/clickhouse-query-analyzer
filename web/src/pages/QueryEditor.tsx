@@ -1006,17 +1006,17 @@ export function QueryEditor() {
           extra={
             <div className="ml-auto flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
               <button
-                onClick={handleExport}
-                disabled={savedQueries.length === 0}
-                className="rounded p-1 hover:bg-[var(--color-bg-tertiary)] disabled:opacity-30"
-                title="Export saved queries"
+                onClick={() => importInputRef.current?.click()}
+                className="rounded p-1 hover:bg-[var(--color-bg-tertiary)]"
+                title="Import saved queries"
               >
                 <Download className="h-3 w-3" />
               </button>
               <button
-                onClick={() => importInputRef.current?.click()}
-                className="rounded p-1 hover:bg-[var(--color-bg-tertiary)]"
-                title="Import saved queries"
+                onClick={handleExport}
+                disabled={savedQueries.length === 0}
+                className="rounded p-1 hover:bg-[var(--color-bg-tertiary)] disabled:opacity-30"
+                title="Export saved queries"
               >
                 <Upload className="h-3 w-3" />
               </button>
@@ -1175,16 +1175,16 @@ export function QueryEditor() {
                         <span className="text-[9px] font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">Param sets</span>
                         <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
                           <button
-                            onClick={handleExportParamSets}
+                            onClick={() => importParamsInputRef.current?.click()}
                             className="rounded p-0.5 hover:bg-[var(--color-bg-tertiary)]"
-                            title="Export param sets"
+                            title="Import param sets"
                           >
                             <Download className="h-3 w-3" />
                           </button>
                           <button
-                            onClick={() => importParamsInputRef.current?.click()}
+                            onClick={handleExportParamSets}
                             className="rounded p-0.5 hover:bg-[var(--color-bg-tertiary)]"
-                            title="Import param sets"
+                            title="Export param sets"
                           >
                             <Upload className="h-3 w-3" />
                           </button>
