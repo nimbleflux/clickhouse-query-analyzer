@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-"github.com/nimbleflux/clickhouse-query-analyzer/internal/api"
+	"github.com/nimbleflux/clickhouse-query-analyzer/internal/api"
 
 	"github.com/nimbleflux/clickhouse-query-analyzer/internal/clickhouse"
 

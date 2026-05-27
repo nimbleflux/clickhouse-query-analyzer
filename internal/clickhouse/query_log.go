@@ -9,55 +9,55 @@ import (
 )
 
 type QueryLogEntry struct {
-	Type                      string    `json:"type"`
-	EventTime                 time.Time `json:"event_time"`
-	QueryStartTime            time.Time `json:"query_start_time"`
-	QueryDurationMs           uint64    `json:"query_duration_ms"`
-	QueryID                   string    `json:"query_id"`
-	Query                     string    `json:"query"`
-	NormalizedQueryHash       uint64    `json:"normalized_query_hash"`
-	QueryKind                 string    `json:"query_kind"`
-	User                      string    `json:"user"`
-	ReadRows                  uint64    `json:"read_rows"`
-	ReadBytes                 uint64    `json:"read_bytes"`
-	WrittenRows               uint64    `json:"written_rows"`
-	WrittenBytes              uint64    `json:"written_bytes"`
-	ResultRows                uint64    `json:"result_rows"`
-	ResultBytes               uint64    `json:"result_bytes"`
-	MemoryUsage               uint64    `json:"memory_usage"`
-	PeakThreadsUsage          uint64    `json:"peak_threads_usage"`
-	ExceptionCode             int32     `json:"exception_code"`
-	Exception                 string    `json:"exception"`
-	Databases                 []string  `json:"databases"`
-	Tables                    []string  `json:"tables"`
-	IsInitialQuery            uint8     `json:"is_initial_query"`
-	InitialQueryID            string    `json:"initial_query_id"`
-	Settings                  map[string]string `json:"settings"`
-	ProfileEvents             map[string]uint64 `json:"profile_events"`
-	UsedFunctions             []string  `json:"used_functions"`
-	UsedStorages              []string  `json:"used_storages"`
-	UsedAggregateFunctions    []string  `json:"used_aggregate_functions"`
+	Type                   string            `json:"type"`
+	EventTime              time.Time         `json:"event_time"`
+	QueryStartTime         time.Time         `json:"query_start_time"`
+	QueryDurationMs        uint64            `json:"query_duration_ms"`
+	QueryID                string            `json:"query_id"`
+	Query                  string            `json:"query"`
+	NormalizedQueryHash    uint64            `json:"normalized_query_hash"`
+	QueryKind              string            `json:"query_kind"`
+	User                   string            `json:"user"`
+	ReadRows               uint64            `json:"read_rows"`
+	ReadBytes              uint64            `json:"read_bytes"`
+	WrittenRows            uint64            `json:"written_rows"`
+	WrittenBytes           uint64            `json:"written_bytes"`
+	ResultRows             uint64            `json:"result_rows"`
+	ResultBytes            uint64            `json:"result_bytes"`
+	MemoryUsage            uint64            `json:"memory_usage"`
+	PeakThreadsUsage       uint64            `json:"peak_threads_usage"`
+	ExceptionCode          int32             `json:"exception_code"`
+	Exception              string            `json:"exception"`
+	Databases              []string          `json:"databases"`
+	Tables                 []string          `json:"tables"`
+	IsInitialQuery         uint8             `json:"is_initial_query"`
+	InitialQueryID         string            `json:"initial_query_id"`
+	Settings               map[string]string `json:"settings"`
+	ProfileEvents          map[string]uint64 `json:"profile_events"`
+	UsedFunctions          []string          `json:"used_functions"`
+	UsedStorages           []string          `json:"used_storages"`
+	UsedAggregateFunctions []string          `json:"used_aggregate_functions"`
 }
 
 type QueryListParams struct {
-	FromTime    string `json:"from_time"`
-	ToTime      string `json:"to_time"`
-	User        string `json:"user"`
-	QueryKind   string `json:"query_kind"`
+	FromTime     string `json:"from_time"`
+	ToTime       string `json:"to_time"`
+	User         string `json:"user"`
+	QueryKind    string `json:"query_kind"`
 	MinDuration  uint64 `json:"min_duration"`
 	MinMemory    uint64 `json:"min_memory"`
 	MinReadBytes uint64 `json:"min_read_bytes"`
-	Search      string `json:"search"`
-	SortBy      string `json:"sort_by"`
-	SortDir     string `json:"sort_dir"`
-	Limit       int    `json:"limit"`
-	Offset      int    `json:"offset"`
+	Search       string `json:"search"`
+	SortBy       string `json:"sort_by"`
+	SortDir      string `json:"sort_dir"`
+	Limit        int    `json:"limit"`
+	Offset       int    `json:"offset"`
 }
 
 var defaultListParams = QueryListParams{
-	Limit:  50,
-	Offset: 0,
-	SortBy: "query_start_time",
+	Limit:   50,
+	Offset:  0,
+	SortBy:  "query_start_time",
 	SortDir: "DESC",
 }
 

@@ -8,25 +8,25 @@ import (
 )
 
 type TopFunction struct {
-	Name    string `json:"name"`
-	Samples uint64 `json:"samples"`
+	Name    string  `json:"name"`
+	Samples uint64  `json:"samples"`
 	Percent float64 `json:"percent"`
 }
 
 type ThreadProfile struct {
-	ThreadID       uint64            `json:"thread_id"`
-	ThreadName     string            `json:"thread_name"`
-	Role           string            `json:"role"`
-	PeakMemory     int64             `json:"peak_memory_usage"`
-	CurrentMemory  int64             `json:"memory_usage"`
-	ReadRows       uint64            `json:"read_rows"`
-	ReadBytes      uint64            `json:"read_bytes"`
-	WrittenRows    uint64            `json:"written_rows"`
-	WrittenBytes   uint64            `json:"written_bytes"`
-	DurationMs     uint64            `json:"query_duration_ms"`
-	ProfileEvents  map[string]uint64 `json:"profile_events"`
-	TopFunctions   []TopFunction     `json:"top_functions"`
-	TotalSamples   uint64            `json:"total_samples"`
+	ThreadID      uint64            `json:"thread_id"`
+	ThreadName    string            `json:"thread_name"`
+	Role          string            `json:"role"`
+	PeakMemory    int64             `json:"peak_memory_usage"`
+	CurrentMemory int64             `json:"memory_usage"`
+	ReadRows      uint64            `json:"read_rows"`
+	ReadBytes     uint64            `json:"read_bytes"`
+	WrittenRows   uint64            `json:"written_rows"`
+	WrittenBytes  uint64            `json:"written_bytes"`
+	DurationMs    uint64            `json:"query_duration_ms"`
+	ProfileEvents map[string]uint64 `json:"profile_events"`
+	TopFunctions  []TopFunction     `json:"top_functions"`
+	TotalSamples  uint64            `json:"total_samples"`
 }
 
 func inferRole(pe map[string]uint64, threadName string) string {

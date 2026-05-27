@@ -119,11 +119,11 @@ func TestPoolCloseAll_Empty(t *testing.T) {
 
 func TestClient_TableRef(t *testing.T) {
 	tests := []struct {
-		name     string
-		cluster  bool
+		name        string
+		cluster     bool
 		clusterName string
-		table    string
-		expected string
+		table       string
+		expected    string
 	}{
 		{"single node", false, "", "query_log", "system.query_log"},
 		{"cluster", true, "mycluster", "query_log", "clusterAllReplicas('mycluster', system.query_log)"},

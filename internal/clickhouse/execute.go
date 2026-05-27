@@ -20,11 +20,11 @@ type ColumnInfo struct {
 }
 
 type QueryResult struct {
-	Columns  []ColumnInfo       `json:"columns"`
-	Rows     []map[string]any   `json:"rows"`
-	RowCount int                `json:"row_count"`
-	TimingMs int64              `json:"timing_ms"`
-	QueryID  string             `json:"query_id"`
+	Columns  []ColumnInfo     `json:"columns"`
+	Rows     []map[string]any `json:"rows"`
+	RowCount int              `json:"row_count"`
+	TimingMs int64            `json:"timing_ms"`
+	QueryID  string           `json:"query_id"`
 }
 
 func (c *Client) ExecuteQuery(ctx context.Context, query string, maxRows int, settings map[string]string) (*QueryResult, error) {
@@ -300,4 +300,3 @@ func isProbablyJSON(s string) bool {
 	s = strings.TrimSpace(s)
 	return len(s) > 0 && (s[0] == '{' || s[0] == '[')
 }
-

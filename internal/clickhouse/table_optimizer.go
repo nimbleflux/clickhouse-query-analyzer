@@ -11,36 +11,36 @@ import (
 )
 
 type TableAnalysis struct {
-	Database       string           `json:"database"`
-	Table          string           `json:"table"`
-	Engine         string           `json:"engine"`
-	TotalRows      uint64           `json:"total_rows"`
-	TotalBytes     uint64           `json:"total_bytes"`
-	PartitionKey   string           `json:"partition_key"`
-	OrderByKey     string           `json:"order_by_key"`
-	PrimaryKey     string           `json:"primary_key"`
-	SamplingKey    string           `json:"sampling_key"`
-	Columns        []OptColumn      `json:"columns"`
-	Parts          []PartInfo       `json:"parts"`
-	ExistingIndices []IndexInfo     `json:"existing_indices"`
+	Database        string           `json:"database"`
+	Table           string           `json:"table"`
+	Engine          string           `json:"engine"`
+	TotalRows       uint64           `json:"total_rows"`
+	TotalBytes      uint64           `json:"total_bytes"`
+	PartitionKey    string           `json:"partition_key"`
+	OrderByKey      string           `json:"order_by_key"`
+	PrimaryKey      string           `json:"primary_key"`
+	SamplingKey     string           `json:"sampling_key"`
+	Columns         []OptColumn      `json:"columns"`
+	Parts           []PartInfo       `json:"parts"`
+	ExistingIndices []IndexInfo      `json:"existing_indices"`
 	Recommendations []Recommendation `json:"recommendations"`
-	AnalyzedAt     time.Time        `json:"analyzed_at"`
-	Error          string           `json:"error,omitempty"`
+	AnalyzedAt      time.Time        `json:"analyzed_at"`
+	Error           string           `json:"error,omitempty"`
 }
 
 type OptColumn struct {
-	Name             string `json:"name"`
-	Type             string `json:"type"`
-	DefaultKind      string `json:"default_kind"`
-	DefaultExpr      string `json:"default_expression"`
-	IsInPartitionKey bool   `json:"is_in_partition_key"`
-	IsInOrderByKey   bool   `json:"is_in_order_by_key"`
-	IsInPrimaryKey   bool   `json:"is_in_primary_key"`
-	DistinctCount    uint64 `json:"distinct_count,omitempty"`
-	TotalSampled     uint64 `json:"total_sampled,omitempty"`
-	NullCount        uint64 `json:"null_count,omitempty"`
-	MinValue         *string `json:"min_value,omitempty"`
-	MaxValue         *string `json:"max_value,omitempty"`
+	Name             string   `json:"name"`
+	Type             string   `json:"type"`
+	DefaultKind      string   `json:"default_kind"`
+	DefaultExpr      string   `json:"default_expression"`
+	IsInPartitionKey bool     `json:"is_in_partition_key"`
+	IsInOrderByKey   bool     `json:"is_in_order_by_key"`
+	IsInPrimaryKey   bool     `json:"is_in_primary_key"`
+	DistinctCount    uint64   `json:"distinct_count,omitempty"`
+	TotalSampled     uint64   `json:"total_sampled,omitempty"`
+	NullCount        uint64   `json:"null_count,omitempty"`
+	MinValue         *string  `json:"min_value,omitempty"`
+	MaxValue         *string  `json:"max_value,omitempty"`
 	AvgDiff          *float64 `json:"avg_diff,omitempty"`
 }
 
@@ -145,8 +145,8 @@ type BulkFilters struct {
 }
 
 type BulkEvent struct {
-	Type string        `json:"type"`
-	Progress *BulkProgress `json:"progress,omitempty"`
+	Type     string         `json:"type"`
+	Progress *BulkProgress  `json:"progress,omitempty"`
 	Result   *TableAnalysis `json:"result,omitempty"`
 	Done     *BulkDone      `json:"done,omitempty"`
 }

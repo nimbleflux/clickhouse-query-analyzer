@@ -7,17 +7,17 @@ import (
 )
 
 type ThreadEntry struct {
-	EventTime       time.Time `json:"event_time"`
-	QueryDurationMs uint64    `json:"query_duration_ms"`
-	ThreadName      string    `json:"thread_name"`
-	ThreadID        uint64    `json:"thread_id"`
-	MasterThreadID  uint64    `json:"master_thread_id"`
-	ReadRows        uint64    `json:"read_rows"`
-	ReadBytes       uint64    `json:"read_bytes"`
-	WrittenRows     uint64    `json:"written_rows"`
-	WrittenBytes    uint64    `json:"written_bytes"`
-	MemoryUsage     int64     `json:"memory_usage"`
-	PeakMemoryUsage int64     `json:"peak_memory_usage"`
+	EventTime       time.Time         `json:"event_time"`
+	QueryDurationMs uint64            `json:"query_duration_ms"`
+	ThreadName      string            `json:"thread_name"`
+	ThreadID        uint64            `json:"thread_id"`
+	MasterThreadID  uint64            `json:"master_thread_id"`
+	ReadRows        uint64            `json:"read_rows"`
+	ReadBytes       uint64            `json:"read_bytes"`
+	WrittenRows     uint64            `json:"written_rows"`
+	WrittenBytes    uint64            `json:"written_bytes"`
+	MemoryUsage     int64             `json:"memory_usage"`
+	PeakMemoryUsage int64             `json:"peak_memory_usage"`
 	ProfileEvents   map[string]uint64 `json:"profile_events"`
 }
 

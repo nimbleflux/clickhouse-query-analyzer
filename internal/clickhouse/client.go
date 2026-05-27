@@ -84,9 +84,9 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 
 	if isHTTPScheme(scheme) {
 		opts = &ch.Options{
-			Protocol:  ch.HTTP,
-			Addr:      []string{parsedURL.Host},
-			Auth:      ch.Auth{Username: params.User, Password: params.Password, Database: params.Database},
+			Protocol:    ch.HTTP,
+			Addr:        []string{parsedURL.Host},
+			Auth:        ch.Auth{Username: params.User, Password: params.Password, Database: params.Database},
 			DialTimeout: time.Second * 10,
 		}
 		if useTLS {
@@ -105,9 +105,9 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 		chPort := mustPort(port)
 
 		opts = &ch.Options{
-			Protocol:  ch.Native,
-			Addr:      []string{fmt.Sprintf("%s:%d", host, chPort)},
-			Auth:      ch.Auth{Username: params.User, Password: params.Password, Database: params.Database},
+			Protocol:         ch.Native,
+			Addr:             []string{fmt.Sprintf("%s:%d", host, chPort)},
+			Auth:             ch.Auth{Username: params.User, Password: params.Password, Database: params.Database},
 			DialTimeout:      time.Second * 10,
 			MaxOpenConns:     5,
 			MaxIdleConns:     5,
