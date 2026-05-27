@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
     branches: [main]
 
@@ -225,95 +224,3 @@ jobs:
         if: always()
         with:
           sarif_file: trivy-results.sarif
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set version
-        id: version
-        run: echo "version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: web/package-lock.json
-
-      - name: Build frontend
-        run: cd web && npm ci && npm run build
-
-      - name: Embed frontend
-        run: |
-          mkdir -p cmd/server/frontend
-          cp -r web/dist/* cmd/server/frontend/
-
-      - name: Build binary
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
-        run: |
-          EXT=""
-          if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
-          go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o "clickhouse-query-analyzer-${GOOS}-${GOARCH}${EXT}" ./cmd/server
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: clickhouse-query-analyzer-${{ matrix.goos }}-${{ matrix.goarch }}*
-
-  github-release:
-    needs: release
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4.3.0
-        with:
-          name: binary-linux-amd64
-          path: release-assets
-      - uses: actions/download-artifact@v4.3.0
-        with:
-          name: binary-linux-arm64
-          path: release-assets
-      - uses: actions/download-artifact@v4.3.0
-        with:
-          name: binary-darwin-amd64
-          path: release-assets
-      - uses: actions/download-artifact@v4.3.0
-        with:
-          name: binary-darwin-arm64
-          path: release-assets
-      - uses: actions/download-artifact@v4.3.0
-        with:
-          name: binary-windows-amd64
-          path: release-assets
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: release-assets/*
-          generate_release_notes: true
