@@ -572,7 +572,7 @@ export function QueryEditor() {
         runAllQueries();
       }
     }
-    if ((isMac ? e.metaKey && e.shiftKey : e.ctrlKey && e.altKey) && e.key.toLowerCase() === "f") {
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "f") {
       e.preventDefault();
       formatSQL();
     }

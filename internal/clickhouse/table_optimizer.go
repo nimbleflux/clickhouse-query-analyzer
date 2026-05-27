@@ -173,6 +173,16 @@ func (c *Client) AnalyzeTable(ctx context.Context, database, table string) (*Tab
 		return nil, fmt.Errorf("gathering part info: %w", err)
 	}
 
+	if analysis.TotalRows == 0 {
+		var rowsFromParts uint64
+		for _, p := range analysis.Parts {
+			rowsFromParts += p.Rows
+		}
+		if rowsFromParts > 0 {
+			analysis.TotalRows = rowsFromParts
+		}
+	}
+
 	if err := c.gatherExistingIndices(ctx, analysis); err != nil {
 		return nil, fmt.Errorf("gathering indices: %w", err)
 	}
@@ -429,13 +439,17 @@ func (c *Client) sampleColumns(ctx context.Context, a *TableAnalysis) error {
 func (c *Client) generateRecommendations(a *TableAnalysis) []Recommendation {
 	cc := confidenceCtx{totalRows: a.TotalRows}
 	var recs []Recommendation
-	recs = append(recs, c.recommendLowCardinality(a, cc)...)
-	recs = append(recs, c.recommendIntegerResize(a, cc)...)
-	recs = append(recs, c.recommendRemoveNullable(a, cc)...)
+	if a.TotalRows >= 10_000 {
+		recs = append(recs, c.recommendLowCardinality(a, cc)...)
+		recs = append(recs, c.recommendIntegerResize(a, cc)...)
+		recs = append(recs, c.recommendRemoveNullable(a, cc)...)
+	}
 	recs = append(recs, c.recommendOrderBy(a, cc)...)
 	recs = append(recs, c.recommendPartitionBy(a, cc)...)
-	recs = append(recs, c.recommendSkippingIndices(a, cc)...)
-	recs = append(recs, c.recommendCodecs(a, cc)...)
+	if a.TotalRows >= 100_000 {
+		recs = append(recs, c.recommendSkippingIndices(a, cc)...)
+		recs = append(recs, c.recommendCodecs(a, cc)...)
+	}
 	recs = append(recs, c.recommendTableHealth(a, cc)...)
 	return recs
 }
