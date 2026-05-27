@@ -115,7 +115,7 @@ jobs:
       - name: Run integration tests
         run: go test -race -count=1 -tags=integration -v ./tests/integration/...
         env:
-          CLICKHOUSE_URL: clickhouse://localhost:9000
+          CLICKHOUSE_URL: clickhouse://localhost:19000
 
       - name: Stop ClickHouse
         if: always()
