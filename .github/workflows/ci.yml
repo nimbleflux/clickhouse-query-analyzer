@@ -103,7 +103,18 @@ jobs:
           exit 1
 
       - name: Seed data
-        run: docker exec -i dev-clickhouse-1 clickhouse-client < dev/seed.sql
+        run: |
+          for attempt in 1 2 3; do
+            echo "Seed attempt $attempt..."
+            if docker exec -i dev-clickhouse-1 clickhouse-client < dev/seed-ci.sql; then
+              echo "Seed succeeded"
+              exit 0
+            fi
+            echo "Seed failed, waiting 5s..."
+            sleep 5
+          done
+          echo "Seed failed after 3 attempts"
+          exit 1
 
       - name: Run integration tests
         run: go test -race -count=1 -tags=integration -v ./tests/integration/...
