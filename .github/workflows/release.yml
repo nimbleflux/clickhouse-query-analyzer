@@ -20,6 +20,7 @@ env:
 permissions:
   contents: write
   packages: write
+  security-events: write
 
 jobs:
   tag:
