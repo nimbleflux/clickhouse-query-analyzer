@@ -9,6 +9,8 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 - **Flame Graphs** — Canvas-based flame graphs from `system.trace_log` (Memory/MemorySample/MemoryPeak)
 - **Thread Breakdown** — Per-thread role inference (Coordinator, Scan+Filter, Aggregator, I/O Pool), pipeline visualization from EXPLAIN PIPELINE, top DB functions from trace data
 - **SQL Editor** — CodeMirror 6 editor with schema browser sidebar, column type display, copy-on-hover cells, and "View Analysis" link to jump to profiling data
+- **Saved Queries** — Save, load, search, import, and export queries. Saved queries are stored in browser localStorage and organized in an accordion sidebar panel.
+- **Parameterized Queries** — Use `{{param_name}}` syntax in any query to define parameters. Parameter input fields appear automatically in the sidebar. Values are substituted at execution time. Escape with `\{{` for literal `{{`.
 - **Query Comparison** — Side-by-side diff of two queries including ProfileEvents metrics
 - **EXPLAIN** — Execution plan, pipeline, and syntax views
 - **Cluster Support** — Auto-detects `system.clusters`, uses `clusterAllReplicas`
