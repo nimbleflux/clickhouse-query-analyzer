@@ -415,3 +415,161 @@ func (a *API) GetColumns(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"columns": columns})
 }
+
+func (a *API) ListProcesses(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	processes, err := ch.ListProcesses(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, processes)
+}
+
+func (a *API) KillProcess(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	queryID := chi.URLParam(r, "queryID")
+	if queryID == "" {
+		writeError(w, http.StatusBadRequest, "query_id is required")
+		return
+	}
+
+	if err := ch.KillQuery(r.Context(), queryID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (a *API) ListFingerprints(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	params := clickhouse.QueryListParams{
+		FromTime:  r.URL.Query().Get("from_time"),
+		ToTime:    r.URL.Query().Get("to_time"),
+		User:      r.URL.Query().Get("user"),
+		Search:    r.URL.Query().Get("search"),
+		SortBy:    r.URL.Query().Get("sort_by"),
+		SortDir:   strings.ToUpper(r.URL.Query().Get("sort_dir")),
+	}
+
+	if v := r.URL.Query().Get("limit"); v != "" {
+		params.Limit, _ = strconv.Atoi(v)
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		params.Offset, _ = strconv.Atoi(v)
+	}
+
+	fingerprints, total, err := ch.ListFingerprints(r.Context(), params)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if fingerprints == nil {
+		fingerprints = []clickhouse.QueryFingerprint{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"fingerprints": fingerprints,
+		"total":        total,
+		"limit":        params.Limit,
+		"offset":       params.Offset,
+	})
+}
+
+func (a *API) GetFingerprintTrend(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	hashStr := chi.URLParam(r, "hash")
+	if hashStr == "" {
+		writeError(w, http.StatusBadRequest, "hash is required")
+		return
+	}
+	hash, err := strconv.ParseUint(hashStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid hash")
+		return
+	}
+
+	interval := r.URL.Query().Get("interval")
+	if interval == "" {
+		interval = "hour"
+	}
+
+	points, err := ch.GetFingerprintTrend(r.Context(), hash, interval, r.URL.Query().Get("from_time"), r.URL.Query().Get("to_time"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, points)
+}
+
+func (a *API) ListFingerprintQueries(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	hashStr := chi.URLParam(r, "hash")
+	if hashStr == "" {
+		writeError(w, http.StatusBadRequest, "hash is required")
+		return
+	}
+	hash, err := strconv.ParseUint(hashStr, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid hash")
+		return
+	}
+
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+
+	queries, total, err := ch.ListFingerprintQueries(r.Context(), hash, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"queries": queries,
+		"total":   total,
+	})
+}
+
+func (a *API) GetDashboard(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	dashboard, err := ch.GetDashboard(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, dashboard)
+}

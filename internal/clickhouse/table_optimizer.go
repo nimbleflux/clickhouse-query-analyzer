@@ -10,6 +10,14 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
+func quoteID(s string) string {
+	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
+}
+
+func quoteStr(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
 type TableAnalysis struct {
 	Database        string           `json:"database"`
 	Table           string           `json:"table"`
@@ -201,12 +209,12 @@ func (c *Client) ListOptimizableTables(ctx context.Context, database string, fil
 	query := fmt.Sprintf(`
 		SELECT name, engine, total_rows
 		FROM system.tables
-		WHERE database = '%s'
+		WHERE database = %s
 		  AND engine IN ('MergeTree', 'ReplacingMergeTree', 'SummingMergeTree', 'AggregatingMergeTree', 'CollapsingMergeTree', 'VersionedCollapsingMergeTree', 'GraphiteMergeTree', 'ReplicatedMergeTree', 'ReplicatedReplacingMergeTree', 'ReplicatedSummingMergeTree', 'ReplicatedAggregatingMergeTree', 'ReplicatedCollapsingMergeTree', 'ReplicatedVersionedCollapsingMergeTree')
-	`, database)
+	`, quoteStr(database))
 
 	if filters.Engine != "" {
-		query += fmt.Sprintf(" AND engine = '%s'", filters.Engine)
+		query += fmt.Sprintf(" AND engine = %s", quoteStr(filters.Engine))
 	}
 	if filters.MinRows > 0 {
 		query += fmt.Sprintf(" AND total_rows >= %d", filters.MinRows)
@@ -304,8 +312,8 @@ func (c *Client) gatherTableMeta(ctx context.Context, a *TableAnalysis) error {
 			COALESCE(total_rows, 0),
 			COALESCE(total_bytes, 0)
 		FROM system.tables
-		WHERE database = '%s' AND name = '%s'
-	`, a.Database, a.Table)
+		WHERE database = %s AND name = %s
+	`, quoteStr(a.Database), quoteStr(a.Table))
 
 	row := c.conn.QueryRow(ctx, query)
 	return row.Scan(&a.Engine, &a.PartitionKey, &a.OrderByKey, &a.PrimaryKey, &a.SamplingKey, &a.TotalRows, &a.TotalBytes)
@@ -391,7 +399,7 @@ func (c *Client) gatherExistingIndices(ctx context.Context, a *TableAnalysis) er
 
 func (c *Client) sampleColumns(ctx context.Context, a *TableAnalysis) error {
 	sampleClause := sampleClause(a.TotalRows)
-	fqn := fmt.Sprintf("`%s`.`%s`", a.Database, a.Table)
+	fqn := fmt.Sprintf("%s.%s", quoteID(a.Database), quoteID(a.Table))
 
 	for i := range a.Columns {
 		col := &a.Columns[i]
@@ -399,7 +407,7 @@ func (c *Client) sampleColumns(ctx context.Context, a *TableAnalysis) error {
 			continue
 		}
 
-		colName := fmt.Sprintf("`%s`", col.Name)
+		colName := quoteID(col.Name)
 		query := fmt.Sprintf(`
 			SELECT
 				uniqExact(%s),

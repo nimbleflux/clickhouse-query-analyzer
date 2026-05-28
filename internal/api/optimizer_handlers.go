@@ -130,7 +130,6 @@ func isSystemDatabase(db string) bool {
 	switch db {
 	case "system", "INFORMATION_SCHEMA", "information_schema",
 		"_system",
-		"Default", "default",
 		"tmp", "temp":
 		return true
 	}

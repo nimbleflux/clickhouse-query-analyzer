@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
 	"net/url"
@@ -33,7 +34,8 @@ type ConnParams struct {
 }
 
 func (p ConnParams) key() string {
-	return fmt.Sprintf("%s|%s|%s|%v", p.URL, p.User, p.Database, p.SkipTLS)
+	h := sha256.Sum256([]byte(p.Password))
+	return fmt.Sprintf("%s|%s|%s|%v|%.16x", p.URL, p.User, p.Database, p.SkipTLS, h)
 }
 
 type Pool struct {

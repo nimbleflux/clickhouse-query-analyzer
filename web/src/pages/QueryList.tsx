@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Filter, ChevronLeft, ChevronRight, Clock, MemoryStick, Database, Plug, GitCompare, ArrowUp, ArrowDown } from "lucide-react";
+import { Search, Filter, ChevronLeft, ChevronRight, Clock, MemoryStick, Database, Plug, GitCompare, ArrowUp, ArrowDown, AlertTriangle } from "lucide-react";
 import { fetchQueries } from "../api/client";
 import type { QueryListParams, QueryLogEntry } from "../api/types";
 import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor } from "../utils";
@@ -268,6 +268,9 @@ export function QueryList({ connected }: { connected: boolean }) {
                   <td className="whitespace-nowrap px-4 py-3 text-[var(--color-text-secondary)]">{q.user}</td>
                   <td className="max-w-xs truncate px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">
                     <div className="flex items-center gap-1">
+                      {q.type !== "QueryFinish" && (
+                        <AlertTriangle className="h-3 w-3 shrink-0 text-[var(--color-error)]" />
+                      )}
                       <Database className="h-3 w-3 shrink-0" />
                       <span className="truncate">{q.query}</span>
                     </div>

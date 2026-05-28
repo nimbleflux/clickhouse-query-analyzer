@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -9,10 +9,11 @@ import {
   PieChart, Pie, Cell,
 } from "recharts";
 import { useTheme } from "../api/theme";
-import { Clock, MemoryStick, HardDrive, Database, Cpu, Play, Layers, Eye, Cloud, ChevronDown, ChevronRight } from "lucide-react";
+import { Clock, MemoryStick, HardDrive, Database, Cpu, Play, Layers, Eye, Cloud, ChevronDown, ChevronRight, Fingerprint } from "lucide-react";
 import { fetchQuery, fetchQueryMetrics, fetchQueryThreads, fetchQueryViews, fetchExplain, fetchFlameGraph, fetchThreadSummaries, fetchThreadProfile } from "../api/client";
 import type { QueryLogEntry, MetricPoint, ThreadEntry, ViewLogEntry, ExplainResult, FlameGraphData, ThreadSummary, ThreadProfile } from "../api/types";
 import { FlameGraph } from "../components/FlameGraph";
+import { VisualExplain } from "../components/VisualExplain";
 import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor, categorizeEvent } from "../utils";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -83,7 +84,13 @@ export function QueryDetail() {
   const loadFlameGraph = async () => {
     if (!queryId || flameData.length > 0) return;
     try {
-      const data = await fetchFlameGraph(queryId);
+      let data = await fetchFlameGraph(queryId);
+      if (data.length === 0) {
+        for (const altType of ["Memory", "MemoryPeak", "Real", "CPU"]) {
+          data = await fetchFlameGraph(queryId, altType);
+          if (data.length > 0) break;
+        }
+      }
       setFlameData(data);
       setFlameError("");
     } catch (e) {
@@ -129,6 +136,10 @@ export function QueryDetail() {
           <span className="font-mono">{query.query_id}</span>
           <span>{formatTime(query.query_start_time)}</span>
           <span>{query.user}</span>
+          <Link to={`/fingerprints/${query.normalized_query_hash}`} state={{ query: query.query }} className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]">
+            <Fingerprint className="h-3.5 w-3.5" />
+            Fingerprint
+          </Link>
         </div>
       </div>
 
@@ -382,20 +393,46 @@ export function QueryDetail() {
       {tab === "explain" && (
         <div className="space-y-4">
           {explain ? (
-            ["plan", "pipeline", "syntax"].map((type) => {
-              const content = explain[type as keyof ExplainResult];
-              if (!content) return null;
-              return (
-                <div key={type} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-                  <div className="mb-2 text-xs font-medium capitalize text-[var(--color-text-secondary)]">
-                    {type === "plan" ? "Execution Plan" : type === "pipeline" ? "Query Pipeline" : "Normalized Syntax"}
+            <>
+              {explain.plan && (
+                <VisualExplain plan={explain.plan} />
+              )}
+              {["pipeline", "syntax"].map((type) => {
+                const content = explain[type as keyof ExplainResult];
+                if (!content) return null;
+                return (
+                  <div key={type} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
+                    <div className="mb-2 text-xs font-medium capitalize text-[var(--color-text-secondary)]">
+                      {type === "pipeline" ? "Query Pipeline" : "Normalized Syntax"}
+                    </div>
+                    <pre className="max-h-96 overflow-auto whitespace-pre-wrap font-mono text-xs text-[var(--color-text-primary)]">
+                      {content}
+                    </pre>
                   </div>
-                  <pre className="max-h-96 overflow-auto whitespace-pre-wrap font-mono text-xs text-[var(--color-text-primary)]">
-                    {content}
-                  </pre>
+                );
+              })}
+              <details className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
+                <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
+                  Raw EXPLAIN text
+                </summary>
+                <div className="p-4 pt-0">
+                  {["plan", "pipeline", "syntax"].map((type) => {
+                    const content = explain[type as keyof ExplainResult];
+                    if (!content) return null;
+                    return (
+                      <div key={type} className="mb-3">
+                        <div className="mb-1 text-xs font-medium capitalize text-[var(--color-text-secondary)]">
+                          {type === "plan" ? "Execution Plan" : type === "pipeline" ? "Query Pipeline" : "Normalized Syntax"}
+                        </div>
+                        <pre className="max-h-64 overflow-auto whitespace-pre-wrap font-mono text-xs text-[var(--color-text-primary)]">
+                          {content}
+                        </pre>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })
+              </details>
+            </>
           ) : (
             <div className="flex flex-col items-center gap-4 py-12">
               <Play className="h-8 w-8 text-[var(--color-text-secondary)]" />

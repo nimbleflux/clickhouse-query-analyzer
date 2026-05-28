@@ -53,6 +53,9 @@ func apiRoutes(api *API) http.Handler {
 	r.Get("/schema/{db}/{table}/columns", api.GetColumns)
 	r.Get("/compare", api.CompareQueries)
 	r.Get("/queries", api.ListQueries)
+	r.Get("/queries/fingerprints", api.ListFingerprints)
+	r.Get("/queries/fingerprints/{hash}/trend", api.GetFingerprintTrend)
+	r.Get("/queries/fingerprints/{hash}/queries", api.ListFingerprintQueries)
 	r.Get("/queries/{queryID}", api.GetQuery)
 	r.Get("/queries/{queryID}/metrics", api.GetQueryMetrics)
 	r.Get("/queries/{queryID}/threads", api.GetQueryThreads)
@@ -65,6 +68,10 @@ func apiRoutes(api *API) http.Handler {
 	r.Get("/optimizer/{db}/{table}", api.AnalyzeTableHandler)
 	r.Get("/optimizer/{db}", api.AnalyzeDatabaseHandler)
 	r.Get("/optimizer", api.AnalyzeAllHandler)
+
+	r.Get("/processes", api.ListProcesses)
+	r.Post("/processes/{queryID}/kill", api.KillProcess)
+	r.Get("/dashboard", api.GetDashboard)
 
 	return r
 }

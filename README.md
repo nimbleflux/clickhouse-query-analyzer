@@ -4,34 +4,37 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 
 ## Features
 
-- **Query List** — Browse, filter, sort, and paginate through `system.query_log`
+- **System Dashboard** — Overview of uptime, active queries/merges/parts, database sizes, top tables by size and part count, system metrics and events. Replica status and replication queue for clusters.
+- **Query List** — Browse, filter, sort, and paginate through `system.query_log` including failed queries
 - **Query Detail** — Overview with RAM/CPU/IO time-series charts, top ProfileEvents, thread breakdown with role inference, memory analysis, storage I/O stats, and settings
-- **Flame Graphs** — Canvas-based flame graphs from `system.trace_log` (Memory/MemorySample/MemoryPeak)
+- **Flame Graphs** — Canvas-based flame graphs from `system.trace_log` (Memory/MemorySample/MemoryPeak/CPU/Real) with auto-detection of available trace types
+- **Visual EXPLAIN** — Interactive collapsible tree view of the execution plan, plus raw pipeline and syntax views
 - **Thread Breakdown** — Per-thread role inference (Coordinator, Scan+Filter, Aggregator, I/O Pool), pipeline visualization from EXPLAIN PIPELINE, top DB functions from trace data
+- **Query Fingerprints** — Group queries by `normalized_query_hash`, view aggregated stats (count, avg/P50/P95 latency, memory, I/O), drill into per-fingerprint performance trends over time
+- **Running Queries** — Live view of `system.processes` with auto-refresh, kill query support
 - **SQL Editor** — CodeMirror 6 editor with schema browser sidebar, column type display, copy-on-hover cells, and "View Analysis" link to jump to profiling data
 - **Saved Queries** — Save, load, search, import, and export queries. Saved queries are stored in browser localStorage and organized in an accordion sidebar panel.
 - **Parameterized Queries** — Use `{{param_name}}` syntax in any query to define parameters. Parameter input fields appear automatically in the sidebar. Values are substituted at execution time. Escape with `\{{` for literal `{{`.
 - **Query Comparison** — Side-by-side diff of two queries including ProfileEvents metrics
-- **EXPLAIN** — Execution plan, pipeline, and syntax views
 - **Cluster Support** — Auto-detects `system.clusters`, uses `clusterAllReplicas`
 - **Table Optimizer** — Analyze single tables, entire databases, or all databases for ClickHouse optimization opportunities including LowCardinality, integer right-sizing, Nullable removal, ORDER BY/PARTITION BY suggestions, skipping indices, codec recommendations, and table health checks. Generates copy-ready ALTER TABLE DDL. Bulk analysis streams results in real-time via SSE.
 
 ## Screenshots
 
-### Query Analyzer
-![Query Analyzer](docs/screenshot-query-analyzer.png)
+### System Dashboard
+![System Dashboard](docs/screenshot-dashboard.png)
 
-### Memory Overview
-![Memory Overview](docs/screenshot-memory-overview.png)
+### Query Detail
+![Query Detail](docs/screenshot-query-detail.png)
 
-### Flame Graph
-![Flame Graph](docs/screenshot-flamegraph.png)
+### Query Fingerprints
+![Query Fingerprints](docs/screenshot-fingerprint.png)
 
 ### SQL Editor
-![SQL Editor](docs/screenshot-sql-editor.png)
+![SQL Editor](docs/screenshot-editor.png)
 
 ### Query Comparison
-![Query Comparison](docs/screenshot-query-comparison.png)
+![Query Comparison](docs/screenshot-compare.png)
 
 ### Table Optimizer
 ![Table Optimizer](docs/screenshot-table-optimizer.png)

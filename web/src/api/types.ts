@@ -5,7 +5,7 @@ export interface QueryLogEntry {
   query_duration_ms: number;
   query_id: string;
   query: string;
-  normalized_query_hash: number;
+  normalized_query_hash: string;
   query_kind: string;
   user: string;
   read_rows: number;
@@ -251,6 +251,102 @@ export interface BulkEvent {
   progress?: BulkProgress;
   result?: TableAnalysis;
   done?: BulkDone;
+}
+
+export interface ProcessEntry {
+  query_id: string;
+  query: string;
+  user: string;
+  query_duration_ms: number;
+  memory_usage: number;
+  peak_memory_usage: number;
+  read_rows: number;
+  read_bytes: number;
+  written_rows: number;
+  written_bytes: number;
+  peak_threads_usage: number;
+  current_database: string;
+  is_initial_query: number;
+  initial_query_id: string;
+}
+
+export interface QueryFingerprint {
+  normalized_query_hash: string;
+  sample_query: string;
+  query_kind: string;
+  execution_count: number;
+  avg_duration_ms: number;
+  p50_duration_ms: number;
+  p95_duration_ms: number;
+  max_duration_ms: number;
+  avg_memory_usage: number;
+  max_memory_usage: number;
+  avg_read_rows: number;
+  max_read_rows: number;
+  avg_read_bytes: number;
+  max_read_bytes: number;
+  error_count: number;
+  last_error: string;
+  last_seen: string;
+  users: string[];
+}
+
+export interface FingerprintListResponse {
+  fingerprints: QueryFingerprint[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DashboardData {
+  metrics: { metric: string; value: number }[];
+  recent_events: { event: string; value: number }[];
+  database_sizes: { database: string; tables: number; rows: number; bytes: number }[];
+  top_tables_by_size: { database: string; table: string; parts: number; rows: number; bytes: number }[];
+  top_tables_by_parts: { database: string; table: string; parts: number; rows: number; bytes: number }[];
+  replication_queue: { database: string; table: string; replica_name: string; position: number; type: string; create_time: string; is_started: number; num_tries: number; last_exception: string }[];
+  replica_statuses: { database: string; table: string; replica_name: string; is_leader: number; is_readonly: number; absolute_delay: number; queue_size: number; inserts_in_queue: number; merges_in_queue: number; log_max_index: number; log_pointer: number; total_replicas: number; active_replicas: number }[];
+  uptime: number;
+  version: string;
+}
+
+export interface FingerprintQuery {
+  query_id: string;
+  event_time: string;
+  query_duration_ms: number;
+  memory_usage: number;
+  read_rows: number;
+  read_bytes: number;
+  result_rows: number;
+  peak_threads_usage: number;
+  user: string;
+  type: string;
+  exception: string;
+}
+
+export interface FingerprintQueriesResponse {
+  queries: FingerprintQuery[];
+  total: number;
+}
+
+export interface TrendPoint {
+  bucket: string;
+  execution_count: number;
+  avg_duration_ms: number;
+  p50_duration_ms: number;
+  p95_duration_ms: number;
+  max_duration_ms: number;
+  avg_memory_usage: number;
+  max_memory_usage: number;
+  avg_read_rows: number;
+  max_read_rows: number;
+  avg_read_bytes: number;
+  max_read_bytes: number;
+  avg_result_rows: number;
+  max_result_rows: number;
+  avg_peak_threads: number;
+  max_peak_threads: number;
+  error_count: number;
 }
 
 

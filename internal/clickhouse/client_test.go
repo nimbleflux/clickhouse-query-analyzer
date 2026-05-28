@@ -93,12 +93,17 @@ func TestConnParamsKey(t *testing.T) {
 	}
 }
 
-func TestConnParamsKey_PasswordAgnostic(t *testing.T) {
+func TestConnParamsKey_PasswordIncluded(t *testing.T) {
 	p1 := ConnParams{URL: "clickhouse://host:9000", User: "default", Password: "pass1", Database: "system"}
 	p2 := ConnParams{URL: "clickhouse://host:9000", User: "default", Password: "pass2", Database: "system"}
 
-	if p1.key() != p2.key() {
-		t.Errorf("password should not affect pool key (password is not part of the key)")
+	if p1.key() == p2.key() {
+		t.Errorf("different passwords should produce different pool keys")
+	}
+
+	p3 := ConnParams{URL: "clickhouse://host:9000", User: "default", Password: "pass1", Database: "system"}
+	if p1.key() != p3.key() {
+		t.Errorf("same parameters should produce same pool key")
 	}
 }
 

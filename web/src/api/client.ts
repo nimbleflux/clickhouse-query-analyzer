@@ -13,6 +13,11 @@ import type {
   QueryResult,
   TableAnalysis,
   BulkEvent,
+  ProcessEntry,
+  FingerprintListResponse,
+  DashboardData,
+  TrendPoint,
+  FingerprintQueriesResponse,
 } from "./types";
 import { getConnectionHeaders } from "./connection";
 
@@ -179,4 +184,41 @@ export function streamBulkAnalysis(
   })();
 
   return ctrl;
+}
+
+export async function fetchProcesses(): Promise<ProcessEntry[]> {
+  return fetchJSON<ProcessEntry[]>(`${BASE}/processes`);
+}
+
+export async function killProcess(queryId: string): Promise<{ status: string }> {
+  return fetchJSON<{ status: string }>(`${BASE}/processes/${encodeURIComponent(queryId)}/kill`, { method: "POST" });
+}
+
+export async function fetchFingerprints(params: Partial<QueryListParams>): Promise<FingerprintListResponse> {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "") sp.set(k, String(v));
+  }
+  return fetchJSON<FingerprintListResponse>(`${BASE}/queries/fingerprints?${sp}`);
+}
+
+export async function fetchDashboard(): Promise<DashboardData> {
+  return fetchJSON<DashboardData>(`${BASE}/dashboard`);
+}
+
+export async function fetchFingerprintTrend(hash: string, interval?: string, fromTime?: string, toTime?: string): Promise<TrendPoint[]> {
+  const sp = new URLSearchParams();
+  if (interval) sp.set("interval", interval);
+  if (fromTime) sp.set("from_time", fromTime);
+  if (toTime) sp.set("to_time", toTime);
+  const qs = sp.toString();
+  return fetchJSON<TrendPoint[]>(`${BASE}/queries/fingerprints/${hash}/trend${qs ? `?${qs}` : ""}`);
+}
+
+export async function fetchFingerprintQueries(hash: string, limit?: number, offset?: number): Promise<FingerprintQueriesResponse> {
+  const sp = new URLSearchParams();
+  if (limit) sp.set("limit", String(limit));
+  if (offset) sp.set("offset", String(offset));
+  const qs = sp.toString();
+  return fetchJSON<FingerprintQueriesResponse>(`${BASE}/queries/fingerprints/${hash}/queries${qs ? `?${qs}` : ""}`);
 }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
-import { Plug, Unplug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench } from "lucide-react";
+import { Link, Outlet } from "react-router-dom";
+import { Plug, Unplug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge } from "lucide-react";
 import type { ConnectionParams } from "../api/connection";
 import { setConnectionHeaders } from "../api/connection";
 import { testConnection } from "../api/client";
@@ -17,7 +17,6 @@ export function Layout({
   onConnect: (params: ConnectionParams) => void;
   onDisconnect: () => void;
 }) {
-  const location = useLocation();
   const [editing, setEditing] = useState(!connected);
   const [params, setParams] = useState<ConnectionParams>(connection);
   const [testing, setTesting] = useState(false);
@@ -75,6 +74,22 @@ export function Layout({
             <div className="flex items-center gap-4 text-sm">
               {connected && (
                 <>
+                  <Link to="/" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
+                    <Gauge className="h-3.5 w-3.5" />
+                    Dashboard
+                  </Link>
+                  <Link to="/queries" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
+                    <List className="h-3.5 w-3.5" />
+                    Queries
+                  </Link>
+                  <Link to="/running" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
+                    <Activity className="h-3.5 w-3.5" />
+                    Running
+                  </Link>
+                  <Link to="/fingerprints" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
+                    <Fingerprint className="h-3.5 w-3.5" />
+                    Fingerprints
+                  </Link>
                   <Link to="/editor" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
                     <Code className="h-3.5 w-3.5" />
                     Editor
@@ -88,11 +103,6 @@ export function Layout({
                     Optimizer
                   </Link>
                 </>
-              )}
-              {connected && location.pathname !== "/" && (
-                <Link to="/" className="hover:text-[var(--color-text-primary)] no-underline text-[var(--color-text-secondary)]">
-                  &larr; Queries
-                </Link>
               )}
               {connected && !editing && (
                 <>

@@ -958,7 +958,7 @@ export function QueryEditor() {
                         {t.row_count > 0 && <span className="ml-1 shrink-0 text-[10px] text-[var(--color-text-secondary)]">({formatNumber(t.row_count)})</span>}
                       </button>
                       <button
-                        onClick={() => setSQLText(`SELECT * FROM ${dbName}.${t.name}`)}
+                        onClick={() => setSQLText(`SELECT * FROM "${dbName}"."${t.name}"`)}
                         className="mr-1 shrink-0 rounded p-1 text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)]"
                         title="SELECT * FROM"
                       >
