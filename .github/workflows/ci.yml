@@ -116,6 +116,20 @@ jobs:
           echo "Seed failed after 3 attempts"
           exit 1
 
+      - name: Flush logs
+        run: |
+          for attempt in 1 2 3; do
+            echo "Flush attempt $attempt..."
+            if docker exec dev-clickhouse-1 clickhouse-client --query "SYSTEM FLUSH LOGS" --receive_timeout 30; then
+              echo "Flush succeeded"
+              exit 0
+            fi
+            echo "Flush failed, waiting 5s..."
+            sleep 5
+          done
+          echo "Flush failed after 3 attempts (non-fatal)"
+          exit 0
+
       - name: Run integration tests
         run: go test -race -count=1 -tags=integration -v ./tests/integration/...
         env:

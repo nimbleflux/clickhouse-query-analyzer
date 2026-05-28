@@ -38,5 +38,3 @@ SELECT
     rand64() % 1000000,
     [200, 200, 200, 200, 404, 500, 301][rand32() % 7 + 1]
 FROM numbers(10000);
-
-SYSTEM FLUSH LOGS;
