@@ -17,10 +17,10 @@ type SystemEvent struct {
 }
 
 type DatabaseSize struct {
-	Database         string `json:"database"`
-	Tables           uint64 `json:"tables"`
-	Rows             uint64 `json:"rows"`
-	CompressedBytes  uint64 `json:"compressed_bytes"`
+	Database          string `json:"database"`
+	Tables            uint64 `json:"tables"`
+	Rows              uint64 `json:"rows"`
+	CompressedBytes   uint64 `json:"compressed_bytes"`
 	UncompressedBytes uint64 `json:"uncompressed_bytes"`
 }
 
