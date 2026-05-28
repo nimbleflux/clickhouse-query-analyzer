@@ -461,12 +461,12 @@ func (a *API) ListFingerprints(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := clickhouse.QueryListParams{
-		FromTime:  r.URL.Query().Get("from_time"),
-		ToTime:    r.URL.Query().Get("to_time"),
-		User:      r.URL.Query().Get("user"),
-		Search:    r.URL.Query().Get("search"),
-		SortBy:    r.URL.Query().Get("sort_by"),
-		SortDir:   strings.ToUpper(r.URL.Query().Get("sort_dir")),
+		FromTime: r.URL.Query().Get("from_time"),
+		ToTime:   r.URL.Query().Get("to_time"),
+		User:     r.URL.Query().Get("user"),
+		Search:   r.URL.Query().Get("search"),
+		SortBy:   r.URL.Query().Get("sort_by"),
+		SortDir:  strings.ToUpper(r.URL.Query().Get("sort_dir")),
 	}
 
 	if v := r.URL.Query().Get("limit"); v != "" {

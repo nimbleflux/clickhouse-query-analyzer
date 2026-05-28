@@ -193,24 +193,24 @@ func (c *Client) GetQuery(ctx context.Context, queryID string) (*QueryLogEntry, 
 }
 
 type QueryFingerprint struct {
-	NormalizedQueryHash string  `json:"normalized_query_hash"`
-	SampleQuery         string  `json:"sample_query"`
-	QueryKind           string  `json:"query_kind"`
-	ExecutionCount      uint64  `json:"execution_count"`
-	AvgDurationMs       float64 `json:"avg_duration_ms"`
-	P50DurationMs       float64 `json:"p50_duration_ms"`
-	P95DurationMs       float64 `json:"p95_duration_ms"`
-	MaxDurationMs       uint64  `json:"max_duration_ms"`
-	AvgMemoryUsage      float64 `json:"avg_memory_usage"`
-	MaxMemoryUsage      uint64  `json:"max_memory_usage"`
-	AvgReadRows         float64 `json:"avg_read_rows"`
-	MaxReadRows         uint64  `json:"max_read_rows"`
-	AvgReadBytes        float64 `json:"avg_read_bytes"`
-	MaxReadBytes        uint64  `json:"max_read_bytes"`
+	NormalizedQueryHash string    `json:"normalized_query_hash"`
+	SampleQuery         string    `json:"sample_query"`
+	QueryKind           string    `json:"query_kind"`
+	ExecutionCount      uint64    `json:"execution_count"`
+	AvgDurationMs       float64   `json:"avg_duration_ms"`
+	P50DurationMs       float64   `json:"p50_duration_ms"`
+	P95DurationMs       float64   `json:"p95_duration_ms"`
+	MaxDurationMs       uint64    `json:"max_duration_ms"`
+	AvgMemoryUsage      float64   `json:"avg_memory_usage"`
+	MaxMemoryUsage      uint64    `json:"max_memory_usage"`
+	AvgReadRows         float64   `json:"avg_read_rows"`
+	MaxReadRows         uint64    `json:"max_read_rows"`
+	AvgReadBytes        float64   `json:"avg_read_bytes"`
+	MaxReadBytes        uint64    `json:"max_read_bytes"`
 	ErrorCount          uint64    `json:"error_count"`
 	LastError           string    `json:"last_error"`
 	LastSeen            time.Time `json:"last_seen"`
-	Users               []string `json:"users"`
+	Users               []string  `json:"users"`
 }
 
 func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) ([]QueryFingerprint, uint64, error) {
@@ -318,17 +318,17 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 }
 
 type FingerprintQuery struct {
-	QueryID        string    `json:"query_id"`
-	EventTime      time.Time `json:"event_time"`
-	QueryDurationMs uint64   `json:"query_duration_ms"`
-	MemoryUsage    uint64    `json:"memory_usage"`
-	ReadRows       uint64    `json:"read_rows"`
-	ReadBytes      uint64    `json:"read_bytes"`
-	ResultRows     uint64    `json:"result_rows"`
-	PeakThreads    uint64    `json:"peak_threads_usage"`
-	User           string    `json:"user"`
-	Type           string    `json:"type"`
-	Exception      string    `json:"exception"`
+	QueryID         string    `json:"query_id"`
+	EventTime       time.Time `json:"event_time"`
+	QueryDurationMs uint64    `json:"query_duration_ms"`
+	MemoryUsage     uint64    `json:"memory_usage"`
+	ReadRows        uint64    `json:"read_rows"`
+	ReadBytes       uint64    `json:"read_bytes"`
+	ResultRows      uint64    `json:"result_rows"`
+	PeakThreads     uint64    `json:"peak_threads_usage"`
+	User            string    `json:"user"`
+	Type            string    `json:"type"`
+	Exception       string    `json:"exception"`
 }
 
 func (c *Client) ListFingerprintQueries(ctx context.Context, hash uint64, limit int, offset int) ([]FingerprintQuery, uint64, error) {

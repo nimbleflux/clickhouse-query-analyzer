@@ -7,20 +7,20 @@ import (
 )
 
 type ProcessEntry struct {
-	QueryID        string   `json:"query_id"`
-	Query          string   `json:"query"`
-	User           string   `json:"user"`
-	DurationMs     float64  `json:"query_duration_ms"`
-	MemoryUsage    int64    `json:"memory_usage"`
-	PeakMemory     int64    `json:"peak_memory_usage"`
-	ReadRows       uint64   `json:"read_rows"`
-	ReadBytes      uint64   `json:"read_bytes"`
-	WrittenRows    uint64   `json:"written_rows"`
-	WrittenBytes   uint64   `json:"written_bytes"`
-	ThreadCount    uint64   `json:"peak_threads_usage"`
-	Database       string   `json:"current_database"`
-	IsInitialQuery uint8    `json:"is_initial_query"`
-	InitialQueryID string   `json:"initial_query_id"`
+	QueryID        string  `json:"query_id"`
+	Query          string  `json:"query"`
+	User           string  `json:"user"`
+	DurationMs     float64 `json:"query_duration_ms"`
+	MemoryUsage    int64   `json:"memory_usage"`
+	PeakMemory     int64   `json:"peak_memory_usage"`
+	ReadRows       uint64  `json:"read_rows"`
+	ReadBytes      uint64  `json:"read_bytes"`
+	WrittenRows    uint64  `json:"written_rows"`
+	WrittenBytes   uint64  `json:"written_bytes"`
+	ThreadCount    uint64  `json:"peak_threads_usage"`
+	Database       string  `json:"current_database"`
+	IsInitialQuery uint8   `json:"is_initial_query"`
+	InitialQueryID string  `json:"initial_query_id"`
 }
 
 func (c *Client) ListProcesses(ctx context.Context) ([]ProcessEntry, error) {

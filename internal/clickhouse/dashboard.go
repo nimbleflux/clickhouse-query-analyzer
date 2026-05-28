@@ -31,43 +31,43 @@ type PartSummary struct {
 }
 
 type ReplicationQueueEntry struct {
-	Database    string `json:"database"`
-	Table       string `json:"table"`
-	ReplicaName string `json:"replica_name"`
-	Position    uint64 `json:"position"`
-	Type        string `json:"type"`
-	CreateTime  string `json:"create_time"`
-	IsStarted   uint8  `json:"is_started"`
-	NumTries    uint32 `json:"num_tries"`
+	Database      string `json:"database"`
+	Table         string `json:"table"`
+	ReplicaName   string `json:"replica_name"`
+	Position      uint64 `json:"position"`
+	Type          string `json:"type"`
+	CreateTime    string `json:"create_time"`
+	IsStarted     uint8  `json:"is_started"`
+	NumTries      uint32 `json:"num_tries"`
 	LastException string `json:"last_exception"`
 }
 
 type ReplicaStatus struct {
-	Database       string `json:"database"`
-	Table          string `json:"table"`
-	ReplicaName    string `json:"replica_name"`
-	IsLeader       uint8  `json:"is_leader"`
-	IsReadOnly     uint8  `json:"is_readonly"`
+	Database       string  `json:"database"`
+	Table          string  `json:"table"`
+	ReplicaName    string  `json:"replica_name"`
+	IsLeader       uint8   `json:"is_leader"`
+	IsReadOnly     uint8   `json:"is_readonly"`
 	AbsoluteDelay  float64 `json:"absolute_delay"`
-	QueueSize      uint64 `json:"queue_size"`
-	InsertsInQueue uint64 `json:"inserts_in_queue"`
-	MergesInQueue  uint64 `json:"merges_in_queue"`
-	LogMaxIndex    uint64 `json:"log_max_index"`
-	LogPointer     uint64 `json:"log_pointer"`
-	TotalReplicas  uint8  `json:"total_replicas"`
-	ActiveReplicas uint8  `json:"active_replicas"`
+	QueueSize      uint64  `json:"queue_size"`
+	InsertsInQueue uint64  `json:"inserts_in_queue"`
+	MergesInQueue  uint64  `json:"merges_in_queue"`
+	LogMaxIndex    uint64  `json:"log_max_index"`
+	LogPointer     uint64  `json:"log_pointer"`
+	TotalReplicas  uint8   `json:"total_replicas"`
+	ActiveReplicas uint8   `json:"active_replicas"`
 }
 
 type DashboardData struct {
-	Metrics           []SystemMetrics    `json:"metrics"`
-	RecentEvents      []SystemEvent      `json:"recent_events"`
-	DatabaseSizes     []DatabaseSize     `json:"database_sizes"`
-	TopTablesBySize   []PartSummary      `json:"top_tables_by_size"`
-	TopTablesByParts  []PartSummary      `json:"top_tables_by_parts"`
-	ReplicationQueue  []ReplicationQueueEntry `json:"replication_queue"`
-	ReplicaStatuses   []ReplicaStatus    `json:"replica_statuses"`
-	Uptime            uint64             `json:"uptime"`
-	Version           string             `json:"version"`
+	Metrics          []SystemMetrics         `json:"metrics"`
+	RecentEvents     []SystemEvent           `json:"recent_events"`
+	DatabaseSizes    []DatabaseSize          `json:"database_sizes"`
+	TopTablesBySize  []PartSummary           `json:"top_tables_by_size"`
+	TopTablesByParts []PartSummary           `json:"top_tables_by_parts"`
+	ReplicationQueue []ReplicationQueueEntry `json:"replication_queue"`
+	ReplicaStatuses  []ReplicaStatus         `json:"replica_statuses"`
+	Uptime           uint64                  `json:"uptime"`
+	Version          string                  `json:"version"`
 }
 
 func (c *Client) GetDashboard(ctx context.Context) (*DashboardData, error) {

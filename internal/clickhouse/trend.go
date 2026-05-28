@@ -7,23 +7,23 @@ import (
 )
 
 type TrendPoint struct {
-	Bucket            time.Time `json:"bucket"`
-	ExecutionCount    uint64  `json:"execution_count"`
-	AvgDurationMs     float64 `json:"avg_duration_ms"`
-	P50DurationMs     float64 `json:"p50_duration_ms"`
-	P95DurationMs     float64 `json:"p95_duration_ms"`
-	MaxDurationMs     uint64  `json:"max_duration_ms"`
-	AvgMemoryUsage    float64 `json:"avg_memory_usage"`
-	MaxMemoryUsage    uint64  `json:"max_memory_usage"`
-	AvgReadRows       float64 `json:"avg_read_rows"`
-	MaxReadRows       uint64  `json:"max_read_rows"`
-	AvgReadBytes      float64 `json:"avg_read_bytes"`
-	MaxReadBytes      uint64  `json:"max_read_bytes"`
-	AvgResultRows     float64 `json:"avg_result_rows"`
-	MaxResultRows     uint64  `json:"max_result_rows"`
-	AvgPeakThreads    float64 `json:"avg_peak_threads"`
-	MaxPeakThreads    uint64  `json:"max_peak_threads"`
-	ErrorCount        uint64  `json:"error_count"`
+	Bucket         time.Time `json:"bucket"`
+	ExecutionCount uint64    `json:"execution_count"`
+	AvgDurationMs  float64   `json:"avg_duration_ms"`
+	P50DurationMs  float64   `json:"p50_duration_ms"`
+	P95DurationMs  float64   `json:"p95_duration_ms"`
+	MaxDurationMs  uint64    `json:"max_duration_ms"`
+	AvgMemoryUsage float64   `json:"avg_memory_usage"`
+	MaxMemoryUsage uint64    `json:"max_memory_usage"`
+	AvgReadRows    float64   `json:"avg_read_rows"`
+	MaxReadRows    uint64    `json:"max_read_rows"`
+	AvgReadBytes   float64   `json:"avg_read_bytes"`
+	MaxReadBytes   uint64    `json:"max_read_bytes"`
+	AvgResultRows  float64   `json:"avg_result_rows"`
+	MaxResultRows  uint64    `json:"max_result_rows"`
+	AvgPeakThreads float64   `json:"avg_peak_threads"`
+	MaxPeakThreads uint64    `json:"max_peak_threads"`
+	ErrorCount     uint64    `json:"error_count"`
 }
 
 func (c *Client) GetFingerprintTrend(ctx context.Context, hash uint64, interval string, fromTime string, toTime string) ([]TrendPoint, error) {
