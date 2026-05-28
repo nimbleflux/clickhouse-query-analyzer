@@ -36,6 +36,11 @@ function formatUptime(seconds: number): string {
   return `${m}m`;
 }
 
+function formatEventValue(name: string, value: number): string {
+  if (name.endsWith("Bytes")) return formatBytes(value);
+  return formatNumber(value);
+}
+
 export function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -83,7 +88,7 @@ export function Dashboard() {
           <div className="flex items-center gap-3">
             <Gauge className="h-5 w-5 text-[var(--color-text-secondary)]" />
             <h2 className="text-lg font-semibold">System Dashboard</h2>
-            {data.version && <span className="text-xs text-[var(--color-text-secondary)]">v{data.version}</span>}
+            {(data.nodes?.length ?? 0) > 0 && <span className="text-xs text-[var(--color-text-secondary)]">v{data.nodes[0].version}</span>}
           </div>
           <button
             onClick={load}
@@ -97,8 +102,18 @@ export function Dashboard() {
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-          <div className="text-xs text-[var(--color-text-secondary)]">Uptime</div>
-          <div className="mt-1 font-mono text-lg font-semibold text-[var(--color-text-primary)]">{formatUptime(data.uptime)}</div>
+          <div className="text-xs text-[var(--color-text-secondary)]">Uptime{(data.nodes?.length ?? 0) > 1 ? ` (${data.nodes.length} nodes)` : ""}</div>
+          <div className="mt-1 font-mono text-lg font-semibold text-[var(--color-text-primary)]">
+            {(data.nodes?.length ?? 0) === 1
+              ? formatUptime(data.nodes[0].uptime)
+              : (data.nodes?.length ?? 0) > 1
+                ? data.nodes.map((n) => (
+                    <div key={n.host} className="text-sm">
+                      <span className="text-[var(--color-text-secondary)]">{n.host}</span> {formatUptime(n.uptime)}
+                    </div>
+                  ))
+                : "-"}
+          </div>
         </div>
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
           <div className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
@@ -212,10 +227,16 @@ export function Dashboard() {
           </table>
         </Card>
 
-        <Card title="Top System Events" icon={<Activity className="h-3.5 w-3.5" />}>
-          <div className="max-h-64 overflow-y-auto">
-            {data.recent_events.map((e) => (
-              <MetricRow key={e.event} label={e.event.replace(/([A-Z])/g, " $1").trim()} value={formatNumber(e.value)} />
+        <Card title="Top System Events" icon={<Activity className="h-3.5 w-3.5" />} scrollable>
+          <div>
+            {data.recent_events.map((e, i) => (
+              <div key={`${e.event}-${e.host}-${i}`} className="flex items-center justify-between border-b border-[var(--color-border)] py-1.5 last:border-0">
+                <span className="text-xs text-[var(--color-text-secondary)]">
+                  {e.event.replace(/([A-Z])/g, " $1").trim()}
+                  {(data.nodes?.length ?? 0) > 1 && <span className="ml-1 opacity-60">({e.host})</span>}
+                </span>
+                <span className="font-mono text-xs text-[var(--color-text-primary)]">{formatEventValue(e.event, e.value)}</span>
+              </div>
             ))}
           </div>
         </Card>
@@ -224,7 +245,7 @@ export function Dashboard() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card title="System Metrics" icon={<Gauge className="h-3.5 w-3.5" />} scrollable>
           {data.metrics.map((m) => (
-            <MetricRow key={m.metric} label={m.metric.replace(/([A-Z])/g, " $1").trim()} value={formatNumber(m.value)} />
+            <MetricRow key={m.metric} label={m.metric.replace(/([A-Z])/g, " $1").trim()} value={formatEventValue(m.metric, m.value)} />
           ))}
         </Card>
 

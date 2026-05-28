@@ -300,14 +300,13 @@ export interface FingerprintListResponse {
 
 export interface DashboardData {
   metrics: { metric: string; value: number }[];
-  recent_events: { event: string; value: number }[];
+  recent_events: { event: string; host: string; value: number }[];
   database_sizes: { database: string; tables: number; rows: number; compressed_bytes: number; uncompressed_bytes: number }[];
   top_tables_by_size: { database: string; table: string; parts: number; rows: number; compressed_bytes: number; uncompressed_bytes: number }[];
   top_tables_by_parts: { database: string; table: string; parts: number; rows: number; compressed_bytes: number; uncompressed_bytes: number }[];
   replication_queue: { database: string; table: string; replica_name: string; position: number; type: string; create_time: string; is_started: number; num_tries: number; last_exception: string }[];
   replica_statuses: { database: string; table: string; replica_name: string; is_leader: number; is_readonly: number; absolute_delay: number; queue_size: number; inserts_in_queue: number; merges_in_queue: number; log_max_index: number; log_pointer: number; total_replicas: number; active_replicas: number }[];
-  uptime: number;
-  version: string;
+  nodes: { host: string; uptime: number; version: string }[];
 }
 
 export interface FingerprintQuery {

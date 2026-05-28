@@ -12,6 +12,7 @@ type SystemMetrics struct {
 
 type SystemEvent struct {
 	Event string `json:"event"`
+	Host  string `json:"host"`
 	Value uint64 `json:"value"`
 }
 
@@ -60,6 +61,12 @@ type ReplicaStatus struct {
 	ActiveReplicas uint8   `json:"active_replicas"`
 }
 
+type NodeInfo struct {
+	Host    string `json:"host"`
+	Uptime  uint64 `json:"uptime"`
+	Version string `json:"version"`
+}
+
 type DashboardData struct {
 	Metrics          []SystemMetrics         `json:"metrics"`
 	RecentEvents     []SystemEvent           `json:"recent_events"`
@@ -68,8 +75,7 @@ type DashboardData struct {
 	TopTablesByParts []PartSummary           `json:"top_tables_by_parts"`
 	ReplicationQueue []ReplicationQueueEntry `json:"replication_queue"`
 	ReplicaStatuses  []ReplicaStatus         `json:"replica_statuses"`
-	Uptime           uint64                  `json:"uptime"`
-	Version          string                  `json:"version"`
+	Nodes            []NodeInfo              `json:"nodes"`
 }
 
 func (c *Client) GetDashboard(ctx context.Context) (*DashboardData, error) {
@@ -118,7 +124,7 @@ func (c *Client) queryMetrics(ctx context.Context, d *DashboardData) error {
 
 func (c *Client) queryRecentEvents(ctx context.Context, d *DashboardData) error {
 	table := c.tableRef("events")
-	query := fmt.Sprintf(`SELECT event, toUInt64(value) AS value FROM %s WHERE value > 0 ORDER BY value DESC LIMIT 30`, table)
+	query := fmt.Sprintf(`SELECT event, hostName() AS host, toUInt64(value) AS value FROM %s WHERE value > 0 ORDER BY value DESC LIMIT 30`, table)
 
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
@@ -128,7 +134,7 @@ func (c *Client) queryRecentEvents(ctx context.Context, d *DashboardData) error 
 
 	for rows.Next() {
 		var e SystemEvent
-		if err := rows.Scan(&e.Event, &e.Value); err != nil {
+		if err := rows.Scan(&e.Event, &e.Host, &e.Value); err != nil {
 			return err
 		}
 		d.RecentEvents = append(d.RecentEvents, e)
@@ -288,12 +294,24 @@ func (c *Client) queryReplication(ctx context.Context, d *DashboardData) {
 }
 
 func (c *Client) queryServerInfo(ctx context.Context, d *DashboardData) {
-	var uptime uint64
-	if err := c.conn.QueryRow(ctx, "SELECT uptime()").Scan(&uptime); err == nil {
-		d.Uptime = uptime
+	if c.isCluster {
+		query := fmt.Sprintf(`SELECT hostName() AS host, uptime(), version() FROM clusterAllReplicas('%s', system.one)`, c.cluster)
+		rows, err := c.conn.Query(ctx, query)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var n NodeInfo
+				if err := rows.Scan(&n.Host, &n.Uptime, &n.Version); err == nil {
+					d.Nodes = append(d.Nodes, n)
+				}
+			}
+		}
 	}
-	var version string
-	if err := c.conn.QueryRow(ctx, "SELECT version()").Scan(&version); err == nil {
-		d.Version = version
+	if len(d.Nodes) == 0 {
+		var uptime uint64
+		var version string
+		if err := c.conn.QueryRow(ctx, "SELECT uptime(), version()").Scan(&uptime, &version); err == nil {
+			d.Nodes = append(d.Nodes, NodeInfo{Host: "local", Uptime: uptime, Version: version})
+		}
 	}
 }

@@ -395,7 +395,17 @@ export function QueryEditor() {
     try { return Number(localStorage.getItem(PAGE_SIZE_KEY)) || 100; } catch { return 100; }
   });
   const [settings, setSettings] = useState(loadSettings);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try { return Number(localStorage.getItem("ch-editor-sidebar-width")) || 256; } catch { return 256; }
+  });
   const [sidebarSections, setSidebarSections] = useState<SidebarSections>(loadSidebarSections);
+  const [sectionHeights, setSectionHeights] = useState(() => {
+    try {
+      const raw = localStorage.getItem("ch-editor-section-heights");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return { schema: 0.4, saved: 0.3, params: 0.3 };
+  });
   const [savedQueries, setSavedQueries] = useState<SavedQuery[]>(loadSavedQueries);
   const [savedSearch, setSavedSearch] = useState("");
   const [savingName, setSavingName] = useState("");
@@ -405,6 +415,7 @@ export function QueryEditor() {
   const [showSaveParamSetDialog, setShowSaveParamSetDialog] = useState(false);
   const [formatting, setFormatting] = useState(false);
   const editorRef = useRef<any>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef(0);
@@ -518,6 +529,14 @@ export function QueryEditor() {
   useEffect(() => {
     saveSettings(settings);
   }, [settings]);
+
+  useEffect(() => {
+    try { localStorage.setItem("ch-editor-sidebar-width", String(sidebarWidth)); } catch {}
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    try { localStorage.setItem("ch-editor-section-heights", JSON.stringify(sectionHeights)); } catch {}
+  }, [sectionHeights]);
 
   const startTimer = useCallback(() => {
     startTimeRef.current = Date.now();
@@ -901,6 +920,7 @@ export function QueryEditor() {
     extra?: React.ReactNode;
   }) => (
     <button
+      data-section-header
       onClick={() => toggleSection(sectionKey)}
       className="flex w-full items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
     >
@@ -911,9 +931,54 @@ export function QueryEditor() {
     </button>
   );
 
+  const openCount = Object.values(sidebarSections).filter(Boolean).length;
+
+  const makeSectionDrag = (upper: "schema" | "saved" | "params", lower: "saved" | "params") => (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startUpper = sectionHeights[upper];
+    const startLower = sectionHeights[lower];
+    const sidebarEl = sidebarRef.current;
+    if (!sidebarEl) return;
+    const headersH = sidebarEl.querySelectorAll('[data-section-header]').length * 33;
+    const totalContent = sidebarEl.clientHeight - headersH;
+    if (totalContent <= 0) return;
+    const onMove = (ev: MouseEvent) => {
+      const delta = ev.clientY - startY;
+      const frac = delta / totalContent;
+      let newUpper = Math.max(0.05, Math.min(0.95, startUpper + frac));
+      let newLower = startLower - (newUpper - startUpper);
+      if (newLower < 0.05) {
+        newLower = 0.05;
+        newUpper = startUpper + startLower - 0.05;
+      }
+      setSectionHeights((prev: Record<string, number>) => ({ ...prev, [upper]: newUpper, [lower]: newLower }));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+
+  const sectionStyle = (key: keyof SidebarSections): React.CSSProperties => {
+    if (!sidebarSections[key]) return { height: 0, overflow: "hidden" };
+    if (openCount === 0) return { flex: 1, minHeight: 0, overflow: "auto" };
+    return { flex: sectionHeights[key], minHeight: 0, overflow: "auto" };
+  };
+
   return (
-    <div className="flex h-[calc(100vh-3.5rem)]">
-      <div className="w-64 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-y-auto overflow-x-hidden flex flex-col">
+    <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
+      <div
+        ref={sidebarRef}
+        className="shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-secondary)] flex flex-col overflow-hidden"
+        style={{ width: sidebarWidth }}
+      >
         <AccordionHeader
           label="Schema"
           icon={<Database className="h-3.5 w-3.5" />}
@@ -930,8 +995,8 @@ export function QueryEditor() {
             </button>
           }
         />
-        {sidebarSections.schema && (
-          <div className="border-b border-[var(--color-border)] p-1">
+        <div style={sectionStyle("schema")} className="border-b border-[var(--color-border)]">
+          <div className="p-1">
             {databases.length > 0 ? databases.map((dbName) => (
               <div key={dbName}>
                 <button
@@ -997,7 +1062,12 @@ export function QueryEditor() {
               </div>
             )}
           </div>
-        )}
+        </div>
+
+        <div
+          className="h-1 shrink-0 cursor-row-resize hover:bg-[var(--color-accent)]"
+          onMouseDown={makeSectionDrag("schema", "saved")}
+        />
 
         <AccordionHeader
           label="Saved Queries"
@@ -1033,90 +1103,93 @@ export function QueryEditor() {
             </div>
           }
         />
-        {sidebarSections.saved && (
-          <div className="border-b border-[var(--color-border)]">
-            <div className="px-2 py-1.5">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--color-text-secondary)]" />
-                <input
-                  type="text"
-                  value={savedSearch}
-                  onChange={(e) => setSavedSearch(e.target.value)}
-                  placeholder="Search saved queries..."
-                  className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] py-1 pl-7 pr-2 text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)]"
-                />
-              </div>
-            </div>
-            <div className="max-h-60 overflow-y-auto">
-              {matchedSaved.length > 0 ? matchedSaved.map((q) => {
-                const params = detectParams(q.sql);
-                const isActive = q.id === activeSavedId;
-                return (
-                  <div
-                    key={q.id}
-                    className={`group/saved flex flex-col gap-0.5 border-b border-[var(--color-border)] px-2 py-1.5 last:border-0 ${isActive ? "bg-[var(--color-bg-tertiary)]" : "hover:bg-[var(--color-bg-tertiary)]"}`}
-                  >
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => handleLoadSaved(q)}
-                        className="flex-1 truncate text-left text-xs font-medium text-[var(--color-text-primary)] hover:text-[var(--color-accent)] hover:underline"
-                        title={`Load "${q.name}" into editor`}
-                      >
-                        {q.name}
-                      </button>
-                      <button
-                        onClick={() => handleLoadSaved(q)}
-                        className="shrink-0 rounded p-0.5 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-accent)]"
-                        title="Load into editor"
-                      >
-                        <Play className="h-3 w-3" />
-                      </button>
-                      {isActive && (
-                        <button
-                          onClick={() => handleOverwriteSaved(q.id)}
-                          className="shrink-0 rounded p-0.5 text-[var(--color-accent)] hover:bg-[var(--color-bg-secondary)]"
-                          title="Update saved query with current SQL"
-                        >
-                          <RefreshCw className="h-3 w-3" />
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleDeleteSaved(q.id)}
-                        className="shrink-0 rounded p-0.5 text-[var(--color-text-secondary)] opacity-0 hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-error)] group-hover/saved:opacity-100"
-                        title="Delete"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="truncate font-mono text-[10px] text-[var(--color-text-secondary)]">
-                        {q.sql.replace(/\s+/g, " ").trim().slice(0, 60)}
-                        {q.sql.length > 60 ? "..." : ""}
-                      </span>
-                    </div>
-                    {params.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {params.map((p) => (
-                          <span
-                            key={p}
-                            className="inline-flex items-center rounded bg-[var(--color-accent)]/10 px-1.5 py-0.5 text-[9px] font-medium text-[var(--color-accent)]"
-                          >
-                            <Variable className="mr-0.5 h-2.5 w-2.5" />
-                            {p}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              }) : (
-                <div className="px-3 py-4 text-center text-xs text-[var(--color-text-secondary)]">
-                  {savedSearch ? "No matching queries" : "No saved queries yet"}
-                </div>
-              )}
+        <div style={sectionStyle("saved")} className="border-b border-[var(--color-border)]">
+          <div className="px-2 py-1.5">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--color-text-secondary)]" />
+              <input
+                type="text"
+                value={savedSearch}
+                onChange={(e) => setSavedSearch(e.target.value)}
+                placeholder="Search saved queries..."
+                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] py-1 pl-7 pr-2 text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)]"
+              />
             </div>
           </div>
-        )}
+          <div className="overflow-y-auto">
+            {matchedSaved.length > 0 ? matchedSaved.map((q) => {
+              const params = detectParams(q.sql);
+              const isActive = q.id === activeSavedId;
+              return (
+                <div
+                  key={q.id}
+                  className={`group/saved flex flex-col gap-0.5 border-b border-[var(--color-border)] px-2 py-1.5 last:border-0 ${isActive ? "bg-[var(--color-bg-tertiary)]" : "hover:bg-[var(--color-bg-tertiary)]"}`}
+                >
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => handleLoadSaved(q)}
+                      className="flex-1 truncate text-left text-xs font-medium text-[var(--color-text-primary)] hover:text-[var(--color-accent)] hover:underline"
+                      title={`Load "${q.name}" into editor`}
+                    >
+                      {q.name}
+                    </button>
+                    <button
+                      onClick={() => handleLoadSaved(q)}
+                      className="shrink-0 rounded p-0.5 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-accent)]"
+                      title="Load into editor"
+                    >
+                      <Play className="h-3 w-3" />
+                    </button>
+                    {isActive && (
+                      <button
+                        onClick={() => handleOverwriteSaved(q.id)}
+                        className="shrink-0 rounded p-0.5 text-[var(--color-accent)] hover:bg-[var(--color-bg-secondary)]"
+                        title="Update saved query with current SQL"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDeleteSaved(q.id)}
+                      className="shrink-0 rounded p-0.5 text-[var(--color-text-secondary)] opacity-0 hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-error)] group-hover/saved:opacity-100"
+                      title="Delete"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="truncate font-mono text-[10px] text-[var(--color-text-secondary)]">
+                      {q.sql.replace(/\s+/g, " ").trim().slice(0, 60)}
+                      {q.sql.length > 60 ? "..." : ""}
+                    </span>
+                  </div>
+                  {params.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {params.map((p) => (
+                        <span
+                          key={p}
+                          className="inline-flex items-center rounded bg-[var(--color-accent)]/10 px-1.5 py-0.5 text-[9px] font-medium text-[var(--color-accent)]"
+                        >
+                          <Variable className="mr-0.5 h-2.5 w-2.5" />
+                          {p}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }) : (
+              <div className="px-3 py-4 text-center text-xs text-[var(--color-text-secondary)]">
+                {savedSearch ? "No matching queries" : "No saved queries yet"}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div
+          className="h-1 shrink-0 cursor-row-resize hover:bg-[var(--color-accent)]"
+          onMouseDown={makeSectionDrag("saved", "params")}
+        />
 
         {(() => {
           const showInputs = settings.enable_params && sidebarSections.params && detectedParams.length > 0;
@@ -1143,120 +1216,122 @@ export function QueryEditor() {
                   </label>
                 }
               />
-              {showInputs && (
-                <div className="border-b border-[var(--color-border)] px-3 py-2 space-y-2">
-                  {detectedParams.map((p) => (
-                    <div key={p}>
-                      <label className="mb-0.5 block text-[10px] font-medium text-[var(--color-text-secondary)]">
-                        {`{{${p}}}`}
-                      </label>
+              <div style={sectionStyle("params")}>
+                {showInputs && (
+                  <div className="px-3 py-2 space-y-2">
+                    {detectedParams.map((p) => (
+                      <div key={p}>
+                        <label className="mb-0.5 block text-[10px] font-medium text-[var(--color-text-secondary)]">
+                          {`{{${p}}}`}
+                        </label>
+                        <input
+                          type="text"
+                          value={paramValues[p] || ""}
+                          onChange={(e) => setParamValues((prev) => ({ ...prev, [p]: e.target.value }))}
+                          placeholder={p}
+                          className={`w-full rounded border px-2 py-1 text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)] ${!paramValues[p]?.trim() ? "border-[var(--color-error)]" : "border-[var(--color-border)]"} bg-[var(--color-bg-primary)]`}
+                        />
+                      </div>
+                    ))}
+                    {detectedParams.length > 0 && (
+                      <div className="flex gap-1 pt-1">
+                        <button
+                          onClick={() => { setSavingParamSetName(""); setShowSaveParamSetDialog(true); }}
+                          className="flex-1 rounded border border-[var(--color-border)] px-2 py-1 text-[10px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]"
+                        >
+                          Save as set
+                        </button>
+                      </div>
+                    )}
+                    {paramSets.length > 0 && (
+                      <div className="space-y-1 pt-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[9px] font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">Param sets</span>
+                          <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={() => importParamsInputRef.current?.click()}
+                              className="rounded p-0.5 hover:bg-[var(--color-bg-tertiary)]"
+                              title="Import param sets"
+                            >
+                              <Download className="h-3 w-3" />
+                            </button>
+                            <button
+                              onClick={handleExportParamSets}
+                              className="rounded p-0.5 hover:bg-[var(--color-bg-tertiary)]"
+                              title="Export param sets"
+                            >
+                              <Upload className="h-3 w-3" />
+                            </button>
+                            <input
+                              ref={importParamsInputRef}
+                              type="file"
+                              accept=".json"
+                              onChange={handleImportParamSets}
+                              className="hidden"
+                            />
+                          </div>
+                        </div>
+                        {paramSets.map((ps) => (
+                          <div key={ps.id} className="group/ps flex items-center gap-1">
+                            <button
+                              onClick={() => handleApplyParamSet(ps)}
+                              className="flex-1 truncate rounded px-1.5 py-0.5 text-left text-[10px] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-accent)]"
+                              title={`Apply: ${Object.entries(ps.params).map(([k, v]) => `${k}=${v}`).join(", ")}`}
+                            >
+                              {ps.name}
+                            </button>
+                            <button
+                              onClick={() => handleDeleteParamSet(ps.id)}
+                              className="shrink-0 rounded p-0.5 text-[var(--color-text-secondary)] opacity-0 hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-error)] group-hover/ps:opacity-100"
+                              title="Delete"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-[9px] text-[var(--color-text-secondary)]">
+                      Use \&#123;&#123; to escape literal &#123;&#123; in SQL
+                    </p>
+                  </div>
+                )}
+                {showEmpty && (
+                  <div className="px-3 py-4 text-center text-xs text-[var(--color-text-secondary)]">
+                    <p>No parameters detected.</p>
+                    <p className="mt-1 text-[10px]">Use {"{{param_name}}"} syntax to add parameters.</p>
+                  </div>
+                )}
+                {showSaveParamSetDialog && (
+                  <div className="bg-[var(--color-bg-tertiary)] px-3 py-2">
+                    <div className="mb-1.5 text-[10px] font-medium text-[var(--color-text-secondary)]">Save parameter set as</div>
+                    <div className="flex gap-1">
                       <input
                         type="text"
-                        value={paramValues[p] || ""}
-                        onChange={(e) => setParamValues((prev) => ({ ...prev, [p]: e.target.value }))}
-                        placeholder={p}
-                        className={`w-full rounded border px-2 py-1 text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)] ${!paramValues[p]?.trim() ? "border-[var(--color-error)]" : "border-[var(--color-border)]"} bg-[var(--color-bg-primary)]`}
+                        value={savingParamSetName}
+                        onChange={(e) => setSavingParamSetName(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") handleSaveParamSet(); if (e.key === "Escape") setShowSaveParamSetDialog(false); }}
+                        placeholder="Set name..."
+                        autoFocus
+                        className="flex-1 min-w-0 rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1 text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)]"
                       />
-                    </div>
-                  ))}
-                  {detectedParams.length > 0 && (
-                    <div className="flex gap-1 pt-1">
                       <button
-                        onClick={() => { setSavingParamSetName(""); setShowSaveParamSetDialog(true); }}
-                        className="flex-1 rounded border border-[var(--color-border)] px-2 py-1 text-[10px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]"
+                        onClick={handleSaveParamSet}
+                        disabled={!savingParamSetName.trim()}
+                        className="rounded bg-[var(--color-accent)] px-2 py-1 text-xs font-medium text-white hover:bg-[var(--color-accent-hover)] disabled:opacity-50"
                       >
-                        Save as set
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setShowSaveParamSetDialog(false)}
+                        className="rounded px-2 py-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                      >
+                        <X className="h-3 w-3" />
                       </button>
                     </div>
-                  )}
-                  {paramSets.length > 0 && (
-                    <div className="space-y-1 pt-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[9px] font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">Param sets</span>
-                        <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={() => importParamsInputRef.current?.click()}
-                            className="rounded p-0.5 hover:bg-[var(--color-bg-tertiary)]"
-                            title="Import param sets"
-                          >
-                            <Download className="h-3 w-3" />
-                          </button>
-                          <button
-                            onClick={handleExportParamSets}
-                            className="rounded p-0.5 hover:bg-[var(--color-bg-tertiary)]"
-                            title="Export param sets"
-                          >
-                            <Upload className="h-3 w-3" />
-                          </button>
-                          <input
-                            ref={importParamsInputRef}
-                            type="file"
-                            accept=".json"
-                            onChange={handleImportParamSets}
-                            className="hidden"
-                          />
-                        </div>
-                      </div>
-                      {paramSets.map((ps) => (
-                        <div key={ps.id} className="group/ps flex items-center gap-1">
-                          <button
-                            onClick={() => handleApplyParamSet(ps)}
-                            className="flex-1 truncate rounded px-1.5 py-0.5 text-left text-[10px] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-accent)]"
-                            title={`Apply: ${Object.entries(ps.params).map(([k, v]) => `${k}=${v}`).join(", ")}`}
-                          >
-                            {ps.name}
-                          </button>
-                          <button
-                            onClick={() => handleDeleteParamSet(ps.id)}
-                            className="shrink-0 rounded p-0.5 text-[var(--color-text-secondary)] opacity-0 hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-error)] group-hover/ps:opacity-100"
-                            title="Delete"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <p className="text-[9px] text-[var(--color-text-secondary)]">
-                    Use \&#123;&#123; to escape literal &#123;&#123; in SQL
-                  </p>
-                </div>
-              )}
-              {showEmpty && (
-                <div className="border-b border-[var(--color-border)] px-3 py-4 text-center text-xs text-[var(--color-text-secondary)]">
-                  <p>No parameters detected.</p>
-                  <p className="mt-1 text-[10px]">Use {"{{param_name}}"} syntax to add parameters.</p>
-                </div>
-              )}
-              {showSaveParamSetDialog && (
-                <div className="border-b border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-3 py-2">
-                  <div className="mb-1.5 text-[10px] font-medium text-[var(--color-text-secondary)]">Save parameter set as</div>
-                  <div className="flex gap-1">
-                    <input
-                      type="text"
-                      value={savingParamSetName}
-                      onChange={(e) => setSavingParamSetName(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") handleSaveParamSet(); if (e.key === "Escape") setShowSaveParamSetDialog(false); }}
-                      placeholder="Set name..."
-                      autoFocus
-                      className="flex-1 min-w-0 rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1 text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)]"
-                    />
-                    <button
-                      onClick={handleSaveParamSet}
-                      disabled={!savingParamSetName.trim()}
-                      className="rounded bg-[var(--color-accent)] px-2 py-1 text-xs font-medium text-white hover:bg-[var(--color-accent-hover)] disabled:opacity-50"
-                    >
-                      Save
-                    </button>
-                    <button
-                      onClick={() => setShowSaveParamSetDialog(false)}
-                      className="rounded px-2 py-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </>
           );
         })()}
@@ -1291,6 +1366,25 @@ export function QueryEditor() {
           </div>
         )}
       </div>
+
+      <div
+        className="w-1 cursor-col-resize bg-[var(--color-border)] hover:bg-[var(--color-accent)] shrink-0"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          const startX = e.clientX;
+          const startWidth = sidebarWidth;
+          const onMove = (ev: MouseEvent) => {
+            const next = Math.max(180, Math.min(600, startWidth + ev.clientX - startX));
+            setSidebarWidth(next);
+          };
+          const onUp = () => {
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+          };
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup", onUp);
+        }}
+      />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="border-b border-[var(--color-border)]">
