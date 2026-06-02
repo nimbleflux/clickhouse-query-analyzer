@@ -80,6 +80,34 @@ The tool connects to ClickHouse via the browser — no ClickHouse credentials ar
 
 For self-signed certificates, check "Skip TLS verify" in the connection bar.
 
+### TLS Certificates for ClickHouse Connections
+
+ClickLens connects to ClickHouse from the browser, so TLS certificates must be trusted by the **client browser** (or the system running the browser), not by the ClickLens server.
+
+- **Trusted CA** — If ClickHouse uses a certificate from a public CA (e.g. Let's Encrypt), no extra steps are needed.
+- **Internal / self-signed CA** — Install the CA certificate on each machine running the browser:
+  - **macOS**: Add to Keychain → System keychain → set to "Always Trust"
+  - **Linux**: Copy to `/usr/local/share/ca-certificates/` and run `sudo update-ca-certificates`
+  - **Windows**: Import into "Trusted Root Certification Authorities" via certmgr.msc
+- **Skip TLS verify** — For development or air-gapped environments, check "Skip TLS verify" in the connection bar. This disables certificate validation for that connection.
+- **Docker** — When running ClickLens behind a reverse proxy (nginx, Caddy, Traefik) that terminates TLS, mount the certificate and key into the proxy container. Example for nginx:
+
+  ```yaml
+  services:
+    clicklens:
+      image: ghcr.io/nimbleflux/clickhouse-query-analyzer:latest
+      ports:
+        - "8080:8080"
+    nginx:
+      image: nginx:alpine
+      ports:
+        - "443:443"
+      volumes:
+        - ./nginx.conf:/etc/nginx/nginx.conf:ro
+        - ./certs/tls.crt:/etc/nginx/tls.crt:ro
+        - ./certs/tls.key:/etc/nginx/tls.key:ro
+  ```
+
 ## Dev Environment
 
 ```bash
