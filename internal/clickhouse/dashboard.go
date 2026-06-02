@@ -34,15 +34,15 @@ type PartSummary struct {
 }
 
 type ReplicationQueueEntry struct {
-	Database      string `json:"database"`
-	Table         string `json:"table"`
-	ReplicaName   string `json:"replica_name"`
-	Position      uint64 `json:"position"`
-	Type          string `json:"type"`
-	CreateTime    string `json:"create_time"`
-	IsStarted     uint8  `json:"is_started"`
-	NumTries      uint32 `json:"num_tries"`
-	LastException string `json:"last_exception"`
+	Database             string `json:"database"`
+	Table                string `json:"table"`
+	ReplicaName          string `json:"replica_name"`
+	Position             uint64 `json:"position"`
+	Type                 string `json:"type"`
+	CreateTime           string `json:"create_time"`
+	IsCurrentlyExecuting uint8  `json:"is_currently_executing"`
+	NumTries             uint32 `json:"num_tries"`
+	LastException        string `json:"last_exception"`
 }
 
 type ReplicaStatus struct {
@@ -63,7 +63,7 @@ type ReplicaStatus struct {
 
 type NodeInfo struct {
 	Host    string `json:"host"`
-	Uptime  uint64 `json:"uptime"`
+	Uptime  uint32 `json:"uptime"`
 	Version string `json:"version"`
 }
 
@@ -245,7 +245,7 @@ func (c *Client) queryReplication(ctx context.Context, d *DashboardData) {
 	table := c.tableRef("replication_queue")
 	rows, err := c.conn.Query(ctx, fmt.Sprintf(`SELECT
 		database, table, replica_name, position, type,
-		toString(create_time), is_started, num_tries,
+		toString(create_time), is_currently_executing, num_tries,
 		toString(last_exception)
 	FROM %s ORDER BY create_time DESC LIMIT 50`, table))
 	if err != nil {
@@ -255,7 +255,7 @@ func (c *Client) queryReplication(ctx context.Context, d *DashboardData) {
 		for rows.Next() {
 			var r ReplicationQueueEntry
 			if err := rows.Scan(&r.Database, &r.Table, &r.ReplicaName, &r.Position, &r.Type,
-				&r.CreateTime, &r.IsStarted, &r.NumTries, &r.LastException); err == nil {
+				&r.CreateTime, &r.IsCurrentlyExecuting, &r.NumTries, &r.LastException); err == nil {
 				d.ReplicationQueue = append(d.ReplicationQueue, r)
 			}
 		}
@@ -308,10 +308,10 @@ func (c *Client) queryServerInfo(ctx context.Context, d *DashboardData) {
 		}
 	}
 	if len(d.Nodes) == 0 {
-		var uptime uint64
-		var version string
-		if err := c.conn.QueryRow(ctx, "SELECT uptime(), version()").Scan(&uptime, &version); err == nil {
-			d.Nodes = append(d.Nodes, NodeInfo{Host: "local", Uptime: uptime, Version: version})
+		var n NodeInfo
+		n.Host = "local"
+		if err := c.conn.QueryRow(ctx, "SELECT uptime(), version()").Scan(&n.Uptime, &n.Version); err == nil {
+			d.Nodes = append(d.Nodes, n)
 		}
 	}
 }

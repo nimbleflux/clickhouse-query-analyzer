@@ -4,6 +4,14 @@ import { Fingerprint, Search, Clock, MemoryStick, ArrowUp, ArrowDown, Filter, Ch
 import { fetchFingerprints } from "../api/client";
 import type { FingerprintListResponse } from "../api/types";
 import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor } from "../utils";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
+
+const DATE_PRESETS: { label: string; hours: number }[] = [
+  { label: "Last 1h", hours: 1 },
+  { label: "Last 24h", hours: 24 },
+  { label: "Last 7d", hours: 168 },
+  { label: "Last 30d", hours: 720 },
+];
 
 type SortField = "last_seen" | "execution_count" | "avg_duration_ms" | "p95_duration_ms" | "max_duration_ms" | "avg_memory_usage" | "max_memory_usage" | "error_count" | "avg_read_rows";
 
@@ -18,19 +26,26 @@ export function QueryFingerprints() {
   const [sortBy, setSortBy] = useState<SortField>("last_seen");
   const [sortDir, setSortDir] = useState<"DESC" | "ASC">("DESC");
   const [currentPage, setCurrentPage] = useState(1);
+  const [showSystem, setShowSystem] = useState(false);
+  const [fromTime, setFromTime] = useState<string>("");
+  const [toTime, setToTime] = useState<string>("");
   const pageSize = 50;
+  const debouncedSearch = useDebouncedValue(search, 300);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
       const result = await fetchFingerprints({
-        search: search || undefined,
+        search: debouncedSearch || undefined,
         user: user || undefined,
         sort_by: sortBy,
         sort_dir: sortDir,
         limit: pageSize,
         offset: (currentPage - 1) * pageSize,
+        hide_system_queries: showSystem ? false : true,
+        from_time: fromTime || undefined,
+        to_time: toTime || undefined,
       });
       setData(result);
     } catch (e) {
@@ -38,7 +53,7 @@ export function QueryFingerprints() {
     } finally {
       setLoading(false);
     }
-  }, [search, user, sortBy, sortDir, currentPage]);
+  }, [debouncedSearch, user, sortBy, sortDir, currentPage, showSystem, fromTime, toTime]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -51,6 +66,12 @@ export function QueryFingerprints() {
       setSortBy(field);
       setSortDir("DESC");
     }
+    setCurrentPage(1);
+  };
+
+  const applyDatePreset = (hours: number) => {
+    setFromTime(new Date(Date.now() - hours * 3600 * 1000).toISOString());
+    setToTime("");
     setCurrentPage(1);
   };
 
@@ -71,45 +92,107 @@ export function QueryFingerprints() {
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-[var(--color-text-secondary)]" />
-            <input
-              type="text"
-              placeholder="Search queries..."
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setCurrentPage(1); }}
-              className="rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] py-2 pl-8 pr-3 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-secondary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
-            />
-          </div>
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className={`flex items-center gap-1 rounded border px-3 py-2 text-sm ${showFilters ? "border-[var(--color-accent)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"}`}
-          >
-            <Filter className="h-3.5 w-3.5" />
-            Filters
-          </button>
+      </div>
+
+      <div className="flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-secondary)]" />
+          <input
+            type="text"
+            placeholder="Search queries..."
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setCurrentPage(1); }}
+            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] py-2 pl-10 pr-4 text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)]"
+          />
         </div>
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm ${
+            showFilters
+              ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white"
+              : "border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+          }`}
+        >
+          <Filter className="h-4 w-4" />
+          Filters
+        </button>
+        <label className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-2 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showSystem}
+            onChange={(e) => { setShowSystem(e.target.checked); setCurrentPage(1); }}
+            className="h-4 w-4 rounded border-[var(--color-border)] accent-[var(--color-accent)]"
+          />
+          Internal queries
+        </label>
       </div>
 
       {showFilters && (
-        <div className="flex items-center gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-3">
-          <input
-            type="text"
-            placeholder="Filter by user..."
-            value={user}
-            onChange={(e) => { setUser(e.target.value); setCurrentPage(1); }}
-            className="rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-secondary)]"
-          />
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
+          <div className="mb-3 flex flex-wrap gap-2">
+            <span className="text-xs text-[var(--color-text-secondary)] self-center mr-1">Quick range:</span>
+            {DATE_PRESETS.map((p) => (
+              <button
+                key={p.hours}
+                onClick={() => applyDatePreset(p.hours)}
+                className="rounded border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-accent)]"
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+            <div>
+              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">From</label>
+              <input
+                type="datetime-local"
+                value={fromTime ? fromTime.slice(0, 16) : ""}
+                onChange={(e) => { setFromTime(e.target.value ? new Date(e.target.value).toISOString() : ""); setCurrentPage(1); }}
+                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-text-primary)] outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">To</label>
+              <input
+                type="datetime-local"
+                value={toTime ? toTime.slice(0, 16) : ""}
+                onChange={(e) => { setToTime(e.target.value ? new Date(e.target.value).toISOString() : ""); setCurrentPage(1); }}
+                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-text-primary)] outline-none"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">User</label>
+              <input
+                type="text"
+                value={user}
+                onChange={(e) => { setUser(e.target.value); setCurrentPage(1); }}
+                placeholder="Username"
+                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] outline-none"
+              />
+            </div>
+          </div>
         </div>
       )}
 
       {error && (
-        <div className="rounded-lg border border-[var(--color-error)] bg-red-900/20 px-4 py-3 text-sm text-[var(--color-error)]">{error}</div>
+        <div className="rounded-lg border border-[var(--color-error)] bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]">{error}</div>
       )}
 
       {loading && !data ? (
-        <div className="py-12 text-center text-[var(--color-text-secondary)]">Loading fingerprints...</div>
+        <div className="space-y-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-4 rounded border border-transparent py-3">
+              <div className="h-4 w-28 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
+              <div className="h-4 w-12 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
+              <div className="h-4 w-20 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
+              <div className="h-4 w-20 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
+              <div className="h-4 w-20 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
+              <div className="h-4 w-16 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
+              <div className="h-4 w-10 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
+              <div className="h-4 flex-1 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
+            </div>
+          ))}
+        </div>
       ) : data && data.fingerprints.length === 0 ? (
         <div className="py-12 text-center text-[var(--color-text-secondary)]">
           <Fingerprint className="mx-auto mb-2 h-8 w-8 opacity-30" />
@@ -210,7 +293,7 @@ export function QueryFingerprints() {
               <div className="flex gap-2">
                 <button
                   disabled={currentPage <= 1}
-                  onClick={() => setCurrentPage((p) => p - 1)}
+                  onClick={() => { setCurrentPage((p) => p - 1); document.querySelector("main")?.scrollTo(0, 0); }}
                   className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-1.5 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
                 >
                   <ChevronLeft className="h-4 w-4" />
@@ -218,7 +301,7 @@ export function QueryFingerprints() {
                 </button>
                 <button
                   disabled={currentPage >= totalPages}
-                  onClick={() => setCurrentPage((p) => p + 1)}
+                  onClick={() => { setCurrentPage((p) => p + 1); document.querySelector("main")?.scrollTo(0, 0); }}
                   className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-1.5 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
                 >
                   Next

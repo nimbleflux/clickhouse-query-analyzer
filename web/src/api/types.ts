@@ -162,6 +162,7 @@ export interface QueryListParams {
   sort_dir?: string;
   limit?: number;
   offset?: number;
+  hide_system_queries?: boolean;
 }
 
 export interface QueryResult {

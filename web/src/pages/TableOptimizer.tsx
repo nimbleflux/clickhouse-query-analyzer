@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useParams, useSearchParams } from "react-router-dom";
 import { Plug, Loader2, ChevronDown, ChevronRight, Copy, Check, AlertTriangle, Zap, ArrowDown, ArrowUp, Play, StopCircle } from "lucide-react";
 import { fetchDatabases, fetchTables, fetchTableAnalysis, streamBulkAnalysis } from "../api/client";
 import { getCachedDatabases, getCachedSchemaData, setCachedDatabases, updateSchemaDb } from "../api/schema-cache";
 import { formatBytes, formatNumber } from "../utils";
+import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import type { TableAnalysis, Recommendation, BulkEvent, BulkProgress } from "../api/types";
 
 type AnalysisMode = "single" | "database" | "all";
@@ -22,9 +24,9 @@ const CATEGORY_ORDER = ["data_type", "order_by", "partition_by", "index", "codec
 const SEVERITY_RANK: Record<string, number> = { high: 3, medium: 2, low: 1 };
 
 function severityColor(s: string) {
-  if (s === "high") return "bg-red-500/20 text-red-400";
-  if (s === "medium") return "bg-yellow-500/20 text-yellow-400";
-  return "bg-blue-500/20 text-blue-400";
+  if (s === "high") return "bg-[var(--color-error)]/10 text-[var(--color-error)]";
+  if (s === "medium") return "bg-[var(--color-warning)]/10 text-[var(--color-warning)]";
+  return "bg-[var(--color-accent)]/10 text-[var(--color-accent)]";
 }
 
 function severityScore(recs: Recommendation[]) {
@@ -32,11 +34,16 @@ function severityScore(recs: Recommendation[]) {
 }
 
 export function TableOptimizer({ connected }: { connected: boolean }) {
+  const { db: urlDb, table: urlTable } = useParams<{ db?: string; table?: string }>();
+  const [searchParams] = useSearchParams();
+  const queryDb = searchParams.get("db");
+
   const [databases, setDatabases] = useState<string[]>(getCachedDatabases());
-  const [selectedDb, setSelectedDb] = useState("");
-  const [selectedTable, setSelectedTable] = useState("");
+  const [selectedDb, setSelectedDb] = useState(urlDb || queryDb || "");
+  const [selectedTable, setSelectedTable] = useState(urlTable || "");
   const [tables, setTables] = useState<{ name: string; engine: string; row_count: number }[]>([]);
-  const [mode, setMode] = useState<AnalysisMode>("single");
+  const [mode, setMode] = useState<AnalysisMode>(urlDb && urlTable ? "single" : "single");
+  const copy = useCopyToClipboard();
 
   const [singleResult, setSingleResult] = useState<TableAnalysis | null>(null);
   const [bulkResults, setBulkResults] = useState<TableAnalysis[]>([]);
@@ -75,6 +82,12 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
       updateSchemaDb(selectedDb, { tables: d.tables || [] });
     }).catch(() => {});
   }, [selectedDb]);
+
+  useEffect(() => {
+    if (urlDb && urlTable && connected) {
+      runAnalysis();
+    }
+  }, [urlDb, urlTable, connected]);
 
   const runAnalysis = useCallback(async () => {
     if (mode === "single") {
@@ -149,7 +162,7 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
 
   const copyAllDDL = () => {
     const ddls = activeRecs.filter((r) => r.ddl).map((r) => r.ddl);
-    navigator.clipboard.writeText(ddls.join("\n\n"));
+    copy(ddls.join("\n\n"), "DDL copied!");
   };
 
   const renderSortHeader = (field: SortField, label: string) => (
@@ -175,7 +188,10 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Table Optimizer</h1>
+        <div className="flex items-center gap-3">
+          <Zap className="h-5 w-5 text-[var(--color-text-secondary)]" />
+          <h1 className="text-2xl font-bold">Table Optimizer</h1>
+        </div>
         {activeRecs.length > 0 && (
           <button onClick={copyAllDDL} className="flex items-center gap-1.5 rounded bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--color-accent-hover)]">
             <Copy className="h-3.5 w-3.5" /> Copy All DDL
@@ -232,7 +248,7 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
         </button>
 
         {loading && mode !== "single" && (
-          <button onClick={stopAnalysis} className="flex items-center gap-1.5 rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700">
+          <button onClick={stopAnalysis} className="flex items-center gap-1.5 rounded bg-[var(--color-error)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90">
             <StopCircle className="h-3.5 w-3.5" /> Stop
           </button>
         )}
@@ -261,7 +277,7 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
       )}
 
       {error && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-800 bg-red-900/20 p-3 text-sm text-red-400">
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 p-3 text-sm text-[var(--color-error)]">
           <AlertTriangle className="h-4 w-4 shrink-0" /> {error}
         </div>
       )}
@@ -320,12 +336,12 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
                       <td className="px-3 py-2 text-center">
                         {recs.length > 0 ? (
                           <div className="flex items-center justify-center gap-1">
-                            {countBySeverity(recs).high > 0 && <span className="rounded bg-red-500/20 px-1.5 py-0.5 text-red-400">{countBySeverity(recs).high}</span>}
-                            {countBySeverity(recs).medium > 0 && <span className="rounded bg-yellow-500/20 px-1.5 py-0.5 text-yellow-400">{countBySeverity(recs).medium}</span>}
-                            {countBySeverity(recs).low > 0 && <span className="rounded bg-blue-500/20 px-1.5 py-0.5 text-blue-400">{countBySeverity(recs).low}</span>}
+                            {countBySeverity(recs).high > 0 && <span className="rounded bg-[var(--color-error)]/10 px-1.5 py-0.5 text-[var(--color-error)]">{countBySeverity(recs).high}</span>}
+                            {countBySeverity(recs).medium > 0 && <span className="rounded bg-[var(--color-warning)]/10 px-1.5 py-0.5 text-[var(--color-warning)]">{countBySeverity(recs).medium}</span>}
+                            {countBySeverity(recs).low > 0 && <span className="rounded bg-[var(--color-accent)]/10 px-1.5 py-0.5 text-[var(--color-accent)]">{countBySeverity(recs).low}</span>}
                           </div>
                         ) : r.error ? (
-                          <span className="text-red-400">Error</span>
+                          <span className="text-[var(--color-error)]">Error</span>
                         ) : (
                           <span className="text-[var(--color-success)]">OK</span>
                         )}
@@ -335,7 +351,7 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
                       <tr>
                         <td colSpan={6} className="border-b border-[var(--color-border)] bg-[var(--color-bg-primary)] px-6 py-4">
                           {r.error ? (
-                            <p className="text-sm text-red-400">{r.error}</p>
+                            <p className="text-sm text-[var(--color-error)]">{r.error}</p>
                           ) : (
                             <>
                               <TableSummary analysis={r} compact />
@@ -418,9 +434,9 @@ function RecommendationCards({ recommendations, grouped }: { recommendations: Re
 }
 
 function confidenceColor(c: string) {
-  if (c === "high") return "bg-green-500/20 text-green-400";
-  if (c === "medium") return "bg-yellow-500/20 text-yellow-400";
-  return "bg-gray-500/20 text-gray-400";
+  if (c === "high") return "bg-[var(--color-success)]/10 text-[var(--color-success)]";
+  if (c === "medium") return "bg-[var(--color-warning)]/10 text-[var(--color-warning)]";
+  return "bg-[var(--color-text-secondary)]/10 text-[var(--color-text-secondary)]";
 }
 
 const CONFIDENCE_TOOLTIPS: Record<string, string> = {
@@ -455,7 +471,7 @@ function RecCard({ rec }: { rec: Recommendation }) {
             </span>
             <span className="text-sm font-medium">{rec.title}</span>
             {rec.requires_recreate && (
-              <span className="flex items-center gap-1 rounded bg-orange-500/20 px-1.5 py-0.5 text-xs text-orange-400">
+              <span className="flex items-center gap-1 rounded bg-[var(--color-warning)]/10 px-1.5 py-0.5 text-xs text-[var(--color-warning)]">
                 <AlertTriangle className="h-3 w-3" /> recreate
               </span>
             )}

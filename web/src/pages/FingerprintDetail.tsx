@@ -1,13 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
-import { Fingerprint, TrendingUp, Clock, MemoryStick, HardDrive, Cpu, AlertTriangle } from "lucide-react";
+import { Fingerprint, TrendingUp, Clock, MemoryStick, HardDrive, Cpu, AlertTriangle, ChevronRight, Copy } from "lucide-react";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
 import { useTheme } from "../api/theme";
+import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { fetchFingerprintTrend, fetchFingerprintQueries } from "../api/client";
 import type { TrendPoint, FingerprintQuery } from "../api/types";
+import { CardSkeleton } from "../components/Skeleton";
 import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor } from "../utils";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -28,6 +30,7 @@ export function FingerprintDetail() {
   const location = useLocation();
   const sampleQuery = (location.state as { query?: string } | null)?.query;
   const theme = useTheme();
+  const copy = useCopyToClipboard();
   const navigate = useNavigate();
   const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [queries, setQueries] = useState<FingerprintQuery[]>([]);
@@ -37,19 +40,20 @@ export function FingerprintDetail() {
   const [error, setError] = useState("");
   const [interval, setInterval_] = useState<Interval>("hour");
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     if (!hash) return;
     setLoading(true);
     setError("");
     try {
       const [trendResult, queriesResult] = await Promise.all([
-        fetchFingerprintTrend(hash, interval),
-        fetchFingerprintQueries(hash, 50),
+        fetchFingerprintTrend(hash, interval, undefined, undefined, signal),
+        fetchFingerprintQueries(hash, 50, undefined, signal),
       ]);
       setTrend(trendResult);
       setQueries(queriesResult.queries);
       setQueriesTotal(queriesResult.total);
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Failed to load trend");
     } finally {
       setLoading(false);
@@ -69,7 +73,11 @@ export function FingerprintDetail() {
     }
   }, [hash, queries.length, loadingMore]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
   if (!hash) {
     return <div className="py-12 text-center text-[var(--color-error)]">Invalid fingerprint hash</div>;
@@ -94,15 +102,18 @@ export function FingerprintDetail() {
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Link to="/fingerprints" className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
+        <div className="flex items-center gap-2">
+          <Link to="/fingerprints" className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]">
             Fingerprints
           </Link>
-          <span className="text-[var(--color-text-secondary)]">/</span>
+          <ChevronRight className="h-3 w-3 text-[var(--color-text-secondary)]" />
           <div className="flex items-center gap-2">
             <Fingerprint className="h-5 w-5 text-[var(--color-text-secondary)]" />
             <h2 className="text-lg font-semibold">Query Fingerprint</h2>
             <span className="font-mono text-xs text-[var(--color-text-secondary)]">{hash}</span>
+            <button onClick={() => copy(hash, "Hash copied!")} className="rounded p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]" title="Copy hash">
+              <Copy className="h-3 w-3" />
+            </button>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -124,7 +135,12 @@ export function FingerprintDetail() {
 
       {sampleQuery && (
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-2">
-          <div className="mb-1 px-2 text-xs font-medium text-[var(--color-text-secondary)]">Example Query</div>
+          <div className="mb-1 flex items-center justify-between px-2">
+            <span className="text-xs font-medium text-[var(--color-text-secondary)]">Example Query</span>
+            <button onClick={() => sampleQuery && copy(sampleQuery, "Query copied!")} className="rounded p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]" title="Copy query">
+              <Copy className="h-3 w-3" />
+            </button>
+          </div>
           <CodeMirror
             value={sampleQuery}
             extensions={[sql()]}
@@ -137,11 +153,14 @@ export function FingerprintDetail() {
       )}
 
       {error && (
-        <div className="rounded-lg border border-[var(--color-error)] bg-red-900/20 px-4 py-3 text-sm text-[var(--color-error)]">{error}</div>
+        <div className="rounded-lg border border-[var(--color-error)] bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]">{error}</div>
       )}
 
       {loading && trend.length === 0 ? (
-        <div className="py-12 text-center text-[var(--color-text-secondary)]">Loading trend data...</div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <CardSkeleton />
+          <CardSkeleton />
+        </div>
       ) : trend.length === 0 ? (
         <div className="py-12 text-center text-[var(--color-text-secondary)]">
           <TrendingUp className="mx-auto mb-2 h-8 w-8 opacity-30" />
@@ -160,7 +179,7 @@ export function FingerprintDetail() {
                 <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                 <YAxis tickFormatter={fmtDuration} tick={{ fill: textColor, fontSize: 10 }} width={70} />
                 <Tooltip
-                  contentStyle={{ background: isDark ? "#1e293b" : "#fff", border: `1px solid ${gridColor}`, borderRadius: 8, fontSize: 12 }}
+                  contentStyle={{ background: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
                   labelFormatter={labelFmt(fmtBucket)}
                   formatter={tooltipFmt(fmtDuration)}
                 />
@@ -180,7 +199,7 @@ export function FingerprintDetail() {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tickFormatter={(v: number) => formatBytes(v)} tick={{ fill: textColor, fontSize: 10 }} width={70} />
                   <Tooltip
-                    contentStyle={{ background: isDark ? "#1e293b" : "#fff", border: `1px solid ${gridColor}`, borderRadius: 8, fontSize: 12 }}
+                    contentStyle={{ background: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
                     labelFormatter={labelFmt(fmtBucket)}
                     formatter={tooltipFmt(formatBytes)}
                   />
@@ -198,7 +217,7 @@ export function FingerprintDetail() {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tick={{ fill: textColor, fontSize: 10 }} width={40} />
                   <Tooltip
-                    contentStyle={{ background: isDark ? "#1e293b" : "#fff", border: `1px solid ${gridColor}`, borderRadius: 8, fontSize: 12 }}
+                    contentStyle={{ background: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
                     labelFormatter={labelFmt(fmtBucket)}
                     formatter={tooltipFmt(formatNumber)}
                   />
@@ -217,7 +236,7 @@ export function FingerprintDetail() {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tickFormatter={(v: number) => formatBytes(v)} tick={{ fill: textColor, fontSize: 10 }} width={70} />
                   <Tooltip
-                    contentStyle={{ background: isDark ? "#1e293b" : "#fff", border: `1px solid ${gridColor}`, borderRadius: 8, fontSize: 12 }}
+                    contentStyle={{ background: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
                     labelFormatter={labelFmt(fmtBucket)}
                     formatter={tooltipFmt(formatBytes)}
                   />
@@ -235,7 +254,7 @@ export function FingerprintDetail() {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tickFormatter={(v: number) => formatNumber(v)} tick={{ fill: textColor, fontSize: 10 }} width={60} />
                   <Tooltip
-                    contentStyle={{ background: isDark ? "#1e293b" : "#fff", border: `1px solid ${gridColor}`, borderRadius: 8, fontSize: 12 }}
+                    contentStyle={{ background: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
                     labelFormatter={labelFmt(fmtBucket)}
                     formatter={tooltipFmt(formatNumber)}
                   />
@@ -255,7 +274,7 @@ export function FingerprintDetail() {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tickFormatter={(v: number) => formatNumber(v)} tick={{ fill: textColor, fontSize: 10 }} width={60} />
                   <Tooltip
-                    contentStyle={{ background: isDark ? "#1e293b" : "#fff", border: `1px solid ${gridColor}`, borderRadius: 8, fontSize: 12 }}
+                    contentStyle={{ background: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
                     labelFormatter={labelFmt(fmtBucket)}
                     formatter={tooltipFmt(formatNumber)}
                   />
@@ -273,7 +292,7 @@ export function FingerprintDetail() {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tickFormatter={(v: number) => formatNumber(v)} tick={{ fill: textColor, fontSize: 10 }} width={40} />
                   <Tooltip
-                    contentStyle={{ background: isDark ? "#1e293b" : "#fff", border: `1px solid ${gridColor}`, borderRadius: 8, fontSize: 12 }}
+                    contentStyle={{ background: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
                     labelFormatter={labelFmt(fmtBucket)}
                     formatter={tooltipFmt(formatNumber)}
                   />
@@ -293,7 +312,7 @@ export function FingerprintDetail() {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tick={{ fill: textColor, fontSize: 10 }} width={40} />
                   <Tooltip
-                    contentStyle={{ background: isDark ? "#1e293b" : "#fff", border: `1px solid ${gridColor}`, borderRadius: 8, fontSize: 12 }}
+                    contentStyle={{ background: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
                     labelFormatter={labelFmt(fmtBucket)}
                     formatter={tooltipFmt(formatNumber)}
                   />

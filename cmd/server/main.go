@@ -5,7 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -33,15 +33,18 @@ func main() {
 	cfg := config.Parse()
 	cfg.Version = version
 
-	log.Printf("ClickHouse Query Analyzer %s", version)
-	log.Printf("  Port: %d", cfg.Port)
-	log.Printf("  Dev mode: %v", cfg.DevMode)
+	slog.Info("ClickLens starting",
+		"version", version,
+		"port", cfg.Port,
+		"dev", cfg.DevMode,
+		"cors_origin", cfg.CORSOrigin,
+	)
 
 	pool := clickhouse.NewPool()
 	defer pool.CloseAll()
 
 	if cfg.ClickHouseURL != "" {
-		log.Printf("  Default ClickHouse URL: %s", cfg.ClickHouseURL)
+		slog.Info("default ClickHouse URL configured", "url", cfg.ClickHouseURL)
 	}
 
 	apiHandler := api.New(pool)
@@ -56,9 +59,10 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Server listening on http://localhost:%d", cfg.Port)
+		slog.Info("server listening", "addr", fmt.Sprintf("http://localhost:%d", cfg.Port))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server error: %v", err)
+			slog.Error("server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -66,12 +70,13 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down server...")
+	slog.Info("shutting down server...")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Fatalf("Server shutdown error: %v", err)
+		slog.Error("server shutdown error", "error", err)
+		os.Exit(1)
 	}
-	log.Println("Server stopped.")
+	slog.Info("server stopped")
 }

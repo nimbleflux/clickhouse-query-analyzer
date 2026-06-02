@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import "./index.css";
 import { Layout } from "./components/Layout";
+import { ToastProvider } from "./components/Toast";
 import { QueryList } from "./pages/QueryList";
 import { QueryDetail } from "./pages/QueryDetail";
 import { QueryCompare } from "./pages/QueryCompare";
@@ -12,7 +13,7 @@ import { RunningQueries } from "./pages/RunningQueries";
 import { QueryFingerprints } from "./pages/QueryFingerprints";
 import { FingerprintDetail } from "./pages/FingerprintDetail";
 import { Dashboard } from "./pages/Dashboard";
-import { loadConnection, saveConnection, setConnectionHeaders } from "./api/connection";
+import { loadConnection, saveConnection, setConnectionHeaders, clearConnectionHeaders } from "./api/connection";
 import type { ConnectionParams } from "./api/connection";
 import { testConnection } from "./api/client";
 
@@ -45,34 +46,38 @@ function App() {
   };
 
   const handleDisconnect = () => {
+    clearConnectionHeaders();
     setConnected(false);
   };
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route
-          element={
-            <Layout
-              connection={connectionParams}
-              connected={connected}
-              onConnect={handleConnect}
-              onDisconnect={handleDisconnect}
-            />
-          }
-        >
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/queries" element={<QueryList connected={connected} />} />
-          <Route path="/editor" element={<QueryEditor />} />
-          <Route path="/query/:queryId" element={<QueryDetail />} />
-          <Route path="/compare" element={<QueryCompare />} />
-          <Route path="/optimizer" element={<TableOptimizer connected={connected} />} />
-          <Route path="/running" element={<RunningQueries />} />
-          <Route path="/fingerprints" element={<QueryFingerprints />} />
-          <Route path="/fingerprints/:hash" element={<FingerprintDetail />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <ToastProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route
+            element={
+              <Layout
+                connection={connectionParams}
+                connected={connected}
+                onConnect={handleConnect}
+                onDisconnect={handleDisconnect}
+              />
+            }
+          >
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/queries" element={<QueryList connected={connected} />} />
+            <Route path="/editor" element={<QueryEditor />} />
+            <Route path="/query/:queryId" element={<QueryDetail />} />
+            <Route path="/compare" element={<QueryCompare />} />
+            <Route path="/optimizer" element={<TableOptimizer connected={connected} />} />
+            <Route path="/optimizer/:db/:table" element={<TableOptimizer connected={connected} />} />
+            <Route path="/running" element={<RunningQueries />} />
+            <Route path="/fingerprints" element={<QueryFingerprints />} />
+            <Route path="/fingerprints/:hash" element={<FingerprintDetail />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </ToastProvider>
   );
 }
 

@@ -42,48 +42,49 @@ export async function testConnection(): Promise<{ status: string }> {
   return fetchJSON<{ status: string }>(`${BASE}/connect`, { method: "POST" });
 }
 
-export async function fetchQueries(params: QueryListParams): Promise<QueryListResponse> {
+export async function fetchQueries(params: QueryListParams, signal?: AbortSignal): Promise<QueryListResponse> {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== "") sp.set(k, String(v));
   }
-  return fetchJSON<QueryListResponse>(`${BASE}/queries?${sp}`);
+  return fetchJSON<QueryListResponse>(`${BASE}/queries?${sp}`, { signal });
 }
 
-export async function fetchQuery(queryId: string): Promise<QueryLogEntry> {
-  return fetchJSON<QueryLogEntry>(`${BASE}/queries/${encodeURIComponent(queryId)}`);
+export async function fetchQuery(queryId: string, signal?: AbortSignal): Promise<QueryLogEntry> {
+  return fetchJSON<QueryLogEntry>(`${BASE}/queries/${encodeURIComponent(queryId)}`, { signal });
 }
 
-export async function fetchQueryMetrics(queryId: string): Promise<MetricPoint[]> {
-  return fetchJSON<MetricPoint[]>(`${BASE}/queries/${encodeURIComponent(queryId)}/metrics`);
+export async function fetchQueryMetrics(queryId: string, signal?: AbortSignal): Promise<MetricPoint[]> {
+  return fetchJSON<MetricPoint[]>(`${BASE}/queries/${encodeURIComponent(queryId)}/metrics`, { signal });
 }
 
-export async function fetchQueryThreads(queryId: string): Promise<ThreadEntry[]> {
-  return fetchJSON<ThreadEntry[]>(`${BASE}/queries/${encodeURIComponent(queryId)}/threads`);
+export async function fetchQueryThreads(queryId: string, signal?: AbortSignal): Promise<ThreadEntry[]> {
+  return fetchJSON<ThreadEntry[]>(`${BASE}/queries/${encodeURIComponent(queryId)}/threads`, { signal });
 }
 
-export async function fetchTrace(queryId: string, type?: string): Promise<TraceEntry[]> {
+export async function fetchTrace(queryId: string, type?: string, signal?: AbortSignal): Promise<TraceEntry[]> {
   const sp = type ? `?type=${encodeURIComponent(type)}` : "";
-  return fetchJSON<TraceEntry[]>(`${BASE}/queries/${encodeURIComponent(queryId)}/trace${sp}`);
+  return fetchJSON<TraceEntry[]>(`${BASE}/queries/${encodeURIComponent(queryId)}/trace${sp}`, { signal });
 }
 
-export async function fetchQueryViews(queryId: string): Promise<ViewLogEntry[]> {
-  return fetchJSON<ViewLogEntry[]>(`${BASE}/queries/${encodeURIComponent(queryId)}/views`);
+export async function fetchQueryViews(queryId: string, signal?: AbortSignal): Promise<ViewLogEntry[]> {
+  return fetchJSON<ViewLogEntry[]>(`${BASE}/queries/${encodeURIComponent(queryId)}/views`, { signal });
 }
 
-export async function fetchFlameGraph(queryId: string, type?: string): Promise<FlameGraphData[]> {
+export async function fetchFlameGraph(queryId: string, type?: string, signal?: AbortSignal): Promise<FlameGraphData[]> {
   const sp = type ? `?type=${encodeURIComponent(type)}` : "";
-  return fetchJSON<FlameGraphData[]>(`${BASE}/queries/${encodeURIComponent(queryId)}/flamegraph${sp}`);
+  return fetchJSON<FlameGraphData[]>(`${BASE}/queries/${encodeURIComponent(queryId)}/flamegraph${sp}`, { signal });
 }
 
-export async function fetchComparison(idA: string, idB: string): Promise<{ a: QueryLogEntry; b: QueryLogEntry }> {
-  return fetchJSON<{ a: QueryLogEntry; b: QueryLogEntry }>(`${BASE}/compare?a=${encodeURIComponent(idA)}&b=${encodeURIComponent(idB)}`);
+export async function fetchComparison(idA: string, idB: string, signal?: AbortSignal): Promise<{ a: QueryLogEntry; b: QueryLogEntry }> {
+  return fetchJSON<{ a: QueryLogEntry; b: QueryLogEntry }>(`${BASE}/compare?a=${encodeURIComponent(idA)}&b=${encodeURIComponent(idB)}`, { signal });
 }
 
-export async function fetchExplain(queryId: string): Promise<ExplainResult> {
+export async function fetchExplain(queryId: string, signal?: AbortSignal): Promise<ExplainResult> {
   const res = await fetch(`${BASE}/queries/${encodeURIComponent(queryId)}/explain`, {
     method: "POST",
     headers: getConnectionHeaders(),
+    signal,
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
@@ -92,36 +93,44 @@ export async function fetchExplain(queryId: string): Promise<ExplainResult> {
   return res.json();
 }
 
-export async function fetchThreadSummaries(queryId: string): Promise<ThreadSummary[]> {
-  return fetchJSON<ThreadSummary[]>(`${BASE}/queries/${encodeURIComponent(queryId)}/threads/summaries`);
+export async function fetchThreadSummaries(queryId: string, signal?: AbortSignal): Promise<ThreadSummary[]> {
+  return fetchJSON<ThreadSummary[]>(`${BASE}/queries/${encodeURIComponent(queryId)}/threads/summaries`, { signal });
 }
 
-export async function fetchThreadProfile(queryId: string, threadId: number): Promise<ThreadProfile> {
-  return fetchJSON<ThreadProfile>(`${BASE}/queries/${encodeURIComponent(queryId)}/threads/${threadId}/profile`);
+export async function fetchThreadProfile(queryId: string, threadId: number, signal?: AbortSignal): Promise<ThreadProfile> {
+  return fetchJSON<ThreadProfile>(`${BASE}/queries/${encodeURIComponent(queryId)}/threads/${threadId}/profile`, { signal });
 }
 
-export async function executeQuery(query: string, maxRows = 1000, settings?: Record<string, string>): Promise<QueryResult> {
+export async function executeQuery(query: string, maxRows = 1000, settings?: Record<string, string>, readonly = false, signal?: AbortSignal): Promise<QueryResult> {
+  const headers: Record<string, string> = {
+    ...getConnectionHeaders(),
+    "Content-Type": "application/json",
+  };
+  if (readonly) {
+    headers["X-CH-Readonly"] = "1";
+  }
   return fetchJSON<QueryResult>(`${BASE}/execute`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ query, max_rows: maxRows, settings }),
+    signal,
   });
 }
 
-export async function fetchDatabases(): Promise<{ databases: string[] }> {
-  return fetchJSON<{ databases: string[] }>(`${BASE}/schema`);
+export async function fetchDatabases(signal?: AbortSignal): Promise<{ databases: string[] }> {
+  return fetchJSON<{ databases: string[] }>(`${BASE}/schema`, { signal });
 }
 
-export async function fetchTables(db: string): Promise<{ tables: { name: string; engine: string; row_count: number }[] }> {
-  return fetchJSON(`${BASE}/schema/${encodeURIComponent(db)}/tables`);
+export async function fetchTables(db: string, signal?: AbortSignal): Promise<{ tables: { name: string; engine: string; row_count: number }[] }> {
+  return fetchJSON(`${BASE}/schema/${encodeURIComponent(db)}/tables`, { signal });
 }
 
-export async function fetchColumns(db: string, table: string): Promise<{ columns: { name: string; type: string }[] }> {
-  return fetchJSON(`${BASE}/schema/${encodeURIComponent(db)}/${encodeURIComponent(table)}/columns`);
+export async function fetchColumns(db: string, table: string, signal?: AbortSignal): Promise<{ columns: { name: string; type: string }[] }> {
+  return fetchJSON(`${BASE}/schema/${encodeURIComponent(db)}/${encodeURIComponent(table)}/columns`, { signal });
 }
 
-export async function fetchTableAnalysis(db: string, table: string): Promise<TableAnalysis> {
-  return fetchJSON<TableAnalysis>(`${BASE}/optimizer/${encodeURIComponent(db)}/${encodeURIComponent(table)}`);
+export async function fetchTableAnalysis(db: string, table: string, signal?: AbortSignal): Promise<TableAnalysis> {
+  return fetchJSON<TableAnalysis>(`${BASE}/optimizer/${encodeURIComponent(db)}/${encodeURIComponent(table)}`, { signal });
 }
 
 export function streamBulkAnalysis(
@@ -186,39 +195,39 @@ export function streamBulkAnalysis(
   return ctrl;
 }
 
-export async function fetchProcesses(): Promise<ProcessEntry[]> {
-  return fetchJSON<ProcessEntry[]>(`${BASE}/processes`);
+export async function fetchProcesses(signal?: AbortSignal): Promise<ProcessEntry[]> {
+  return fetchJSON<ProcessEntry[]>(`${BASE}/processes`, { signal });
 }
 
-export async function killProcess(queryId: string): Promise<{ status: string }> {
-  return fetchJSON<{ status: string }>(`${BASE}/processes/${encodeURIComponent(queryId)}/kill`, { method: "POST" });
+export async function killProcess(queryId: string, signal?: AbortSignal): Promise<{ status: string }> {
+  return fetchJSON<{ status: string }>(`${BASE}/processes/${encodeURIComponent(queryId)}/kill`, { method: "POST", signal });
 }
 
-export async function fetchFingerprints(params: Partial<QueryListParams>): Promise<FingerprintListResponse> {
+export async function fetchFingerprints(params: Partial<QueryListParams>, signal?: AbortSignal): Promise<FingerprintListResponse> {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== "") sp.set(k, String(v));
   }
-  return fetchJSON<FingerprintListResponse>(`${BASE}/queries/fingerprints?${sp}`);
+  return fetchJSON<FingerprintListResponse>(`${BASE}/queries/fingerprints?${sp}`, { signal });
 }
 
-export async function fetchDashboard(): Promise<DashboardData> {
-  return fetchJSON<DashboardData>(`${BASE}/dashboard`);
+export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardData> {
+  return fetchJSON<DashboardData>(`${BASE}/dashboard`, { signal });
 }
 
-export async function fetchFingerprintTrend(hash: string, interval?: string, fromTime?: string, toTime?: string): Promise<TrendPoint[]> {
+export async function fetchFingerprintTrend(hash: string, interval?: string, fromTime?: string, toTime?: string, signal?: AbortSignal): Promise<TrendPoint[]> {
   const sp = new URLSearchParams();
   if (interval) sp.set("interval", interval);
   if (fromTime) sp.set("from_time", fromTime);
   if (toTime) sp.set("to_time", toTime);
   const qs = sp.toString();
-  return fetchJSON<TrendPoint[]>(`${BASE}/queries/fingerprints/${hash}/trend${qs ? `?${qs}` : ""}`);
+  return fetchJSON<TrendPoint[]>(`${BASE}/queries/fingerprints/${hash}/trend${qs ? `?${qs}` : ""}`, { signal });
 }
 
-export async function fetchFingerprintQueries(hash: string, limit?: number, offset?: number): Promise<FingerprintQueriesResponse> {
+export async function fetchFingerprintQueries(hash: string, limit?: number, offset?: number, signal?: AbortSignal): Promise<FingerprintQueriesResponse> {
   const sp = new URLSearchParams();
   if (limit) sp.set("limit", String(limit));
   if (offset) sp.set("offset", String(offset));
   const qs = sp.toString();
-  return fetchJSON<FingerprintQueriesResponse>(`${BASE}/queries/fingerprints/${hash}/queries${qs ? `?${qs}` : ""}`);
+  return fetchJSON<FingerprintQueriesResponse>(`${BASE}/queries/fingerprints/${hash}/queries${qs ? `?${qs}` : ""}`, { signal });
 }

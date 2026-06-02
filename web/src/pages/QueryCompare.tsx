@@ -17,15 +17,16 @@ export function QueryCompare() {
   const [queryA, setQueryA] = useState<QueryLogEntry | null>(null);
   const [queryB, setQueryB] = useState<QueryLogEntry | null>(null);
 
-  const handleCompare = async (a: string, b: string) => {
+  const handleCompare = async (a: string, b: string, signal?: AbortSignal) => {
     if (!a || !b) return;
     setLoading(true);
     setError("");
     try {
-      const data = await fetchComparison(a, b);
+      const data = await fetchComparison(a, b, signal);
       setQueryA(data.a);
       setQueryB(data.b);
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Failed to load comparison");
     } finally {
       setLoading(false);
@@ -36,7 +37,9 @@ export function QueryCompare() {
     if (urlA && urlB) {
       setIdA(urlA);
       setIdB(urlB);
-      handleCompare(urlA, urlB);
+      const controller = new AbortController();
+      handleCompare(urlA, urlB, controller.signal);
+      return () => controller.abort();
     }
   }, [urlA, urlB]);
 
@@ -53,7 +56,10 @@ export function QueryCompare() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-      <h1 className="mb-6 text-2xl font-bold">Compare Queries</h1>
+      <div className="mb-6 flex items-center gap-3">
+        <GitCompare className="h-5 w-5 text-[var(--color-text-secondary)]" />
+        <h1 className="text-2xl font-bold">Compare Queries</h1>
+      </div>
 
       <div className="mb-6 flex items-end gap-3">
         <div className="flex-1">
@@ -87,7 +93,7 @@ export function QueryCompare() {
       </div>
 
       {error && (
-        <div className="mb-4 rounded-lg border border-[var(--color-error)] bg-red-900/20 px-4 py-3 text-sm text-[var(--color-error)]">
+        <div className="mb-4 rounded-lg border border-[var(--color-error)] bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]">
           {error}
         </div>
       )}

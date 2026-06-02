@@ -29,13 +29,14 @@ func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := clickhouse.QueryListParams{
-		FromTime:  r.URL.Query().Get("from_time"),
-		ToTime:    r.URL.Query().Get("to_time"),
-		User:      r.URL.Query().Get("user"),
-		QueryKind: r.URL.Query().Get("query_kind"),
-		Search:    r.URL.Query().Get("search"),
-		SortBy:    r.URL.Query().Get("sort_by"),
-		SortDir:   strings.ToUpper(r.URL.Query().Get("sort_dir")),
+		FromTime:          r.URL.Query().Get("from_time"),
+		ToTime:            r.URL.Query().Get("to_time"),
+		User:              r.URL.Query().Get("user"),
+		QueryKind:         r.URL.Query().Get("query_kind"),
+		Search:            r.URL.Query().Get("search"),
+		SortBy:            r.URL.Query().Get("sort_by"),
+		SortDir:           strings.ToUpper(r.URL.Query().Get("sort_dir")),
+		HideSystemQueries: r.URL.Query().Get("hide_system_queries") != "false",
 	}
 
 	if v := r.URL.Query().Get("min_duration"); v != "" {
@@ -349,6 +350,9 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "query is required")
 		return
 	}
+	if isReadonly(r) && rejectWriteQuery(w, req.Query) {
+		return
+	}
 	if req.MaxRows <= 0 {
 		req.MaxRows = 1000
 	}
@@ -461,12 +465,13 @@ func (a *API) ListFingerprints(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := clickhouse.QueryListParams{
-		FromTime: r.URL.Query().Get("from_time"),
-		ToTime:   r.URL.Query().Get("to_time"),
-		User:     r.URL.Query().Get("user"),
-		Search:   r.URL.Query().Get("search"),
-		SortBy:   r.URL.Query().Get("sort_by"),
-		SortDir:  strings.ToUpper(r.URL.Query().Get("sort_dir")),
+		FromTime:          r.URL.Query().Get("from_time"),
+		ToTime:            r.URL.Query().Get("to_time"),
+		User:              r.URL.Query().Get("user"),
+		Search:            r.URL.Query().Get("search"),
+		SortBy:            r.URL.Query().Get("sort_by"),
+		SortDir:           strings.ToUpper(r.URL.Query().Get("sort_dir")),
+		HideSystemQueries: r.URL.Query().Get("hide_system_queries") != "false",
 	}
 
 	if v := r.URL.Query().Get("limit"); v != "" {

@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -12,17 +14,27 @@ import (
 
 	ch "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/nimbleflux/clickhouse-query-analyzer/internal/metrics"
+)
+
+const (
+	maxPoolSize    = 50
+	connMaxAge     = 1 * time.Hour
+	healthCheckInt = 30 * time.Second
 )
 
 type Client struct {
-	conn      driver.Conn
-	connURL   string
-	connUser  string
-	connPass  string
-	skipTLS   bool
-	isHTTP    bool
-	isCluster bool
-	cluster   string
+	conn       driver.Conn
+	httpClient *http.Client
+	connURL    string
+	connUser   string
+	connPass   string
+	skipTLS    bool
+	isHTTP     bool
+	isCluster  bool
+	cluster    string
+	createdAt  time.Time
+	lastUsedAt time.Time
 }
 
 type ConnParams struct {
@@ -31,6 +43,7 @@ type ConnParams struct {
 	Password string
 	Database string
 	SkipTLS  bool
+	Readonly bool
 }
 
 func (p ConnParams) key() string {
@@ -41,10 +54,22 @@ func (p ConnParams) key() string {
 type Pool struct {
 	mu      sync.RWMutex
 	clients map[string]*Client
+	dials   map[string]*sync.Mutex
+	done    chan struct{}
 }
 
 func NewPool() *Pool {
-	return &Pool{clients: make(map[string]*Client)}
+	p := &Pool{
+		clients: make(map[string]*Client),
+		dials:   make(map[string]*sync.Mutex),
+		done:    make(chan struct{}),
+	}
+	go p.healthLoop()
+	return p
+}
+
+func (p *Pool) updatePoolGauge() {
+	metrics.PoolConnections.Set(float64(len(p.clients)))
 }
 
 func (p *Pool) Get(ctx context.Context, params ConnParams) (*Client, error) {
@@ -55,10 +80,61 @@ func (p *Pool) Get(ctx context.Context, params ConnParams) (*Client, error) {
 	p.mu.RUnlock()
 
 	if ok {
-		return c, nil
+		if time.Since(c.createdAt) < connMaxAge {
+			c.lastUsedAt = time.Now()
+			return c, nil
+		}
+		p.evict(key, c)
 	}
 
 	return p.connect(ctx, params, key)
+}
+
+func (p *Pool) healthLoop() {
+	ticker := time.NewTicker(healthCheckInt)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			p.checkHealth()
+		case <-p.done:
+			return
+		}
+	}
+}
+
+func (p *Pool) checkHealth() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for key, c := range p.clients {
+		if time.Since(c.createdAt) >= connMaxAge {
+			slog.Info("evicting expired connection", "key", key)
+			p.evictLocked(key, c)
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := c.conn.Ping(ctx); err != nil {
+			slog.Warn("evicting unhealthy connection", "key", key, "error", err)
+			p.evictLocked(key, c)
+		}
+		cancel()
+	}
+}
+
+func (p *Pool) evict(key string, c *Client) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.evictLocked(key, c)
+}
+
+func (p *Pool) evictLocked(key string, c *Client) {
+	if existing, ok := p.clients[key]; ok && existing == c {
+		delete(p.clients, key)
+		c.conn.Close()
+		metrics.PoolEvictions.Inc()
+		p.updatePoolGauge()
+	}
 }
 
 func isHTTPScheme(scheme string) bool {
@@ -73,7 +149,33 @@ func isTLSScheme(scheme string) bool {
 	return scheme == "https" || scheme == "clickhouses" || strings.HasSuffix(scheme, "s")
 }
 
+func (p *Pool) getDialMutex(key string) *sync.Mutex {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if m, ok := p.dials[key]; ok {
+		return m
+	}
+	m := &sync.Mutex{}
+	p.dials[key] = m
+	return m
+}
+
 func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Client, error) {
+	dialMu := p.getDialMutex(key)
+	dialMu.Lock()
+	defer dialMu.Unlock()
+
+	p.mu.RLock()
+	c, ok := p.clients[key]
+	p.mu.RUnlock()
+	if ok {
+		if time.Since(c.createdAt) < connMaxAge {
+			c.lastUsedAt = time.Now()
+			return c, nil
+		}
+		p.evict(key, c)
+	}
+
 	parsedURL, err := url.Parse(params.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parsing clickhouse URL: %w", err)
@@ -128,30 +230,66 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 	}
 
 	if err := conn.Ping(ctx); err != nil {
+		conn.Close()
 		return nil, fmt.Errorf("pinging clickhouse: %w", err)
 	}
 
 	isCluster, cluster := detectCluster(ctx, conn)
 
-	c := &Client{
-		conn:      conn,
-		connURL:   params.URL,
-		connUser:  params.User,
-		connPass:  params.Password,
-		skipTLS:   params.SkipTLS,
-		isHTTP:    isHTTPScheme(scheme),
-		isCluster: isCluster,
-		cluster:   cluster,
+	var httpCl *http.Client
+	if params.SkipTLS {
+		httpCl = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		}
+	} else {
+		httpCl = &http.Client{}
+	}
+
+	c = &Client{
+		conn:       conn,
+		httpClient: httpCl,
+		connURL:    params.URL,
+		connUser:   params.User,
+		connPass:   params.Password,
+		skipTLS:    params.SkipTLS,
+		isHTTP:     isHTTPScheme(scheme),
+		isCluster:  isCluster,
+		cluster:    cluster,
+		createdAt:  time.Now(),
+		lastUsedAt: time.Now(),
 	}
 
 	p.mu.Lock()
+	if len(p.clients) >= maxPoolSize {
+		var oldestKey string
+		var oldestTime time.Time
+		for k, v := range p.clients {
+			if oldestKey == "" || v.lastUsedAt.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = v.lastUsedAt
+			}
+		}
+		if oldestKey != "" {
+			slog.Info("evicting oldest connection to make room", "key", oldestKey)
+			if old, ok := p.clients[oldestKey]; ok {
+				old.conn.Close()
+				delete(p.clients, oldestKey)
+				metrics.PoolEvictions.Inc()
+			}
+		}
+	}
 	p.clients[key] = c
 	p.mu.Unlock()
+	p.updatePoolGauge()
 
+	slog.Info("connected to clickhouse", "key", key, "cluster", isCluster)
 	return c, nil
 }
 
 func (p *Pool) CloseAll() {
+	close(p.done)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, c := range p.clients {
@@ -174,6 +312,10 @@ func (c *Client) IsCluster() bool {
 
 func (c *Client) Cluster() string {
 	return c.cluster
+}
+
+func (c *Client) TableRef(table string) string {
+	return c.tableRef(table)
 }
 
 func (c *Client) tableRef(table string) string {

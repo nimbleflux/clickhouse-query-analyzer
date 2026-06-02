@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { Gauge, Database, HardDrive, Activity, RefreshCw, Server, AlertTriangle, Layers } from "lucide-react";
 import { fetchDashboard } from "../api/client";
 import type { DashboardData } from "../api/types";
 import { formatBytes, formatNumber } from "../utils";
+import { CardSkeleton } from "../components/Skeleton";
 
 function Card({ title, icon, scrollable, children }: { title: string; icon: React.ReactNode; scrollable?: boolean; children: React.ReactNode }) {
   return (
@@ -42,35 +44,62 @@ function formatEventValue(name: string, value: number): string {
 }
 
 export function Dashboard() {
+  const navigate = useNavigate();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(30);
+  const intervalRef = useRef<ReturnType<typeof setInterval>>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError("");
     try {
-      const result = await fetchDashboard();
+      const result = await fetchDashboard(signal);
       setData(result);
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Failed to load dashboard");
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
+
+  useEffect(() => {
+    if (autoRefresh) {
+      const controller = new AbortController();
+      intervalRef.current = setInterval(() => load(controller.signal), refreshInterval * 1000);
+      return () => { if (intervalRef.current) clearInterval(intervalRef.current); controller.abort(); };
+    }
+    return () => {};
+  }, [autoRefresh, refreshInterval, load]);
 
   if (error) {
     return (
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        <div className="rounded-lg border border-[var(--color-error)] bg-red-900/20 px-4 py-3 text-sm text-[var(--color-error)]">{error}</div>
+        <div className="rounded-lg border border-[var(--color-error)] bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]">{error}</div>
       </div>
     );
   }
 
   if (loading && !data) {
-    return <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 py-12 text-center text-[var(--color-text-secondary)]">Loading dashboard...</div>;
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <CardSkeleton />
+          <CardSkeleton />
+          <CardSkeleton />
+          <CardSkeleton />
+        </div>
+      </div>
+    );
   }
 
   if (!data) return null;
@@ -90,14 +119,37 @@ export function Dashboard() {
             <h2 className="text-lg font-semibold">System Dashboard</h2>
             {(data.nodes?.length ?? 0) > 0 && <span className="text-xs text-[var(--color-text-secondary)]">v{data.nodes[0].version}</span>}
           </div>
-          <button
-            onClick={load}
-            disabled={loading}
-            className="flex items-center gap-1.5 rounded border border-[var(--color-border)] px-3 py-1.5 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <select
+              value={refreshInterval}
+              onChange={(e) => setRefreshInterval(Number(e.target.value))}
+              className={`rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2 py-1.5 text-xs text-[var(--color-text-secondary)] outline-none ${!autoRefresh ? "opacity-50" : ""}`}
+              disabled={!autoRefresh}
+            >
+              <option value={10}>10s</option>
+              <option value={30}>30s</option>
+              <option value={60}>60s</option>
+            </select>
+            <button
+              onClick={() => setAutoRefresh(!autoRefresh)}
+              className={`flex items-center gap-1.5 rounded border px-3 py-1.5 text-xs transition-colors ${
+                autoRefresh
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]"
+                  : "border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+              }`}
+            >
+              <RefreshCw className={`h-3 w-3 ${autoRefresh ? "animate-spin" : ""}`} style={autoRefresh ? { animationDuration: `${refreshInterval}s` } : undefined} />
+              Live
+            </button>
+            <button
+              onClick={() => load()}
+              disabled={loading}
+              className="flex items-center gap-1.5 rounded border border-[var(--color-border)] px-3 py-1.5 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Refresh
+            </button>
+          </div>
         </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -136,7 +188,7 @@ export function Dashboard() {
       </div>
 
       {replicationQueue > 0 && (
-        <div className="flex items-center gap-2 rounded-lg border border-yellow-800 bg-yellow-900/20 px-4 py-2 text-sm text-yellow-400">
+        <div className="flex items-center gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 px-4 py-2 text-sm text-[var(--color-warning)]">
           <AlertTriangle className="h-4 w-4" />
           Replication queue: {replicationQueue} pending
           {replicationLag > 0 && <span className="ml-2">(max delay: {formatUptime(replicationLag)})</span>}
@@ -158,8 +210,13 @@ export function Dashboard() {
             </thead>
             <tbody>
               {data.database_sizes.map((d) => (
-                <tr key={d.database} className="border-b border-[var(--color-border)] last:border-0">
-                  <td className="py-1.5 text-xs">{d.database}</td>
+                <tr
+                  key={d.database}
+                  className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-bg-tertiary)]"
+                  onClick={() => navigate(`/optimizer?db=${encodeURIComponent(d.database)}`)}
+                  title={`Analyze tables in ${d.database}`}
+                >
+                  <td className="py-1.5 text-xs text-[var(--color-accent)]">{d.database}</td>
                   <td className="py-1.5 text-right font-mono text-xs text-[var(--color-text-secondary)]">{d.tables}</td>
                   <td className="py-1.5 text-right font-mono text-xs text-[var(--color-text-secondary)]">{formatNumber(d.rows)}</td>
                   <td className="py-1.5 text-right font-mono text-xs">{formatBytes(d.compressed_bytes)}</td>
@@ -184,9 +241,14 @@ export function Dashboard() {
             </thead>
             <tbody>
               {data.top_tables_by_size.map((t) => (
-                <tr key={`${t.database}.${t.table}`} className="border-b border-[var(--color-border)] last:border-0">
+                <tr
+                  key={`${t.database}.${t.table}`}
+                  className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-bg-tertiary)]"
+                  onClick={() => navigate(`/optimizer/${encodeURIComponent(t.database)}/${encodeURIComponent(t.table)}`)}
+                  title={`Analyze ${t.database}.${t.table}`}
+                >
                   <td className="py-1.5 text-xs">
-                    <span className="text-[var(--color-text-secondary)]">{t.database}.</span>{t.table}
+                    <span className="text-[var(--color-text-secondary)]">{t.database}.</span><span className="text-[var(--color-accent)]">{t.table}</span>
                   </td>
                   <td className="py-1.5 text-right font-mono text-xs text-[var(--color-text-secondary)]">{formatNumber(t.parts)}</td>
                   <td className="py-1.5 text-right font-mono text-xs">{formatBytes(t.compressed_bytes)}</td>
@@ -213,9 +275,14 @@ export function Dashboard() {
             </thead>
             <tbody>
               {data.top_tables_by_parts.map((t) => (
-                <tr key={`${t.database}.${t.table}`} className="border-b border-[var(--color-border)] last:border-0">
+                <tr
+                  key={`${t.database}.${t.table}`}
+                  className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-bg-tertiary)]"
+                  onClick={() => navigate(`/optimizer/${encodeURIComponent(t.database)}/${encodeURIComponent(t.table)}`)}
+                  title={`Analyze ${t.database}.${t.table}`}
+                >
                   <td className="py-1.5 text-xs">
-                    <span className="text-[var(--color-text-secondary)]">{t.database}.</span>{t.table}
+                    <span className="text-[var(--color-text-secondary)]">{t.database}.</span><span className="text-[var(--color-accent)]">{t.table}</span>
                   </td>
                   <td className={`py-1.5 text-right font-mono text-xs ${t.parts > 100 ? "text-[var(--color-warning)]" : ""}`}>{formatNumber(t.parts)}</td>
                   <td className="py-1.5 text-right font-mono text-xs text-[var(--color-text-secondary)]">{formatNumber(t.rows)}</td>

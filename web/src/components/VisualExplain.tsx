@@ -62,8 +62,12 @@ function PlanTreeNode({ node, defaultExpanded = true }: { node: PlanNode; defaul
   return (
     <div className="font-mono text-xs">
       <div
+        role="button"
+        tabIndex={hasChildren ? 0 : undefined}
+        aria-expanded={hasChildren ? expanded : undefined}
         className={`flex items-start gap-1 rounded px-2 py-1 hover:bg-[var(--color-bg-primary)] ${hasChildren ? "cursor-pointer" : ""}`}
         onClick={hasChildren ? toggle : undefined}
+        onKeyDown={hasChildren ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } } : undefined}
       >
         <span className="mt-0.5 w-3.5 shrink-0 text-center">
           {hasChildren ? (

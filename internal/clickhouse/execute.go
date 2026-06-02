@@ -3,7 +3,6 @@ package clickhouse
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -58,7 +57,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, query string, maxRows int, se
 	}
 	req.Header.Set("Content-Type", "text/plain")
 
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("executing query: %w", err)
 	}
@@ -182,15 +181,8 @@ func nativeToHTTPPort(nativePort string) string {
 	}
 }
 
-func (c *Client) httpClient() *http.Client {
-	if c.skipTLS {
-		return &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-		}
-	}
-	return http.DefaultClient
+func (c *Client) getHTTPClient() *http.Client {
+	return c.httpClient
 }
 
 func (c *Client) httpURL() (string, error) {

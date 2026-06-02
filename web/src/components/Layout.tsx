@@ -1,10 +1,20 @@
 import React, { useState, useEffect } from "react";
-import { Link, Outlet } from "react-router-dom";
-import { Plug, Unplug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge } from "lucide-react";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { Plug, Unplug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge, Menu, X } from "lucide-react";
 import type { ConnectionParams } from "../api/connection";
 import { setConnectionHeaders } from "../api/connection";
 import { testConnection } from "../api/client";
 import { ThemeContext } from "../api/theme";
+
+const NAV_ITEMS = [
+  { to: "/", icon: Gauge, label: "Dashboard", end: true },
+  { to: "/queries", icon: List, label: "Queries", end: false },
+  { to: "/running", icon: Activity, label: "Running", end: false },
+  { to: "/fingerprints", icon: Fingerprint, label: "Fingerprints", end: false },
+  { to: "/editor", icon: Code, label: "Editor", end: false },
+  { to: "/compare", icon: GitCompare, label: "Compare", end: false },
+  { to: "/optimizer", icon: Wrench, label: "Optimizer", end: false },
+];
 
 export function Layout({
   connection,
@@ -21,6 +31,12 @@ export function Layout({
   const [params, setParams] = useState<ConnectionParams>(connection);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState("");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const location = useLocation();
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     try { return (localStorage.getItem("ch-theme") as "dark" | "light") || "dark"; } catch { return "dark"; }
   });
@@ -37,6 +53,18 @@ export function Layout({
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        const searchInput = document.querySelector<HTMLInputElement>("[data-search-input]");
+        searchInput?.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   const handleConnect = async () => {
     setTesting(true);
@@ -58,82 +86,105 @@ export function Layout({
   };
 
   return (
-    <div className="min-h-screen bg-[var(--color-bg-primary)]">
-      <nav className="border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
+    <div className="h-screen flex flex-col bg-[var(--color-bg-primary)]">
+      <nav className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-14 items-center justify-between">
-              <Link to="/" className="flex items-center gap-2 text-[var(--color-text-primary)] no-underline">
+            <div className="flex items-center gap-4">
+              <button
+                aria-expanded={mobileMenuOpen}
+                aria-label="Toggle navigation menu"
+                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                className="md:hidden rounded p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+              >
+                {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+              </button>
+              <NavLink to="/" className="flex items-center gap-2 text-[var(--color-text-primary)] no-underline">
                 <svg className="h-7 w-7 text-[var(--color-accent)]" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M16 3L3 15v13h26V15L16 3z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
-                  <rect x="9.5" y="20" width="3.5" height="6" rx="1" fill="currentColor"/>
-                  <rect x="14.25" y="16" width="3.5" height="10" rx="1" fill="currentColor"/>
-                  <rect x="19" y="18" width="3.5" height="8" rx="1" fill="currentColor"/>
+                  <circle cx="13.5" cy="13.5" r="9.5" stroke="currentColor" strokeWidth="2.5"/>
+                  <line x1="20.5" y1="20.5" x2="28.5" y2="28.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/>
+                  <rect x="8.5" y="11" width="2.5" height="5" rx="0.75" fill="currentColor"/>
+                  <rect x="12.25" y="8.5" width="2.5" height="7.5" rx="0.75" fill="currentColor"/>
+                  <rect x="16" y="10" width="2.5" height="6" rx="0.75" fill="currentColor"/>
                 </svg>
-                <span className="text-lg font-semibold">ClickHouse Query Analyzer</span>
-              </Link>
-            <div className="flex items-center gap-4 text-sm">
-              {connected && (
-                <>
-                  <Link to="/" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
-                    <Gauge className="h-3.5 w-3.5" />
-                    Dashboard
-                  </Link>
-                  <Link to="/queries" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
-                    <List className="h-3.5 w-3.5" />
-                    Queries
-                  </Link>
-                  <Link to="/running" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
-                    <Activity className="h-3.5 w-3.5" />
-                    Running
-                  </Link>
-                  <Link to="/fingerprints" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
-                    <Fingerprint className="h-3.5 w-3.5" />
-                    Fingerprints
-                  </Link>
-                  <Link to="/editor" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
-                    <Code className="h-3.5 w-3.5" />
-                    Editor
-                  </Link>
-                  <Link to="/compare" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
-                    <GitCompare className="h-3.5 w-3.5" />
-                    Compare
-                  </Link>
-                  <Link to="/optimizer" className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
-                    <Wrench className="h-3.5 w-3.5" />
-                    Optimizer
-                  </Link>
-                </>
-              )}
-              {connected && !editing && (
-                <>
-                  <button
-                    onClick={toggleTheme}
-                    className="rounded p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                    title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-                  >
-                    {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                  </button>
-                  <button
-                    onClick={() => { onDisconnect(); setEditing(true); }}
-                    className="flex items-center gap-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                  >
-                    <Unplug className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">{params.user}@{params.url.replace(/^[a-z]+:\/\//, "")}</span>
-                  </button>
-                </>
-              )}
-              {!connected || editing ? (
-                <button
-                  onClick={toggleTheme}
-                  className="rounded p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                  title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+                <span className="text-lg font-semibold">ClickLens</span>
+              </NavLink>
+            </div>
+
+            <div className="hidden items-center gap-4 text-sm md:flex">
+              {NAV_ITEMS.map(({ to, icon: Icon, label, end }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={end}
+                  className={({ isActive }) =>
+                    `flex items-center gap-1 no-underline ${
+                      isActive
+                        ? "text-[var(--color-accent)]"
+                        : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                    }`
+                  }
                 >
-                  {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </NavLink>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 text-sm">
+              <button
+                onClick={toggleTheme}
+                className="rounded p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              >
+                {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+              {connected && !editing && (
+                <button
+                  onClick={() => { onDisconnect(); setEditing(true); }}
+                  className="flex items-center gap-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                >
+                  <Unplug className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{params.user}@{params.url.replace(/^[a-z]+:\/\//, "")}</span>
                 </button>
-              ) : null}
+              )}
+              {!connected && !editing && (
+                <button
+                  onClick={() => setEditing(true)}
+                  className="flex items-center gap-1.5 rounded bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--color-accent-hover)]"
+                >
+                  <Plug className="h-3 w-3" />
+                  Connect
+                </button>
+              )}
             </div>
           </div>
         </div>
+
+        {mobileMenuOpen && (
+          <div className="border-t border-[var(--color-border)] md:hidden">
+            <div className="flex flex-col gap-1 px-4 py-2">
+              {NAV_ITEMS.map(({ to, icon: Icon, label, end }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={end}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={({ isActive }) =>
+                    `flex items-center gap-2 rounded px-3 py-2 no-underline text-sm ${
+                      isActive
+                        ? "bg-[var(--color-bg-tertiary)] text-[var(--color-accent)]"
+                        : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                    }`
+                  }
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                </NavLink>
+              ))}
+            </div>
+          </div>
+        )}
       </nav>
 
       {editing && (
@@ -200,7 +251,7 @@ export function Layout({
         </div>
       )}
 
-      <main>
+      <main className="flex-1 min-h-0 overflow-auto">
         <ThemeContext.Provider value={theme}>
           <Outlet />
         </ThemeContext.Provider>

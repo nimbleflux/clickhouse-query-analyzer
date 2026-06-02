@@ -398,6 +398,9 @@ func (c *Client) gatherExistingIndices(ctx context.Context, a *TableAnalysis) er
 }
 
 func (c *Client) sampleColumns(ctx context.Context, a *TableAnalysis) error {
+	if !isMergeTreeEngine(a.Engine) || a.Database == "system" {
+		return nil
+	}
 	sampleClause := sampleClause(a.TotalRows)
 	fqn := fmt.Sprintf("%s.%s", quoteID(a.Database), quoteID(a.Table))
 
@@ -879,6 +882,19 @@ func (c *Client) recommendTableHealth(a *TableAnalysis, cc confidenceCtx) []Reco
 	}
 
 	return recs
+}
+
+func isMergeTreeEngine(engine string) bool {
+	switch engine {
+	case "MergeTree", "ReplacingMergeTree", "SummingMergeTree",
+		"AggregatingMergeTree", "CollapsingMergeTree",
+		"VersionedCollapsingMergeTree", "GraphiteMergeTree",
+		"ReplicatedMergeTree", "ReplicatedReplacingMergeTree",
+		"ReplicatedSummingMergeTree", "ReplicatedAggregatingMergeTree",
+		"ReplicatedCollapsingMergeTree", "ReplicatedVersionedCollapsingMergeTree":
+		return true
+	}
+	return false
 }
 
 func sampleClause(totalRows uint64) string {

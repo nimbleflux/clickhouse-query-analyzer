@@ -4,6 +4,7 @@ export interface ConnectionParams {
   password: string;
   database: string;
   skip_tls: boolean;
+  readonly: boolean;
 }
 
 const STORAGE_KEY = "ch-query-analyzer-connection";
@@ -14,12 +15,16 @@ export const DEFAULT_CONNECTION: ConnectionParams = {
   password: "",
   database: "system",
   skip_tls: false,
+  readonly: false,
 };
 
 export function loadConnection(): ConnectionParams {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return { ...DEFAULT_CONNECTION, ...parsed };
+    }
   } catch {}
   return { ...DEFAULT_CONNECTION };
 }
@@ -32,7 +37,7 @@ function initHeaders(): Record<string, string> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const p = JSON.parse(raw) as ConnectionParams;
+      const p = { ...DEFAULT_CONNECTION, ...JSON.parse(raw) } as ConnectionParams;
       return {
         "X-CH-URL": p.url || "",
         "X-CH-User": p.user || "",
@@ -60,4 +65,8 @@ export function setConnectionHeaders(params: ConnectionParams): void {
 
 export function getConnectionHeaders(): Record<string, string> {
   return currentHeaders;
+}
+
+export function clearConnectionHeaders(): void {
+  currentHeaders = {};
 }

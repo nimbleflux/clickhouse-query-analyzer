@@ -1,4 +1,4 @@
-# ClickHouse Query Analyzer
+# ClickLens
 
 A single-binary tool with a built-in web UI to analyze ClickHouse query executions. Connect to any ClickHouse instance, explore query logs, drill into CPU/memory/IO usage per thread, view flame graphs, compare queries side by side, and run ad-hoc SQL.
 

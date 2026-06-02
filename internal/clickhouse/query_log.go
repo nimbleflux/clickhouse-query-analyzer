@@ -41,18 +41,19 @@ type QueryLogEntry struct {
 }
 
 type QueryListParams struct {
-	FromTime     string `json:"from_time"`
-	ToTime       string `json:"to_time"`
-	User         string `json:"user"`
-	QueryKind    string `json:"query_kind"`
-	MinDuration  uint64 `json:"min_duration"`
-	MinMemory    uint64 `json:"min_memory"`
-	MinReadBytes uint64 `json:"min_read_bytes"`
-	Search       string `json:"search"`
-	SortBy       string `json:"sort_by"`
-	SortDir      string `json:"sort_dir"`
-	Limit        int    `json:"limit"`
-	Offset       int    `json:"offset"`
+	FromTime          string `json:"from_time"`
+	ToTime            string `json:"to_time"`
+	User              string `json:"user"`
+	QueryKind         string `json:"query_kind"`
+	MinDuration       uint64 `json:"min_duration"`
+	MinMemory         uint64 `json:"min_memory"`
+	MinReadBytes      uint64 `json:"min_read_bytes"`
+	Search            string `json:"search"`
+	SortBy            string `json:"sort_by"`
+	SortDir           string `json:"sort_dir"`
+	Limit             int    `json:"limit"`
+	Offset            int    `json:"offset"`
+	HideSystemQueries bool   `json:"hide_system_queries"`
 }
 
 var defaultListParams = QueryListParams{
@@ -77,6 +78,10 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 
 	where := "WHERE type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart') AND query != 'SELECT 1'"
 	args := []interface{}{}
+
+	if params.HideSystemQueries {
+		where += " AND NOT has(databases, 'system') AND lower(query_kind) NOT IN ('explain', 'system', 'show', 'create', 'drop', 'alter', 'set', 'use', 'kill', 'optimize', 'truncate', 'rename', 'check', 'detach', 'attach', 'none')"
+	}
 
 	if params.FromTime != "" {
 		where += " AND event_time >= ?"
@@ -226,6 +231,10 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 	where := "WHERE query != 'SELECT 1' AND type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')"
 	args := []interface{}{}
 
+	if params.HideSystemQueries {
+		where += " AND NOT has(databases, 'system') AND lower(query_kind) NOT IN ('explain', 'system', 'show', 'create', 'drop', 'alter', 'set', 'use', 'kill', 'optimize', 'truncate', 'rename', 'check', 'detach', 'attach', 'none')"
+	}
+
 	if params.FromTime != "" {
 		where += " AND event_time >= ?"
 		args = append(args, params.FromTime)
@@ -262,7 +271,7 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 	query := fmt.Sprintf(`SELECT
 		normalized_query_hash,
 		any(query) AS sample_query,
-		any(query_kind) AS query_kind,
+		any(query_kind) AS query_kind_val,
 		count() AS execution_count,
 		avg(query_duration_ms) AS avg_duration_ms,
 		quantile(0.5)(query_duration_ms) AS p50_duration_ms,

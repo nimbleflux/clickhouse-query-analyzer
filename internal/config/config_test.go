@@ -28,4 +28,7 @@ func TestParse(t *testing.T) {
 	if cfg.ClickHouseURL != "clickhouse://host:9000" {
 		t.Errorf("expected trimmed URL, got %q", cfg.ClickHouseURL)
 	}
+	if cfg.CORSOrigin != "*" {
+		t.Errorf("expected default CORS origin '*', got %q", cfg.CORSOrigin)
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 
 	"github.com/nimbleflux/clickhouse-query-analyzer/internal/clickhouse"
 )
@@ -54,4 +55,28 @@ func (a *API) clientFromRequest(r *http.Request) (*clickhouse.Client, error) {
 		return nil, fmt.Errorf("ClickHouse URL not configured. Provide X-CH-URL header or configure connection in the UI")
 	}
 	return a.pool.Get(r.Context(), params)
+}
+
+func isReadonly(r *http.Request) bool {
+	return r.Header.Get("X-CH-Readonly") == "1"
+}
+
+var readOnlyPrefixes = []string{
+	"INSERT ", "ALTER ", "DROP ", "CREATE ", "TRUNCATE ", "KILL ",
+	"SYSTEM ", "OPTIMIZE ", "DETACH ", "ATTACH ", "RENAME ",
+	"GRANT ", "REVOKE ", "DELETE ", "UPDATE ",
+}
+
+func rejectWriteQuery(w http.ResponseWriter, query string) bool {
+	upper := strings.ToUpper(query)
+	for _, prefix := range readOnlyPrefixes {
+		if strings.HasPrefix(strings.TrimSpace(upper), prefix) {
+			writeError(w, http.StatusForbidden, fmt.Sprintf("Query rejected: read-only mode is enabled (%s not allowed)", strings.TrimSpace(prefix)))
+			return true
+		}
+	}
+	if strings.HasPrefix(strings.TrimSpace(upper), "EXPLAIN") {
+		return false
+	}
+	return false
 }

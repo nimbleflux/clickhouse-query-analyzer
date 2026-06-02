@@ -64,7 +64,7 @@ func TestConnect_MissingURL(t *testing.T) {
 }
 
 func TestCORS_Headers(t *testing.T) {
-	cfg := &config.Config{}
+	cfg := &config.Config{CORSOrigin: "*"}
 	api := New(clickhouse.NewPool())
 	router := Router(cfg, api, nil)
 
@@ -76,7 +76,47 @@ func TestCORS_Headers(t *testing.T) {
 		t.Errorf("expected 200 for OPTIONS, got %d", w.Code)
 	}
 	if w.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Errorf("expected CORS origin header")
+		t.Errorf("expected CORS origin header '*', got %q", w.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
+func TestCORS_CustomOrigin(t *testing.T) {
+	cfg := &config.Config{CORSOrigin: "https://example.com"}
+	api := New(clickhouse.NewPool())
+	router := Router(cfg, api, nil)
+
+	req := httptest.NewRequest("OPTIONS", "/api/connect", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Header().Get("Access-Control-Allow-Origin") != "https://example.com" {
+		t.Errorf("expected CORS origin 'https://example.com', got %q", w.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
+func TestReadonly_RejectsWrite(t *testing.T) {
+	tests := []struct {
+		query  string
+		reject bool
+	}{
+		{"INSERT INTO t VALUES (1)", true},
+		{"DROP TABLE t", true},
+		{"ALTER TABLE t ADD COLUMN x Int32", true},
+		{"CREATE TABLE t (x Int32)", true},
+		{"TRUNCATE TABLE t", true},
+		{"SELECT 1", false},
+		{"EXPLAIN SELECT 1", false},
+		{"select * from t", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			rejected := rejectWriteQuery(w, tt.query)
+			if rejected != tt.reject {
+				t.Errorf("rejectWriteQuery(%q) = %v, want %v", tt.query, rejected, tt.reject)
+			}
+		})
 	}
 }
 

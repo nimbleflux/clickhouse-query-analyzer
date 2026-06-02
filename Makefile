@@ -4,10 +4,15 @@ BINARY := clickhouse-query-analyzer
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-dev: dev-clickhouse-wait dev-frontend dev-backend
+dev:
+	@trap 'kill 0 2>/dev/null; exit 0' INT TERM; \
+	$(MAKE) dev-clickhouse-wait && \
+	$(MAKE) dev-frontend & \
+	$(MAKE) dev-backend & \
+	wait
 
 dev-frontend:
-	cd web && npm ci --quiet 2>/dev/null; npm run dev &
+	cd web && npm ci --quiet 2>/dev/null; npm run dev
 
 dev-backend:
 	mkdir -p cmd/server/frontend

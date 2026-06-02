@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql } from "@codemirror/lang-sql";
@@ -9,11 +9,13 @@ import {
   PieChart, Pie, Cell,
 } from "recharts";
 import { useTheme } from "../api/theme";
-import { Clock, MemoryStick, HardDrive, Database, Cpu, Play, Layers, Eye, Cloud, ChevronDown, ChevronRight, Fingerprint } from "lucide-react";
+import { Clock, MemoryStick, HardDrive, Database, Cpu, Play, Layers, Eye, Cloud, ChevronDown, ChevronRight, Fingerprint, ChevronRight as ChevronSep, Copy } from "lucide-react";
 import { fetchQuery, fetchQueryMetrics, fetchQueryThreads, fetchQueryViews, fetchExplain, fetchFlameGraph, fetchThreadSummaries, fetchThreadProfile } from "../api/client";
 import type { QueryLogEntry, MetricPoint, ThreadEntry, ViewLogEntry, ExplainResult, FlameGraphData, ThreadSummary, ThreadProfile } from "../api/types";
 import { FlameGraph } from "../components/FlameGraph";
 import { VisualExplain } from "../components/VisualExplain";
+import { CardSkeleton } from "../components/Skeleton";
+import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor, categorizeEvent } from "../utils";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -33,6 +35,7 @@ export function QueryDetail() {
   const { queryId } = useParams<{ queryId: string }>();
   const theme = useTheme();
   const cmTheme = theme === "dark" ? oneDark : undefined;
+  const copy = useCopyToClipboard();
   const [query, setQuery] = useState<QueryLogEntry | null>(null);
   const [metrics, setMetrics] = useState<MetricPoint[]>([]);
   const [threads, setThreads] = useState<ThreadEntry[]>([]);
@@ -40,38 +43,41 @@ export function QueryDetail() {
   const [explain, setExplain] = useState<ExplainResult | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [loading, setLoading] = useState(true);
+  const [initialLoad, setInitialLoad] = useState(true);
   const [error, setError] = useState("");
   const [flameError, setFlameError] = useState("");
   const [flameData, setFlameData] = useState<FlameGraphData[]>([]);
   const [profileEventFilter, setProfileEventFilter] = useState("");
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    const controller = new AbortController();
+    let aborted = false;
     if (!queryId) return;
     setLoading(true);
     setError("");
-    try {
-      const [q, m, t, v, e] = await Promise.all([
-        fetchQuery(queryId),
-        fetchQueryMetrics(queryId).catch(() => []),
-        fetchQueryThreads(queryId).catch(() => []),
-        fetchQueryViews(queryId).catch(() => []),
-        fetchExplain(queryId).catch(() => null),
-      ]);
+    Promise.all([
+      fetchQuery(queryId, controller.signal),
+      fetchQueryMetrics(queryId, controller.signal).catch(() => []),
+      fetchQueryThreads(queryId, controller.signal).catch(() => []),
+      fetchQueryViews(queryId, controller.signal).catch(() => []),
+      fetchExplain(queryId, controller.signal).catch(() => null),
+    ]).then(([q, m, t, v, e]) => {
+      if (aborted) return;
       setQuery(q);
       setMetrics(m || []);
       setThreads(t || []);
       setViews(v || []);
       if (e) setExplain(e);
-    } catch (e) {
+    }).catch((e) => {
+      if (aborted) return;
       setError(e instanceof Error ? e.message : "Failed to load query");
-    } finally {
+    }).finally(() => {
+      if (aborted) return;
       setLoading(false);
-    }
+      setInitialLoad(false);
+    });
+    return () => { aborted = true; controller.abort(); };
   }, [queryId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
 
   const loadExplain = async () => {
     if (!queryId || explain) return;
@@ -109,18 +115,34 @@ export function QueryDetail() {
     }
   };
 
-  if (loading) {
+  if (loading && initialLoad) {
     return (
-      <div className="flex h-64 items-center justify-center text-[var(--color-text-secondary)]">
-        Loading query details...
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <div className="mb-2 flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
+          <Link to="/queries" className="hover:text-[var(--color-accent)]">Queries</Link>
+          <ChevronSep className="h-3 w-3" />
+          <span>Loading...</span>
+        </div>
+        <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}
+        </div>
+        <CardSkeleton />
       </div>
     );
   }
 
-  if (error || !query) {
+  if (error || (!query && !loading)) {
     return (
       <div className="mx-auto max-w-7xl px-4 py-12 text-center">
         <p className="text-[var(--color-error)]">{error || "Query not found"}</p>
+      </div>
+    );
+  }
+
+  if (!query) {
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-12 text-center">
+        <p className="text-[var(--color-text-secondary)]">Loading...</p>
       </div>
     );
   }
@@ -130,6 +152,11 @@ export function QueryDetail() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mb-2 flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
+        <Link to="/queries" className="hover:text-[var(--color-accent)]">Queries</Link>
+        <ChevronSep className="h-3 w-3" />
+        <span className="font-mono">{query.query_id.slice(0, 16)}...</span>
+      </div>
       <div className="mb-6">
         <h1 className="mb-2 text-xl font-bold">Query Detail</h1>
         <div className="flex items-center gap-4 text-sm text-[var(--color-text-secondary)]">
@@ -153,14 +180,19 @@ export function QueryDetail() {
       </div>
 
       {query.exception && (
-        <div className="mb-6 rounded-lg border border-[var(--color-error)] bg-red-900/20 p-4">
+        <div className="mb-6 rounded-lg border border-[var(--color-error)] bg-[var(--color-error)]/10 p-4">
           <p className="text-sm font-medium text-[var(--color-error)]">Exception (code {query.exception_code})</p>
-          <p className="mt-1 font-mono text-xs text-red-300">{query.exception}</p>
+          <p className="mt-1 font-mono text-xs text-[var(--color-error)] opacity-80">{query.exception}</p>
         </div>
       )}
 
       <div className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-        <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">Query</div>
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-xs font-medium text-[var(--color-text-secondary)]">Query</div>
+          <button onClick={() => copy(query.query, "Query copied!")} className="rounded p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]" title="Copy query">
+            <Copy className="h-3.5 w-3.5" />
+          </button>
+        </div>
         <CodeMirror
           value={query.query}
           extensions={[sql()]}
@@ -1146,15 +1178,15 @@ function ThreadBreakdownTab({ queryId, threads, pipelineStr, querySettings }: { 
 
   const roleColor = (role: string) => {
     switch (role) {
-      case "Coordinator": return "bg-blue-500/20 text-blue-400";
-      case "Scan + Filter": return "bg-green-500/20 text-green-400";
-      case "Table Scanner": return "bg-green-500/20 text-green-400";
-      case "Reader": return "bg-green-500/20 text-green-400";
-      case "Aggregator": return "bg-purple-500/20 text-purple-400";
-      case "Filter": return "bg-yellow-500/20 text-yellow-400";
-      case "I/O Pool": return "bg-orange-500/20 text-orange-400";
-      case "Pipeline Manager": return "bg-cyan-500/20 text-cyan-400";
-      default: return "bg-gray-500/20 text-gray-400";
+      case "Coordinator": return "bg-[var(--color-accent)]/10 text-[var(--color-accent)]";
+      case "Scan + Filter": return "bg-[var(--color-success)]/10 text-[var(--color-success)]";
+      case "Table Scanner": return "bg-[var(--color-success)]/10 text-[var(--color-success)]";
+      case "Reader": return "bg-[var(--color-success)]/10 text-[var(--color-success)]";
+      case "Aggregator": return "bg-purple-500/10 text-purple-400";
+      case "Filter": return "bg-[var(--color-warning)]/10 text-[var(--color-warning)]";
+      case "I/O Pool": return "bg-[var(--color-warning)]/10 text-[var(--color-warning)]";
+      case "Pipeline Manager": return "bg-[var(--color-accent)]/10 text-[var(--color-accent)]";
+      default: return "bg-[var(--color-text-secondary)]/10 text-[var(--color-text-secondary)]";
     }
   };
 
@@ -1475,12 +1507,12 @@ function computeMetricDeltas(points: MetricPoint[]): MetricDelta[] {
       time,
       memory: p.memory_usage,
       peak: p.peak_memory_usage,
-      userTime: p.user_time_microseconds - prev.user_time_microseconds,
-      systemTime: p.system_time_microseconds - prev.system_time_microseconds,
-      readBytes: p.read_bytes - prev.read_bytes,
-      writeBytes: p.write_bytes - prev.write_bytes,
-      netRecv: p.network_receive_bytes - prev.network_receive_bytes,
-      netSend: p.network_send_bytes - prev.network_send_bytes,
+      userTime: Math.max(0, p.user_time_microseconds - prev.user_time_microseconds),
+      systemTime: Math.max(0, p.system_time_microseconds - prev.system_time_microseconds),
+      readBytes: Math.max(0, p.read_bytes - prev.read_bytes),
+      writeBytes: Math.max(0, p.write_bytes - prev.write_bytes),
+      netRecv: Math.max(0, p.network_receive_bytes - prev.network_receive_bytes),
+      netSend: Math.max(0, p.network_send_bytes - prev.network_send_bytes),
     };
   });
 }

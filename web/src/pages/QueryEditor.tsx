@@ -7,7 +7,7 @@ import { keymap } from "@codemirror/view";
 import { Prec } from "@codemirror/state";
 import { acceptCompletion } from "@codemirror/autocomplete";
 import { format as sqlFormat } from "sql-formatter";
-import { Play, Database, ChevronRight, ChevronDown, Loader2, ExternalLink, Table2, Square, Copy, Check, RefreshCw, Settings2, ChevronLeft, ChevronRightIcon, Plus, X, ArrowUp, ArrowDown, AlertTriangle, Bookmark, BookmarkCheck, Trash2, Search, Variable, Download, Upload } from "lucide-react";
+import { Play, Database, ChevronRight, ChevronDown, Loader2, ExternalLink, Table2, Square, Copy, Check, RefreshCw, Settings2, ChevronLeft, ChevronRightIcon, Plus, X, ArrowUp, ArrowDown, AlertTriangle, Bookmark, BookmarkCheck, Trash2, Search, Variable, Download, Upload, Clock } from "lucide-react";
 import { executeQuery, fetchDatabases, fetchTables, fetchColumns } from "../api/client";
 import type { QueryResult } from "../api/types";
 import { formatNumber } from "../utils";
@@ -71,6 +71,7 @@ function loadSettings() {
     query_profiler_cpu_time_period_ns: true,
     allow_introspection_functions: true,
     enable_params: true,
+    readonly: false,
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -86,19 +87,48 @@ function saveSettings(s: Record<string, boolean>) {
 interface SidebarSections {
   schema: boolean;
   saved: boolean;
+  history: boolean;
   params: boolean;
 }
 
 function loadSidebarSections(): SidebarSections {
   try {
     const raw = localStorage.getItem(SIDEBAR_SECTIONS_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return { history: false, ...parsed };
+    }
   } catch {}
-  return { schema: true, saved: false, params: true };
+  return { schema: true, saved: false, history: false, params: true };
 }
 
 function saveSidebarSections(s: SidebarSections) {
   try { localStorage.setItem(SIDEBAR_SECTIONS_KEY, JSON.stringify(s)); } catch {}
+}
+
+interface HistoryEntry {
+  sql: string;
+  timestamp: string;
+}
+
+const HISTORY_KEY = "ch-editor-history";
+const MAX_HISTORY = 100;
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return [];
+}
+
+function addToHistory(sql: string) {
+  const trimmed = sql.trim();
+  if (!trimmed) return;
+  const history = loadHistory();
+  if (history.length > 0 && history[0].sql === trimmed) return;
+  history.unshift({ sql: trimmed, timestamp: new Date().toISOString() });
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY))); } catch {}
 }
 
 function splitQueries(sql: string): string[] {
@@ -140,6 +170,41 @@ function splitQueries(sql: string): string[] {
   const trimmed = current.trim();
   if (trimmed) stmts.push(trimmed);
   return stmts;
+}
+
+function exportResult(result: QueryResult, format: "csv" | "json" | "tsv") {
+  let content: string;
+  let mimeType: string;
+  let ext: string;
+
+  if (format === "json") {
+    content = JSON.stringify(result.rows, null, 2);
+    mimeType = "application/json";
+    ext = "json";
+  } else {
+    const sep = format === "csv" ? "," : "\t";
+    const escape = (val: any) => {
+      const s = val === null || val === undefined ? "" : String(val);
+      return s.includes(sep) || s.includes('"') || s.includes('\n')
+        ? `"${s.replace(/"/g, '""')}"`
+        : s;
+    };
+    const header = result.columns.map((c) => escape(c.name)).join(sep);
+    const rows = result.rows.map((row) =>
+      result.columns.map((c) => escape(row[c.name])).join(sep)
+    );
+    content = [header, ...rows].join("\n");
+    mimeType = format === "csv" ? "text/csv" : "text/tab-separated-values";
+    ext = format;
+  }
+
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `query-result.${ext}`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function CellValue({ val }: { val: any }) {
@@ -244,7 +309,7 @@ function ResultTable({ result, pageSize, resultPage, setResultPage, onNavigate }
   return (
     <div>
       {result.query_id && (
-        <div className="mb-2 flex items-center gap-2">
+        <div className="mb-2 flex items-center gap-2 flex-wrap">
           <button
             onClick={() => onNavigate(`/query/${result.query_id}`)}
             className="flex items-center gap-1 rounded border border-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)]"
@@ -272,6 +337,31 @@ function ResultTable({ result, pageSize, resultPage, setResultPage, onNavigate }
             >
               Clear filters
             </button>
+          )}
+          {result.rows.length > 0 && (
+            <div className="flex items-center gap-1 ml-auto">
+              <button
+                onClick={() => exportResult(result, "csv")}
+                className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                title="Export as CSV"
+              >
+                <Download className="h-3 w-3" />CSV
+              </button>
+              <button
+                onClick={() => exportResult(result, "json")}
+                className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                title="Export as JSON"
+              >
+                <Download className="h-3 w-3" />JSON
+              </button>
+              <button
+                onClick={() => exportResult(result, "tsv")}
+                className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                title="Export as TSV"
+              >
+                <Download className="h-3 w-3" />TSV
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -367,7 +457,7 @@ function ResultTable({ result, pageSize, resultPage, setResultPage, onNavigate }
 }
 
 function formatElapsed(ms: number): string {
-  if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 1000) return `${ms.toFixed(0)}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   const min = Math.floor(ms / 60000);
   const sec = ((ms % 60000) / 1000).toFixed(0);
@@ -411,6 +501,7 @@ export function QueryEditor() {
   const [savingName, setSavingName] = useState("");
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [paramSets, setParamSets] = useState<ParamSet[]>(loadParamSets);
+  const [queryHistory, setQueryHistory] = useState<HistoryEntry[]>(loadHistory);
   const [savingParamSetName, setSavingParamSetName] = useState("");
   const [showSaveParamSetDialog, setShowSaveParamSetDialog] = useState(false);
   const [formatting, setFormatting] = useState(false);
@@ -604,7 +695,7 @@ export function QueryEditor() {
 
     for (let i = 0; i < stmts.length; i++) {
       try {
-        const r = await executeQuery(stmts[i], 5000, chSettings);
+        const r = await executeQuery(stmts[i], 5000, chSettings, settings.readonly, abortRef.current?.signal);
         allResults.push(r);
         allErrors.push("");
       } catch (e) {
@@ -617,6 +708,10 @@ export function QueryEditor() {
     updateTab(activeTab.id, { results: allResults, errors: allErrors, running: false, resultPage: 0 });
     stopTimer();
     abortRef.current = null;
+    if (!allErrors.every((e) => e)) {
+      addToHistory(input);
+      setQueryHistory(loadHistory());
+    }
   }, [sqlText, activeTab.id, updateTab, startTimer, stopTimer, buildSettingsMap, resolvedSQL, emptyParams]);
 
   const runSelection = useCallback(async () => {
@@ -919,21 +1014,21 @@ export function QueryEditor() {
     sectionKey: keyof SidebarSections;
     extra?: React.ReactNode;
   }) => (
-    <button
+    <div
       data-section-header
       onClick={() => toggleSection(sectionKey)}
-      className="flex w-full items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+      className="flex w-full cursor-pointer items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
     >
       {sidebarSections[sectionKey] ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
       {icon}
       <span className="truncate">{label}</span>
       {extra}
-    </button>
+    </div>
   );
 
   const openCount = Object.values(sidebarSections).filter(Boolean).length;
 
-  const makeSectionDrag = (upper: "schema" | "saved" | "params", lower: "saved" | "params") => (e: React.MouseEvent) => {
+  const makeSectionDrag = (upper: keyof SidebarSections, lower: keyof SidebarSections) => (e: React.MouseEvent) => {
     e.preventDefault();
     const startY = e.clientY;
     const startUpper = sectionHeights[upper];
@@ -973,7 +1068,7 @@ export function QueryEditor() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
+    <div className="flex h-full overflow-hidden">
       <div
         ref={sidebarRef}
         className="shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-secondary)] flex flex-col overflow-hidden"
@@ -1188,7 +1283,51 @@ export function QueryEditor() {
 
         <div
           className="h-1 shrink-0 cursor-row-resize hover:bg-[var(--color-accent)]"
-          onMouseDown={makeSectionDrag("saved", "params")}
+          onMouseDown={makeSectionDrag("saved", "history")}
+        />
+
+        <AccordionHeader
+          label={`History${queryHistory.length > 0 ? ` (${queryHistory.length})` : ""}`}
+          icon={<Clock className="h-3.5 w-3.5" />}
+          sectionKey="history"
+          extra={
+            queryHistory.length > 0 ? (
+              <button
+                onClick={(e) => { e.stopPropagation(); localStorage.removeItem(HISTORY_KEY); setQueryHistory([]); }}
+                className="ml-auto rounded p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-error)] hover:bg-[var(--color-bg-tertiary)]"
+                title="Clear history"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            ) : undefined
+          }
+        />
+        <div style={sectionStyle("history")} className="border-b border-[var(--color-border)]">
+          <div className="overflow-y-auto">
+            {queryHistory.length > 0 ? queryHistory.map((entry, i) => (
+              <button
+                key={i}
+                onClick={() => updateTab(activeTab.id, { sql: entry.sql, results: [], errors: [] })}
+                className="group/hist w-full border-b border-[var(--color-border)] last:border-0 px-3 py-1.5 text-left hover:bg-[var(--color-bg-tertiary)]"
+              >
+                <div className="truncate font-mono text-[11px] text-[var(--color-text-secondary)] group-hover/hist:text-[var(--color-text-primary)]">
+                  {entry.sql.replace(/\s+/g, " ").trim().slice(0, 80)}
+                </div>
+                <div className="text-[9px] text-[var(--color-text-secondary)] opacity-60">
+                  {new Date(entry.timestamp).toLocaleString()}
+                </div>
+              </button>
+            )) : (
+              <div className="px-3 py-4 text-center text-xs text-[var(--color-text-secondary)]">
+                No query history yet
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div
+          className="h-1 shrink-0 cursor-row-resize hover:bg-[var(--color-accent)]"
+          onMouseDown={makeSectionDrag("history", "params")}
         />
 
         {(() => {
@@ -1517,6 +1656,10 @@ export function QueryEditor() {
                 <input type="checkbox" checked={settings.allow_introspection_functions} onChange={(e) => setSettings((s: Record<string, boolean>) => ({ ...s, allow_introspection_functions: e.target.checked }))} className="accent-[var(--color-accent)]" />
                 allow_introspection_functions
               </label>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-[var(--color-error)]" title="Reject INSERT, ALTER, DROP, etc. Only allow SELECT and EXPLAIN queries">
+                <input type="checkbox" checked={settings.readonly} onChange={(e) => setSettings((s: Record<string, boolean>) => ({ ...s, readonly: e.target.checked }))} className="accent-[var(--color-error)]" />
+                Read-only mode
+              </label>
               <div className="ml-auto flex items-center gap-1 text-xs text-[var(--color-text-primary)]">
                 Rows/page:
                 <select
@@ -1565,7 +1708,7 @@ export function QueryEditor() {
                     </div>
                   )}
                   {activeTab.errors[i] ? (
-                    <div className="rounded-lg border border-[var(--color-error)] bg-red-900/20 px-4 py-3 text-sm text-[var(--color-error)]">
+                    <div className="rounded-lg border border-[var(--color-error)] bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]">
                       {activeTab.errors[i]}
                     </div>
                   ) : (

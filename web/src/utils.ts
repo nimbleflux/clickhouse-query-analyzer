@@ -10,11 +10,13 @@ export function formatDuration(ms: number): string {
 }
 
 export function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
+  if (!Number.isFinite(bytes) || bytes === 0) return "0 B";
+  const abs = Math.abs(bytes);
   const k = 1024;
   const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+  const i = Math.floor(Math.log(abs) / Math.log(k));
+  const formatted = (abs / Math.pow(k, i)).toFixed(1);
+  return bytes < 0 ? `-${formatted} ${sizes[i]}` : `${formatted} ${sizes[i]}`;
 }
 
 export function formatNumber(n: number): string {
@@ -27,7 +29,12 @@ export function formatNumber(n: number): string {
 
 export function formatTime(ts: string): string {
   const d = new Date(ts);
-  return d.toLocaleString();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${mm}/${dd} ${hh}:${mi}:${ss}`;
 }
 
 export function durationColor(ms: number): string {

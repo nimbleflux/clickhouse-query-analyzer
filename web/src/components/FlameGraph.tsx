@@ -13,6 +13,7 @@ export function FlameGraph({ data }: { data: { name: string; value: number }[] }
   const [tooltip, setTooltip] = useState<{ x: number; y: number; name: string; value: number } | null>(null);
   const [nodes, setNodes] = useState<FlameNode[]>([]);
   const [hoveredIdx, setHoveredIdx] = useState(-1);
+  const [zoomRoot, setZoomRoot] = useState<string | null>(null);
 
   const ROW_HEIGHT = 20;
   const PADDING = 1;
@@ -156,6 +157,26 @@ export function FlameGraph({ data }: { data: { name: string; value: number }[] }
     [nodes],
   );
 
+  const handleClick = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas || nodes.length === 0) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const canvasWidth = rect.width;
+      const depth = Math.floor((y - PADDING) / (ROW_HEIGHT + PADDING));
+      const normalX = x / canvasWidth;
+      for (let i = 0; i < nodes.length; i++) {
+        if (nodes[i].depth === depth && normalX >= nodes[i].x && normalX <= nodes[i].x + nodes[i].width) {
+          setZoomRoot(nodes[i].name);
+          return;
+        }
+      }
+    },
+    [nodes],
+  );
+
   if (data.length === 0) {
     return (
       <div className="py-8 text-center text-sm text-[var(--color-text-secondary)]">
@@ -166,7 +187,15 @@ export function FlameGraph({ data }: { data: { name: string; value: number }[] }
 
   return (
     <div className="relative">
-      <canvas ref={canvasRef} className="w-full cursor-pointer rounded" onMouseMove={handleMouseMove} onMouseLeave={() => { setHoveredIdx(-1); setTooltip(null); }} />
+      {zoomRoot && (
+        <button
+          onClick={() => setZoomRoot(null)}
+          className="absolute right-0 top-0 z-10 rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2 py-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+        >
+          Reset Zoom
+        </button>
+      )}
+      <canvas ref={canvasRef} role="img" aria-label="Flame graph of query profile" className="w-full cursor-pointer rounded" onMouseMove={handleMouseMove} onMouseLeave={() => { setHoveredIdx(-1); setTooltip(null); }} onClick={handleClick} />
       {tooltip && (
         <div
           className="pointer-events-none absolute z-50 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2 text-xs shadow-lg"

@@ -15,6 +15,7 @@ type Config struct {
 	ClickHouseDB   string
 	DevMode        bool
 	Version        string
+	CORSOrigin     string
 }
 
 func Parse() *Config {
@@ -26,6 +27,7 @@ func Parse() *Config {
 	flag.StringVar(&cfg.ClickHousePass, "clickhouse-password", "", "ClickHouse password")
 	flag.StringVar(&cfg.ClickHouseDB, "clickhouse-db", "system", "ClickHouse database for system tables")
 	flag.BoolVar(&cfg.DevMode, "dev", false, "Development mode (serve frontend from web/dist)")
+	flag.StringVar(&cfg.CORSOrigin, "cors-origin", "*", "Allowed CORS origin (e.g. https://example.com or * for any)")
 	flag.Parse()
 
 	if v := os.Getenv("CLICKHOUSE_URL"); v != "" {
@@ -42,6 +44,9 @@ func Parse() *Config {
 	}
 	if v := os.Getenv("PORT"); v != "" {
 		fmt.Sscanf(v, "%d", &cfg.Port)
+	}
+	if v := os.Getenv("CORS_ORIGIN"); v != "" {
+		cfg.CORSOrigin = v
 	}
 
 	cfg.ClickHouseURL = strings.TrimSpace(cfg.ClickHouseURL)

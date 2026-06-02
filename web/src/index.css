@@ -41,3 +41,60 @@ body {
   scrollbar-width: thin;
   scrollbar-color: var(--color-bg-tertiary) transparent;
 }
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-bg-tertiary);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+input:focus-visible,
+select:focus-visible {
+  outline-offset: 1px;
+}
+
+.cm-editor {
+  background-color: var(--color-bg-primary) !important;
+}
+
+.cm-editor .cm-scroller {
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
