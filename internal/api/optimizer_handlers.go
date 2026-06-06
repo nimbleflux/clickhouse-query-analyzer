@@ -23,20 +23,20 @@ func writeSSE(w http.ResponseWriter, flusher http.Flusher, evt clickhouse.BulkEv
 func (a *API) AnalyzeTableHandler(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	database := chi.URLParam(r, "db")
 	table := chi.URLParam(r, "table")
 	if database == "" || table == "" {
-		writeError(w, http.StatusBadRequest, "database and table are required")
+		MissingParam(w, "database and table")
 		return
 	}
 
 	analysis, err := ch.AnalyzeTable(r.Context(), database, table)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -46,13 +46,13 @@ func (a *API) AnalyzeTableHandler(w http.ResponseWriter, r *http.Request) {
 func (a *API) AnalyzeDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	database := chi.URLParam(r, "db")
 	if database == "" {
-		writeError(w, http.StatusBadRequest, "database is required")
+		MissingParam(w, "database")
 		return
 	}
 
@@ -72,13 +72,13 @@ func (a *API) AnalyzeDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 func (a *API) AnalyzeAllHandler(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	databases, err := ch.GetDatabases(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 

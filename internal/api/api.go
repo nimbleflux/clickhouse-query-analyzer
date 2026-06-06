@@ -25,10 +25,6 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
-}
-
 type API struct {
 	pool *clickhouse.Pool
 }
@@ -71,7 +67,7 @@ func rejectWriteQuery(w http.ResponseWriter, query string) bool {
 	upper := strings.ToUpper(query)
 	for _, prefix := range readOnlyPrefixes {
 		if strings.HasPrefix(strings.TrimSpace(upper), prefix) {
-			writeError(w, http.StatusForbidden, fmt.Sprintf("Query rejected: read-only mode is enabled (%s not allowed)", strings.TrimSpace(prefix)))
+			Forbidden(w, fmt.Sprintf("Query rejected: read-only mode is enabled (%s not allowed)", strings.TrimSpace(prefix)))
 			return true
 		}
 	}

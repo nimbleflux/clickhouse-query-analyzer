@@ -18,6 +18,29 @@ type ColumnInfo struct {
 	Type string `json:"type"`
 }
 
+// extractHTTPCode pulls the leading "Code: N" out of a ClickHouse HTTP
+// error body. Returns 0 if no code is present.
+func extractHTTPCode(body string) ClickHouseErrorCode {
+	idx := strings.Index(body, "Code:")
+	if idx < 0 {
+		return CHUnknown
+	}
+	rest := body[idx+len("Code:"):]
+	rest = strings.TrimLeft(rest, " \t")
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return CHUnknown
+	}
+	n, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		return CHUnknown
+	}
+	return ClickHouseErrorCode(n)
+}
+
 type QueryResult struct {
 	Columns  []ColumnInfo     `json:"columns"`
 	Rows     []map[string]any `json:"rows"`
@@ -65,7 +88,10 @@ func (c *Client) ExecuteQuery(ctx context.Context, query string, maxRows int, se
 
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("clickhouse error: %s", string(b))
+		return nil, &CHError{
+			Code:    extractHTTPCode(string(b)),
+			Message: strings.TrimSpace(string(b)),
+		}
 	}
 
 	dec := json.NewDecoder(resp.Body)

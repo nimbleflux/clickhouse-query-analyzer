@@ -1,38 +1,47 @@
 import { useState, useEffect } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
-import {
-  LineChart, Line, AreaChart, Area, BarChart, Bar,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
-  PieChart, Pie, Cell,
-} from "recharts";
-import { useTheme } from "../api/theme";
-import { Clock, MemoryStick, HardDrive, Database, Cpu, Play, Layers, Eye, Cloud, ChevronDown, ChevronRight, Fingerprint, ChevronRight as ChevronSep, Copy } from "lucide-react";
-import { fetchQuery, fetchQueryMetrics, fetchQueryThreads, fetchQueryViews, fetchExplain, fetchFlameGraph, fetchThreadSummaries, fetchThreadProfile } from "../api/client";
-import type { QueryLogEntry, MetricPoint, ThreadEntry, ViewLogEntry, ExplainResult, FlameGraphData, ThreadSummary, ThreadProfile } from "../api/types";
-import { FlameGraph } from "../components/FlameGraph";
-import { VisualExplain } from "../components/VisualExplain";
-import { CardSkeleton } from "../components/Skeleton";
-import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
-import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor, categorizeEvent } from "../utils";
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function tooltipFmt(fn: (v: number) => string) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (value: any) => fn(Number(value));
-}
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function labelFmt(fn: (l: string) => string) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (label: any) => fn(String(label));
-}
+import { Clock, MemoryStick, HardDrive, Database, Cpu, Layers, Fingerprint, Copy, ChevronRight as ChevronSep, Code } from "lucide-react";
+import { useTheme } from "@/api/theme";
+import { fetchQuery, fetchQueryMetrics, fetchQueryThreads, fetchQueryViews, fetchExplain, fetchFlameGraph } from "@/api/client";
+import type { QueryLogEntry, MetricPoint, ThreadEntry, ViewLogEntry, ExplainResult, FlameGraphData } from "@/api/types";
+import { ApiError } from "@/api/errors";
+import { CardSkeleton } from "@/components/Skeleton";
+import { Button } from "@/components/ui/button";
+import { PageContainer, PageHeader } from "@/components/ui/page";
+import { ErrorState } from "@/components/ui/state";
+import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
+import { sendToEditor } from "@/lib/send-to-editor";
+import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor } from "@/utils";
+import { MetricCard } from "./query-detail/shared";
+import { OverviewTab } from "./query-detail/OverviewTab";
+import { MemoryTab } from "./query-detail/MemoryTab";
+import { ThreadsTab } from "./query-detail/ThreadsTab";
+import { StorageTab } from "./query-detail/StorageTab";
+import { FlamegraphTab } from "./query-detail/FlamegraphTab";
+import { ExplainTab } from "./query-detail/ExplainTab";
+import { ViewsTab } from "./query-detail/ViewsTab";
+import { SettingsTab } from "./query-detail/SettingsTab";
 
 type Tab = "overview" | "memory" | "threads" | "storage" | "flamegraph" | "explain" | "views" | "settings";
 
+const TABS: { key: Tab; label: string }[] = [
+  { key: "overview", label: "Overview" },
+  { key: "memory", label: "Memory" },
+  { key: "threads", label: "Threads" },
+  { key: "storage", label: "Storage" },
+  { key: "flamegraph", label: "Flamegraph" },
+  { key: "explain", label: "Explain" },
+  { key: "views", label: "Views" },
+  { key: "settings", label: "Settings" },
+];
+
 export function QueryDetail() {
   const { queryId } = useParams<{ queryId: string }>();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const theme = useTheme();
   const cmTheme = theme === "dark" ? oneDark : undefined;
   const copy = useCopyToClipboard();
@@ -41,20 +50,21 @@ export function QueryDetail() {
   const [threads, setThreads] = useState<ThreadEntry[]>([]);
   const [views, setViews] = useState<ViewLogEntry[]>([]);
   const [explain, setExplain] = useState<ExplainResult | null>(null);
-  const [tab, setTab] = useState<Tab>("overview");
+  const initialTab = TABS.find((t) => t.key === searchParams.get("tab"))?.key ?? "overview";
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [loading, setLoading] = useState(true);
   const [initialLoad, setInitialLoad] = useState(true);
-  const [error, setError] = useState("");
-  const [flameError, setFlameError] = useState("");
+  const [error, setError] = useState<ApiError | null>(null);
+  const [flameError, setFlameError] = useState<ApiError | null>(null);
   const [flameData, setFlameData] = useState<FlameGraphData[]>([]);
-  const [profileEventFilter, setProfileEventFilter] = useState("");
+  const [activeFlameType, setActiveFlameType] = useState<string>("Real");
 
   useEffect(() => {
     const controller = new AbortController();
     let aborted = false;
     if (!queryId) return;
     setLoading(true);
-    setError("");
+    setError(null);
     Promise.all([
       fetchQuery(queryId, controller.signal),
       fetchQueryMetrics(queryId, controller.signal).catch(() => []),
@@ -70,7 +80,7 @@ export function QueryDetail() {
       if (e) setExplain(e);
     }).catch((e) => {
       if (aborted) return;
-      setError(e instanceof Error ? e.message : "Failed to load query");
+      setError(e instanceof ApiError ? e : ApiError.wrap(e));
     }).finally(() => {
       if (aborted) return;
       setLoading(false);
@@ -91,33 +101,44 @@ export function QueryDetail() {
     if (!queryId || flameData.length > 0) return;
     try {
       let data = await fetchFlameGraph(queryId);
+      let foundType = "MemorySample";
       if (data.length === 0) {
         for (const altType of ["Memory", "MemoryPeak", "Real", "CPU"]) {
           data = await fetchFlameGraph(queryId, altType);
-          if (data.length > 0) break;
+          if (data.length > 0) { foundType = altType; break; }
         }
       }
       setFlameData(data);
-      setFlameError("");
+      setActiveFlameType(foundType);
+      setFlameError(null);
     } catch (e) {
-      setFlameError(e instanceof Error ? e.message : "Failed to load flame graph");
+      setFlameError(ApiError.wrap(e));
     }
   };
 
   const loadFlameGraphWithType = async (type: string) => {
     if (!queryId) return;
+    setFlameData([]);
+    setActiveFlameType(type);
     try {
       const data = await fetchFlameGraph(queryId, type);
       setFlameData(data);
-      setFlameError("");
+      setFlameError(null);
     } catch (e) {
-      setFlameError(e instanceof Error ? e.message : "Failed to load flame graph");
+      setFlameError(ApiError.wrap(e));
     }
   };
 
+  useEffect(() => {
+    if (tab === "flamegraph" && queryId && flameData.length === 0) {
+      loadFlameGraph();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryId, tab]);
+
   if (loading && initialLoad) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <PageContainer>
         <div className="mb-2 flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
           <Link to="/queries" className="hover:text-[var(--color-accent)]">Queries</Link>
           <ChevronSep className="h-3 w-3" />
@@ -127,48 +148,51 @@ export function QueryDetail() {
           {Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}
         </div>
         <CardSkeleton />
-      </div>
+      </PageContainer>
     );
   }
 
   if (error || (!query && !loading)) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-12 text-center">
-        <p className="text-[var(--color-error)]">{error || "Query not found"}</p>
-      </div>
+      <PageContainer>
+        <ErrorState
+          error={error || "Query not found"}
+          onRetry={() => window.location.reload()}
+        />
+      </PageContainer>
     );
   }
 
   if (!query) {
-    return (
-      <div className="mx-auto max-w-7xl px-4 py-12 text-center">
-        <p className="text-[var(--color-text-secondary)]">Loading...</p>
-      </div>
-    );
+    return null;
   }
 
-  const metricData = computeMetricDeltas(metrics);
-  const topEvents = getTopProfileEvents(query.profile_events);
-
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+    <PageContainer>
       <div className="mb-2 flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
         <Link to="/queries" className="hover:text-[var(--color-accent)]">Queries</Link>
         <ChevronSep className="h-3 w-3" />
         <span className="font-mono">{query.query_id.slice(0, 16)}...</span>
       </div>
-      <div className="mb-6">
-        <h1 className="mb-2 text-xl font-bold">Query Detail</h1>
-        <div className="flex items-center gap-4 text-sm text-[var(--color-text-secondary)]">
-          <span className="font-mono">{query.query_id}</span>
-          <span>{formatTime(query.query_start_time)}</span>
-          <span>{query.user}</span>
-          <Link to={`/fingerprints/${query.normalized_query_hash}`} state={{ query: query.query }} className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]">
-            <Fingerprint className="h-3.5 w-3.5" />
-            Fingerprint
-          </Link>
-        </div>
-      </div>
+
+      <PageHeader
+        title="Query Detail"
+        description={
+          <span className="flex flex-wrap items-center gap-x-4 gap-y-1 font-normal">
+            <span className="font-mono">{query.query_id}</span>
+            <span>{formatTime(query.query_start_time)}</span>
+            <span>{query.user}</span>
+            <Link
+              to={`/fingerprints/${query.normalized_query_hash}`}
+              state={{ query: query.query }}
+              className="flex items-center gap-1 no-underline text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]"
+            >
+              <Fingerprint className="h-3.5 w-3.5" />
+              Fingerprint
+            </Link>
+          </span>
+        }
+      />
 
       <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-6">
         <MetricCard icon={<Clock className="h-4 w-4" />} label="Duration" value={formatDuration(query.query_duration_ms)} color={durationColor(query.query_duration_ms)} />
@@ -180,18 +204,34 @@ export function QueryDetail() {
       </div>
 
       {query.exception && (
-        <div className="mb-6 rounded-lg border border-[var(--color-error)] bg-[var(--color-error)]/10 p-4">
+        <div className="mb-6 rounded-lg border border-[var(--color-error)]/30 bg-[var(--state-error)] p-4">
           <p className="text-sm font-medium text-[var(--color-error)]">Exception (code {query.exception_code})</p>
           <p className="mt-1 font-mono text-xs text-[var(--color-error)] opacity-80">{query.exception}</p>
         </div>
       )}
 
-      <div className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
+      <div className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)] p-4">
         <div className="mb-2 flex items-center justify-between">
           <div className="text-xs font-medium text-[var(--color-text-secondary)]">Query</div>
-          <button onClick={() => copy(query.query, "Query copied!")} className="rounded p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]" title="Copy query">
-            <Copy className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => sendToEditor(navigate, query.query, { origin: "query-detail" })}
+              title="Open in Editor"
+            >
+              <Code className="h-3.5 w-3.5" />
+              <span className="ml-1 hidden sm:inline">Open in Editor</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => copy(query.query, "Query copied!")}
+              title="Copy query"
+            >
+              <Copy className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
         <CodeMirror
           value={query.query}
@@ -205,1322 +245,46 @@ export function QueryDetail() {
       </div>
 
       <div className="mb-4 flex gap-1 border-b border-[var(--color-border)]">
-        {(["overview", "memory", "threads", "storage", "flamegraph", "explain", "views", "settings"] as Tab[]).map((t) => (
+        {TABS.map((t) => (
           <button
-            key={t}
+            key={t.key}
             onClick={() => {
-              setTab(t);
-              if (t === "explain") loadExplain();
-              if (t === "flamegraph") loadFlameGraph();
+              setTab(t.key);
+              setSearchParams((prev) => {
+                if (t.key === "overview") prev.delete("tab");
+                else prev.set("tab", t.key);
+                return prev;
+              }, { replace: true });
+              if (t.key === "explain") loadExplain();
+              if (t.key === "flamegraph") loadFlameGraph();
             }}
-            className={`px-4 py-2 text-sm capitalize ${
-              tab === t
+            className={`px-4 py-2 text-sm capitalize transition-colors ${
+              tab === t.key
                 ? "border-b-2 border-[var(--color-accent)] text-[var(--color-accent)]"
-                  : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
             }`}
           >
-            {t}
+            {t.label}
           </button>
         ))}
       </div>
 
-      {tab === "overview" && (
-        <div className="space-y-6">
-          {metricData.length > 1 ? (
-            <>
-              <ChartSection title="Memory Usage Over Time">
-                <ResponsiveContainer width="100%" height={280}>
-                  <AreaChart data={metricData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                    <XAxis dataKey="time" tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" />
-                    <YAxis tickFormatter={(v: number) => formatBytes(v)} tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" width={80} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
-                      labelFormatter={labelFmt((l) => `Time: ${l}`)}
-                      formatter={tooltipFmt(formatBytes)}
-                    />
-                    <Area type="monotone" dataKey="memory" stroke="#3b82f6" fill="#3b82f680" name="Memory" />
-                    <Area type="monotone" dataKey="peak" stroke="#8b5cf6" fill="#8b5cf640" name="Peak" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </ChartSection>
-
-              <ChartSection title="CPU Time Over Time">
-                <ResponsiveContainer width="100%" height={280}>
-                  <AreaChart data={metricData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                    <XAxis dataKey="time" tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" />
-                    <YAxis tickFormatter={(v: number) => formatDuration(v / 1000)} tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" width={80} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
-                      labelFormatter={labelFmt((l) => `Time: ${l}`)}
-                      formatter={tooltipFmt((v) => formatDuration(v / 1000))}
-                    />
-                    <Area type="monotone" dataKey="userTime" stroke="#22c55e" fill="#22c55e40" name="User CPU" />
-                    <Area type="monotone" dataKey="systemTime" stroke="#f59e0b" fill="#f59e0b40" name="System CPU" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </ChartSection>
-
-              <ChartSection title="I/O Over Time">
-                <ResponsiveContainer width="100%" height={280}>
-                  <AreaChart data={metricData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                    <XAxis dataKey="time" tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" />
-                    <YAxis tickFormatter={(v: number) => formatBytes(v)} tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" width={80} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
-                      labelFormatter={labelFmt((l) => `Time: ${l}`)}
-                      formatter={tooltipFmt(formatBytes)}
-                    />
-                    <Area type="monotone" dataKey="readBytes" stroke="#3b82f6" fill="#3b82f640" name="Disk Read" />
-                    <Area type="monotone" dataKey="writeBytes" stroke="#ef4444" fill="#ef444440" name="Disk Write" />
-                    <Legend />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </ChartSection>
-
-              <ChartSection title="Network Over Time">
-                <ResponsiveContainer width="100%" height={280}>
-                  <LineChart data={metricData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                    <XAxis dataKey="time" tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" />
-                    <YAxis tickFormatter={(v: number) => formatBytes(v)} tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" width={80} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
-                      labelFormatter={labelFmt((l) => `Time: ${l}`)}
-                      formatter={tooltipFmt(formatBytes)}
-                    />
-                    <Line type="monotone" dataKey="netRecv" stroke="#22c55e" name="Received" dot={false} />
-                    <Line type="monotone" dataKey="netSend" stroke="#8b5cf6" name="Sent" dot={false} />
-                    <Legend />
-                  </LineChart>
-                </ResponsiveContainer>
-              </ChartSection>
-            </>
-          ) : (
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-8 text-center text-sm text-[var(--color-text-secondary)]">
-              No time-series metric data available for this query.
-              <br />
-              <span className="text-xs">This may be because query_metric_log is not enabled or the query was too fast to sample.</span>
-              <SettingHint settings={query.settings} settingKey="log_queries" label="log_queries" />
-            </div>
-          )}
-
-          {topEvents.length > 0 && (
-            <ChartSection title="Top Profile Events">
-              <div className="mb-2">
-                <input
-                  type="text"
-                  value={profileEventFilter}
-                  onChange={(e) => setProfileEventFilter(e.target.value)}
-                  placeholder="Filter events..."
-                  className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                />
-              </div>
-              <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]">
-                      <th className="px-4 py-2 text-left font-medium text-[var(--color-text-secondary)]">Event</th>
-                      <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Value</th>
-                      <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Category</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {topEvents
-                      .filter(([name]) => !profileEventFilter || name.toLowerCase().includes(profileEventFilter.toLowerCase()))
-                      .map(([name, value, cat]) => (
-                      <tr key={name} className="border-b border-[var(--color-border)] last:border-0">
-                        <td className="px-4 py-2 font-mono text-xs">{name}</td>
-                        <td className="px-4 py-2 text-right font-mono text-xs">{formatNumber(value)}</td>
-                        <td className="px-4 py-2 text-right text-xs text-[var(--color-text-secondary)]">{cat}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </ChartSection>
-          )}
-        </div>
-      )}
-
-      {tab === "threads" && (
-        <ThreadBreakdownTab queryId={query.query_id} threads={threads} pipelineStr={explain?.pipeline} querySettings={query.settings} />
-      )}
-
-      {tab === "memory" && (
-        <MemoryTab query={query} metrics={metrics} />
-      )}
-
-      {tab === "storage" && (
-        <StorageTab events={query.profile_events} />
-      )}
-
+      {tab === "overview" && <OverviewTab query={query} metrics={metrics} />}
+      {tab === "memory" && <MemoryTab query={query} metrics={metrics} />}
+      {tab === "threads" && <ThreadsTab queryId={query.query_id} threads={threads} pipelineStr={explain?.pipeline} querySettings={query.settings} />}
+      {tab === "storage" && <StorageTab events={query.profile_events} />}
       {tab === "flamegraph" && (
-        <ChartSection title="Flame Graph">
-          <div className="mb-3 flex gap-2">
-            {(["MemorySample", "Memory", "MemoryPeak"] as const).map((t) => (
-              <button
-                key={t}
-                onClick={() => { setFlameData([]); loadFlameGraphWithType(t); }}
-                className="rounded border border-[var(--color-border)] px-3 py-1 text-xs font-medium transition-colors hover:bg-[var(--color-bg-tertiary)]"
-              >
-                {t === "MemorySample" ? "Memory (Sampled)" : t === "Memory" ? "Memory (Alloc)" : "Memory (Peak)"}
-              </button>
-            ))}
-          </div>
-          {flameData.length === 0 ? (
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-6 text-center text-sm text-[var(--color-text-secondary)]">
-              {flameError && flameError.toLowerCase().includes("trace_log") ? (
-                <>
-                  <p className="font-medium text-[var(--color-warning)]">trace_log is not enabled on this ClickHouse server</p>
-                  <p className="mt-2 text-xs opacity-80">
-                    Add the following to your <code className="rounded bg-[var(--color-bg-primary)] px-1">config.xml</code>:
-                  </p>
-                  <pre className="mt-2 inline-block rounded bg-[var(--color-bg-primary)] px-3 py-2 text-left font-mono text-xs text-[var(--color-text-primary)]">
-{`<trace_log>
-    <database>system</database>
-    <table>trace_log</table>
-    <flush_interval_milliseconds>1000</flush_interval_milliseconds>
-</trace_log>`}
-                  </pre>
-                  <p className="mt-2 text-xs opacity-80">
-                    Then enable sampling profilers in the SQL Editor Settings panel (real_time_profiler, cpu_profiler).
-                  </p>
-                </>
-              ) : (
-                <>
-                  <p>No trace data available for this query.</p>
-                  <p className="mt-1 text-xs opacity-70">
-                    Trace data requires: (1) <code className="rounded bg-[var(--color-bg-primary)] px-1">trace_log</code> enabled in ClickHouse config, and (2) sampling profilers enabled at query time.
-                  </p>
-                  <SettingHint settings={query.settings} settingKey="query_profiler_real_time_period_ns" label="Real-time profiler" />
-                  <SettingHint settings={query.settings} settingKey="query_profiler_cpu_time_period_ns" label="CPU profiler" />
-                </>
-              )}
-            </div>
-          ) : (
-            <FlameGraph data={flameData} />
-          )}
-          <div className="mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-text-secondary)]">
-            <p className="font-medium text-[var(--color-text-primary)]">How to read this graph</p>
-            <ul className="mt-1 list-inside list-disc space-y-0.5 opacity-80">
-              <li>Each bar represents a function. Width shows relative time or memory (by sample count).</li>
-              <li>The stack grows upward: bottom is the entry point, top is the deepest nested call.</li>
-              <li>Hover over any bar to see the full function name and sample count.</li>
-              <li>Wider bars indicate functions consuming more resources. Narrow bars can be ignored.</li>
-              <li>Use the buttons above to switch between Memory (Sampled), Memory (Alloc), and Memory (Peak) views.</li>
-            </ul>
-            <p className="mt-2 font-medium text-[var(--color-text-primary)]">Requirements</p>
-            <ul className="mt-1 list-inside list-disc space-y-0.5 opacity-80">
-              <li><code className="rounded bg-[var(--color-bg-primary)] px-1">trace_log</code> must be enabled in ClickHouse <code className="rounded bg-[var(--color-bg-primary)] px-1">config.xml</code></li>
-              <li>Sampling profilers must be enabled at query time (Settings panel in SQL Editor)</li>
-              <li><code className="rounded bg-[var(--color-bg-primary)] px-1">allow_introspection_functions</code> must be enabled for symbol resolution</li>
-            </ul>
-          </div>
-        </ChartSection>
+        <FlamegraphTab
+          flameData={flameData}
+          flameError={flameError}
+          query={query}
+          onSelectType={loadFlameGraphWithType}
+          activeType={activeFlameType}
+        />
       )}
-
-      {tab === "explain" && (
-        <div className="space-y-4">
-          {explain ? (
-            <>
-              {explain.plan && (
-                <VisualExplain plan={explain.plan} />
-              )}
-              {["pipeline", "syntax"].map((type) => {
-                const content = explain[type as keyof ExplainResult];
-                if (!content) return null;
-                return (
-                  <div key={type} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-                    <div className="mb-2 text-xs font-medium capitalize text-[var(--color-text-secondary)]">
-                      {type === "pipeline" ? "Query Pipeline" : "Normalized Syntax"}
-                    </div>
-                    <pre className="max-h-96 overflow-auto whitespace-pre-wrap font-mono text-xs text-[var(--color-text-primary)]">
-                      {content}
-                    </pre>
-                  </div>
-                );
-              })}
-              <details className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
-                <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
-                  Raw EXPLAIN text
-                </summary>
-                <div className="p-4 pt-0">
-                  {["plan", "pipeline", "syntax"].map((type) => {
-                    const content = explain[type as keyof ExplainResult];
-                    if (!content) return null;
-                    return (
-                      <div key={type} className="mb-3">
-                        <div className="mb-1 text-xs font-medium capitalize text-[var(--color-text-secondary)]">
-                          {type === "plan" ? "Execution Plan" : type === "pipeline" ? "Query Pipeline" : "Normalized Syntax"}
-                        </div>
-                        <pre className="max-h-64 overflow-auto whitespace-pre-wrap font-mono text-xs text-[var(--color-text-primary)]">
-                          {content}
-                        </pre>
-                      </div>
-                    );
-                  })}
-                </div>
-              </details>
-            </>
-          ) : (
-            <div className="flex flex-col items-center gap-4 py-12">
-              <Play className="h-8 w-8 text-[var(--color-text-secondary)]" />
-              <p className="text-sm text-[var(--color-text-secondary)]">
-                Click "explain" tab to run EXPLAIN on this query
-              </p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab === "views" && (
-        <div className="space-y-4">
-          {views.length > 0 ? (
-            views.map((v, i) => (
-              <div key={i} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Eye className="h-4 w-4 text-[var(--color-accent)]" />
-                    <span className="font-medium">{v.view_name}</span>
-                    <span className="rounded bg-[var(--color-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-text-secondary)]">
-                      {v.view_type}
-                    </span>
-                  </div>
-                  <span className="text-sm text-[var(--color-text-secondary)]">{formatDuration(v.view_duration_ms)}</span>
-                </div>
-                <pre className="mb-2 max-h-24 overflow-auto font-mono text-xs text-[var(--color-text-secondary)]">{v.view_query}</pre>
-                <div className="flex gap-6 text-xs text-[var(--color-text-secondary)]">
-                  <span>Rows: {formatNumber(v.read_rows)} read / {formatNumber(v.written_rows)} written</span>
-                  <span>Memory: {formatBytes(v.peak_memory_usage)}</span>
-                  {v.exception && <span className="text-[var(--color-error)]">{v.exception}</span>}
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-8 text-center text-sm text-[var(--color-text-secondary)]">
-              No views were triggered by this query.
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab === "settings" && (
-        <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
-                <th className="px-4 py-2 text-left font-medium text-[var(--color-text-secondary)]">Setting</th>
-                <th className="px-4 py-2 text-left font-medium text-[var(--color-text-secondary)]">Value</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Object.entries(query.settings || {}).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => (
-                <tr key={k} className="border-b border-[var(--color-border)] last:border-0">
-                  <td className="px-4 py-2 font-mono text-xs">{k}</td>
-                  <td className="px-4 py-2 font-mono text-xs text-[var(--color-accent)]">{v}</td>
-                </tr>
-              ))}
-              {Object.keys(query.settings || {}).length === 0 && (
-                <tr>
-                  <td colSpan={2} className="px-4 py-6 text-center text-[var(--color-text-secondary)]">
-                    No settings recorded.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+      {tab === "explain" && <ExplainTab explain={explain} />}
+      {tab === "views" && <ViewsTab views={views} />}
+      {tab === "settings" && <SettingsTab settings={query.settings} />}
+    </PageContainer>
   );
-}
-
-function settingEnabled(settings: Record<string, string> | undefined, key: string): boolean {
-  if (!settings) return false;
-  const v = settings[key];
-  return v !== undefined && v !== "0";
-}
-
-function SettingHint({ settings, settingKey, label }: { settings: Record<string, string> | undefined; settingKey: string; label: string }) {
-  if (settingEnabled(settings, settingKey)) return null;
-  return (
-    <p className="mt-2 text-xs text-[var(--color-warning)]">
-      {label} was disabled for this query. Re-run with it enabled in the SQL Editor&apos;s Settings panel for richer data.
-    </p>
-  );
-}
-
-function StorageTab({ events }: { events: Record<string, number> }) {
-  const storageEvents = extractStorageEvents(events);
-
-  return (
-    <div className="space-y-6">
-      {storageEvents.diskIO.length > 0 && (
-        <ChartSection title="Disk I/O">
-          <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]">
-                  <th className="px-4 py-2 text-left font-medium text-[var(--color-text-secondary)]">Metric</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Read</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Write</th>
-                </tr>
-              </thead>
-              <tbody>
-                {storageEvents.diskIO.map((dio) => (
-                  <tr key={dio.label} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="px-4 py-2 text-xs font-medium">{dio.label}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">{dio.read > 0 ? dio.readFmt(dio.read) : "-"}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">{dio.write > 0 ? dio.writeFmt(dio.write) : "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </ChartSection>
-      )}
-
-      {storageEvents.compression.length > 0 && (
-        <ChartSection title="Compression">
-          <ResponsiveContainer width="100%" height={storageEvents.compression.length * 40 + 80}>
-            <BarChart data={storageEvents.compression} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-              <XAxis type="number" tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" tickFormatter={(v: number) => formatBytes(v)} />
-              <YAxis dataKey="name" type="category" width={160} tick={{ fontSize: 10 }} stroke="var(--color-text-secondary)" />
-              <Tooltip contentStyle={{ backgroundColor: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12, zIndex: 50 }} formatter={(v) => formatBytes(Number(v))} />
-              <Bar dataKey="compressed" fill="#3b82f6" name="Compressed" />
-              <Bar dataKey="uncompressed" fill="#60a5fa" name="Uncompressed" />
-              <Legend />
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartSection>
-      )}
-
-      {storageEvents.fileOps.length > 0 && (
-        <ChartSection title="File Operations">
-          <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]">
-                  <th className="px-4 py-2 text-left font-medium text-[var(--color-text-secondary)]">Metric</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {storageEvents.fileOps.map(([name, value]) => (
-                  <tr key={name} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="px-4 py-2 text-xs">{name}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">{formatNumber(value)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </ChartSection>
-      )}
-
-      {storageEvents.cache.length > 0 && (
-        <ChartSection title="Filesystem Cache">
-          <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]">
-                  <th className="px-4 py-2 text-left font-medium text-[var(--color-text-secondary)]">Metric</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {storageEvents.cache.map(([name, value]) => (
-                  <tr key={name} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="px-4 py-2 text-xs">{name}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">
-                      {name.toLowerCase().includes("bytes") ? formatBytes(value) :
-                       name.toLowerCase().includes("microseconds") ? formatDuration(value / 1000) :
-                       formatNumber(value)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </ChartSection>
-      )}
-
-      {storageEvents.remoteFs.length > 0 && (
-        <ChartSection title="Remote Filesystem / Prefetch">
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={storageEvents.remoteFs} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-              <XAxis type="number" tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" allowDecimals={false} />
-              <YAxis dataKey="name" type="category" width={180} tick={{ fontSize: 10 }} stroke="var(--color-text-secondary)" />
-              <Tooltip contentStyle={{ backgroundColor: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }} />
-              <Bar dataKey="value" fill="#3b82f6" />
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartSection>
-      )}
-
-      {storageEvents.apiOps.length > 0 && (
-        <ChartSection title="API Operations">
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={storageEvents.apiOps}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-              <XAxis dataKey="name" tick={{ fontSize: 10 }} stroke="var(--color-text-secondary)" interval={0} angle={-30} textAnchor="end" height={80} />
-              <YAxis tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" allowDecimals={false} />
-              <Tooltip contentStyle={{ backgroundColor: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }} />
-              <Bar dataKey="s3" fill="#3b82f6" name="S3" />
-              <Bar dataKey="diskS3" fill="#60a5fa" name="DiskS3" />
-              <Bar dataKey="azure" fill="#f59e0b" name="Azure" />
-              <Bar dataKey="diskAzure" fill="#fbbf24" name="DiskAzure" />
-              <Legend />
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartSection>
-      )}
-
-      {storageEvents.readWrite.length > 0 && (
-        <ChartSection title="Remote Storage Read/Write">
-          <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]">
-                  <th className="px-4 py-2 text-left font-medium text-[var(--color-text-secondary)]">Metric</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Requests</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Time</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Errors</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Throttled</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Retries</th>
-                </tr>
-              </thead>
-              <tbody>
-                {storageEvents.readWrite.map((rw) => (
-                  <tr key={rw.label} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="px-4 py-2 text-xs font-medium">{rw.label}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">{formatNumber(rw.count)}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">{rw.timeUs > 0 ? formatDuration(rw.timeUs / 1000) : "-"}</td>
-                    <td className={`px-4 py-2 text-right font-mono text-xs ${rw.errors > 0 ? "text-[var(--color-error)]" : ""}`}>
-                      {rw.errors > 0 ? rw.errors : "-"}
-                    </td>
-                    <td className={`px-4 py-2 text-right font-mono text-xs ${rw.throttled > 0 ? "text-[var(--color-warning)]" : ""}`}>
-                      {rw.throttled > 0 ? rw.throttled : "-"}
-                    </td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">{rw.retries > 0 ? rw.retries : "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </ChartSection>
-      )}
-
-      {storageEvents.throughput.length > 0 && (
-        <ChartSection title="Remote Storage Throughput">
-          <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]">
-                  <th className="px-4 py-2 text-left font-medium text-[var(--color-text-secondary)]">Source</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Bytes Read</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Bytes Written</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Read Time</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Write Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {storageEvents.throughput.map((tp) => (
-                  <tr key={tp.label} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="px-4 py-2 text-xs font-medium">{tp.label}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">{tp.readBytes > 0 ? formatBytes(tp.readBytes) : "-"}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">{tp.writeBytes > 0 ? formatBytes(tp.writeBytes) : "-"}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">{tp.readTimeUs > 0 ? formatDuration(tp.readTimeUs / 1000) : "-"}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">{tp.writeTimeUs > 0 ? formatDuration(tp.writeTimeUs / 1000) : "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </ChartSection>
-      )}
-
-      {storageEvents.throttlers.length > 0 && (
-        <ChartSection title="Throttling">
-          <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]">
-                  <th className="px-4 py-2 text-left font-medium text-[var(--color-text-secondary)]">Throttler</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Passed</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Blocked</th>
-                  <th className="px-4 py-2 text-right font-medium text-[var(--color-text-secondary)]">Sleep Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {storageEvents.throttlers.map((th) => (
-                  <tr key={th.label} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="px-4 py-2 text-xs font-medium">{th.label}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">{formatNumber(th.count)}</td>
-                    <td className={`px-4 py-2 text-right font-mono text-xs ${th.blocked > 0 ? "text-[var(--color-warning)]" : ""}`}>
-                      {th.blocked}
-                    </td>
-                    <td className="px-4 py-2 text-right font-mono text-xs">
-                      {th.sleepUs > 0 ? formatDuration(th.sleepUs / 1000) : "-"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </ChartSection>
-      )}
-
-      {!storageEvents.diskIO.length && !storageEvents.compression.length && !storageEvents.fileOps.length &&
-       !storageEvents.cache.length && !storageEvents.remoteFs.length && !storageEvents.apiOps.length && (
-        <div className="flex flex-col items-center gap-4 py-16">
-          <Cloud className="h-10 w-10 text-[var(--color-text-secondary)]" />
-          <p className="text-sm text-[var(--color-text-secondary)]">No storage I/O data available for this query.</p>
-          <p className="max-w-md text-center text-xs text-[var(--color-text-secondary)]">
-            This tab shows disk I/O, compression, filesystem cache, and remote storage metrics.
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-interface StorageReadWrite {
-  label: string;
-  count: number;
-  timeUs: number;
-  errors: number;
-  throttled: number;
-  retries: number;
-}
-
-interface StorageThroughput {
-  label: string;
-  readBytes: number;
-  writeBytes: number;
-  readTimeUs: number;
-  writeTimeUs: number;
-}
-
-interface StorageThrottler {
-  label: string;
-  count: number;
-  blocked: number;
-  sleepUs: number;
-}
-
-interface StorageDiskIO {
-  label: string;
-  read: number;
-  write: number;
-  readFmt: (v: number) => string;
-  writeFmt: (v: number) => string;
-}
-
-interface StorageCompression {
-  name: string;
-  compressed: number;
-  uncompressed: number;
-}
-
-interface StorageExtracted {
-  diskIO: StorageDiskIO[];
-  compression: StorageCompression[];
-  fileOps: [string, number][];
-  cache: [string, number][];
-  remoteFs: { name: string; value: number }[];
-  apiOps: { name: string; s3: number; diskS3: number; azure: number; diskAzure: number }[];
-  readWrite: StorageReadWrite[];
-  throughput: StorageThroughput[];
-  throttlers: StorageThrottler[];
-}
-
-const S3_API_OPS = [
-  "GetObject", "PutObject", "DeleteObjects", "ListObjects", "HeadObject",
-  "CopyObject", "GetObjectTagging", "CreateMultipartUpload", "UploadPart",
-  "UploadPartCopy", "CompleteMultipartUpload", "AbortMultipartUpload",
-];
-
-const AZURE_API_OPS = [
-  "GetObject", "Upload", "StageBlock", "CommitBlockList", "CopyObject",
-  "DeleteObjects", "ListObjects", "GetProperties", "CreateContainer",
-];
-
-function getVal(events: Record<string, number>, key: string): number {
-  return events[key] || 0;
-}
-
-function extractStorageEvents(events: Record<string, number>): StorageExtracted {
-  const diskIO: StorageDiskIO[] = [];
-  const diskIORows: [string, string, string, string, (v: number) => string, (v: number) => string][] = [
-    ["Elapsed", "Elapsed Time", "DiskReadElapsedMicroseconds", "DiskWriteElapsedMicroseconds", (v: number) => formatDuration(v / 1000), (v: number) => formatDuration(v / 1000)],
-    ["Bytes", "Bytes", "DiskReadBytes", "DiskWriteBytes", formatBytes, formatBytes],
-  ];
-  for (const [, label, readKey, writeKey, readFmt, writeFmt] of diskIORows) {
-    const read = getVal(events, readKey);
-    const write = getVal(events, writeKey);
-    if (read > 0 || write > 0) {
-      diskIO.push({ label, read, write, readFmt, writeFmt });
-    }
-  }
-
-  const compression: StorageCompression[] = [];
-  const compressionPairs: [string, string, string][] = [
-    ["ReadCompressedBytes", "Read (Compressed/Uncompressed)", "UncompressedReadBufferBytes"],
-    ["WriteCompressedBytes", "Write (Compressed/Uncompressed)", "UncompressedWriteBufferBytes"],
-  ];
-  for (const [compKey, name, uncompKey] of compressionPairs) {
-    const compressed = getVal(events, compKey);
-    const uncompressed = getVal(events, uncompKey);
-    if (compressed > 0 || uncompressed > 0) {
-      compression.push({ name, compressed, uncompressed });
-    }
-  }
-
-  const fileOpsKeys = [
-    "FileOpen", "FileOpenFailed", "SeekCount", "ReadCompressedBytes",
-    "CreatedReadBufferOrdinary", "CreatedReadBufferDirectIO", "CreatedReadBufferMMap",
-    "CreatedWriteBufferOrdinary", "CreatedWriteBufferDirectIO",
-    "IOBufferAllocBytes", "IOBufferAllocs",
-    "ArenaAllocBytes", "ArenaAllocChunks",
-    "MMappedFileCacheHits", "MMappedFileCacheMisses",
-  ];
-  const fileOps = fileOpsKeys
-    .map((k) => [k, getVal(events, k)] as [string, number])
-    .filter(([, v]) => v > 0);
-
-  const apiOpsMap = new Map<string, { s3: number; diskS3: number; azure: number; diskAzure: number }>();
-
-  for (const op of S3_API_OPS) {
-    const s3 = getVal(events, `S3${op}`);
-    const diskS3 = getVal(events, `DiskS3${op}`);
-    if (s3 > 0 || diskS3 > 0) apiOpsMap.set(op, { ...(apiOpsMap.get(op) || { s3: 0, diskS3: 0, azure: 0, diskAzure: 0 }), s3, diskS3 });
-  }
-  for (const op of AZURE_API_OPS) {
-    const azure = getVal(events, `Azure${op}`);
-    const diskAzure = getVal(events, `DiskAzure${op}`);
-    if (azure > 0 || diskAzure > 0) apiOpsMap.set(op, { ...(apiOpsMap.get(op) || { s3: 0, diskS3: 0, azure: 0, diskAzure: 0 }), azure, diskAzure });
-  }
-
-  const apiOps = Array.from(apiOpsMap.entries())
-    .map(([name, vals]) => ({ name, ...vals }))
-    .filter((r) => r.s3 + r.diskS3 + r.azure + r.diskAzure > 0);
-
-  const readWrite: StorageReadWrite[] = [];
-  for (const [prefix, label] of [["S3", "S3"], ["DiskS3", "DiskS3"], ["Azure", "Azure"], ["DiskAzure", "DiskAzure"]] as [string, string][]) {
-    const rc = getVal(events, `${prefix}ReadRequestsCount`);
-    const wc = getVal(events, `${prefix}WriteRequestsCount`);
-    if (rc > 0 || wc > 0) {
-      readWrite.push({
-        label,
-        count: rc + wc,
-        timeUs: getVal(events, `${prefix}ReadMicroseconds`) + getVal(events, `${prefix}WriteMicroseconds`),
-        errors: getVal(events, `${prefix}ReadRequestsErrors`) + getVal(events, `${prefix}WriteRequestsErrors`),
-        throttled: getVal(events, `${prefix}ReadRequestsThrottling`) + getVal(events, `${prefix}WriteRequestsThrottling`),
-        retries: getVal(events, `${prefix}ReadRequestRetryableErrors`) + getVal(events, `${prefix}WriteRequestRetryableErrors`),
-      });
-    }
-  }
-
-  const throughput: StorageThroughput[] = [];
-  for (const [prefix, label] of [["S3", "S3"], ["Azure", "Azure"]] as [string, string][]) {
-    const rb = getVal(events, `ReadBufferFrom${prefix}Bytes`);
-    const wb = getVal(events, `WriteBufferFrom${prefix}Bytes`);
-    const rt = getVal(events, `ReadBufferFrom${prefix}Microseconds`);
-    const wt = getVal(events, `WriteBufferFrom${prefix}Microseconds`);
-    if (rb > 0 || wb > 0 || rt > 0 || wt > 0) {
-      throughput.push({ label, readBytes: rb, writeBytes: wb, readTimeUs: rt, writeTimeUs: wt });
-    }
-  }
-
-  const throttlers: StorageThrottler[] = [];
-  for (const [prefix, label] of [
-    ["S3GetRequest", "S3 GET"], ["S3PutRequest", "S3 PUT"],
-    ["DiskS3GetRequest", "DiskS3 GET"], ["DiskS3PutRequest", "DiskS3 PUT"],
-    ["AzureGetRequest", "Azure GET"], ["AzurePutRequest", "Azure PUT"],
-    ["DiskAzureGetRequest", "DiskAzure GET"], ["DiskAzurePutRequest", "DiskAzure PUT"],
-    ["RemoteRead", "Remote Read"], ["RemoteWrite", "Remote Write"],
-    ["QueryRemoteRead", "Query Remote Read"], ["QueryRemoteWrite", "Query Remote Write"],
-  ] as [string, string][]) {
-    const count = getVal(events, `${prefix}ThrottlerCount`);
-    const blocked = getVal(events, `${prefix}ThrottlerBlocked`);
-    const sleepUs = getVal(events, `${prefix}ThrottlerSleepMicroseconds`);
-    if (count > 0 || blocked > 0 || sleepUs > 0) {
-      throttlers.push({ label, count, blocked, sleepUs });
-    }
-  }
-
-  const remoteFsKeys = [
-    "RemoteFSSeeks", "RemoteFSPrefetches", "RemoteFSCancelledPrefetches",
-    "RemoteFSUnusedPrefetches", "RemoteFSPrefetchedReads", "RemoteFSPrefetchedBytes",
-    "RemoteFSUnprefetchedReads", "RemoteFSUnprefetchedBytes", "RemoteFSLazySeeks",
-    "RemoteFSSeeksWithReset", "RemoteFSBuffers",
-  ];
-  const remoteFs = remoteFsKeys
-    .map((k) => ({ name: k.replace("RemoteFS", ""), value: getVal(events, k) }))
-    .filter((r) => r.value > 0);
-
-  const cacheKeys = [
-    "CachedReadBufferReadFromCacheHits", "CachedReadBufferReadFromCacheMisses",
-    "CachedReadBufferReadFromSourceMicroseconds", "CachedReadBufferReadFromCacheMicroseconds",
-    "CachedReadBufferReadFromSourceBytes", "CachedReadBufferReadFromCacheBytes",
-    "CachedReadBufferCacheWriteBytes", "CachedReadBufferCacheWriteMicroseconds",
-    "CachedWriteBufferCacheWriteBytes", "CachedWriteBufferCacheWriteMicroseconds",
-  ];
-  const cache = cacheKeys
-    .map((k) => [k, getVal(events, k)] as [string, number])
-    .filter(([, v]) => v > 0);
-
-  return { diskIO, compression, fileOps, cache, remoteFs, apiOps, readWrite, throughput, throttlers };
-}
-
-function parsePipeline(pipelineStr: string): { name: string; count: number }[] {
-  const steps: { name: string; count: number }[] = [];
-  const seen = new Set<string>();
-  for (const line of pipelineStr.split("\n")) {
-    const trimmed = line.replace(/[()×→\d\s]+/g, " ").trim();
-    const match = trimmed.match(/^(?:\((\w+)\)\s*)?(\w+)(?:\s.*×(\d+))?/);
-    if (!match) continue;
-    const stepName = match[1] || match[2];
-    const count = match[3] ? parseInt(match[3]) : 1;
-    const key = stepName;
-    if (!seen.has(key)) {
-      seen.add(key);
-      steps.push({ name: stepName, count });
-    }
-  }
-  return steps;
-}
-
-const KEY_PROFILE_EVENTS: [string, string, (v: number) => string][] = [
-  ["SelectedRows", "Rows Selected", (v) => formatNumber(v)],
-  ["RowsReadByMainReader", "Rows Read (Main)", (v) => formatNumber(v)],
-  ["FilterTransformPassedRows", "Rows Passed Filter", (v) => formatNumber(v)],
-  ["ReadCompressedBytes", "Compressed Read", (v) => formatBytes(v)],
-  ["CompressedReadBufferBytes", "Decompressed Bytes", (v) => formatBytes(v)],
-  ["DiskReadElapsedMicroseconds", "Disk Read Time", (v) => formatDuration(v / 1000)],
-  ["SynchronousReadWaitMicroseconds", "Sync Read Wait", (v) => formatDuration(v / 1000)],
-  ["IOBufferAllocBytes", "I/O Buffer Alloc", (v) => formatBytes(v)],
-  ["ArenaAllocBytes", "Arena Alloc", (v) => formatBytes(v)],
-  ["UserTimeMicroseconds", "User CPU Time", (v) => formatDuration(v / 1000)],
-  ["SystemTimeMicroseconds", "System CPU Time", (v) => formatDuration(v / 1000)],
-  ["RealTimeMicroseconds", "Wall Clock Time", (v) => formatDuration(v / 1000)],
-  ["OSCPUWaitMicroseconds", "CPU Wait", (v) => formatDuration(v / 1000)],
-  ["NetworkSendBytes", "Network Sent", (v) => formatBytes(v)],
-  ["MarkCacheHits", "Mark Cache Hits", (v) => formatNumber(v)],
-  ["MarkCacheMisses", "Mark Cache Misses", (v) => formatNumber(v)],
-  ["CreatedReadBufferOrdinary", "Read Buffers Created", (v) => v.toString()],
-  ["FileOpen", "Files Opened", (v) => v.toString()],
-  ["QueryPlanOptimizeMicroseconds", "Plan Optimization", (v) => formatDuration(v / 1000)],
-];
-
-function ThreadDetailPanel({ profile, loading, error, showAllEvents, onToggleEvents }: {
-  profile: ThreadProfile | null;
-  loading: boolean;
-  error: string;
-  showAllEvents: boolean;
-  onToggleEvents: () => void;
-}) {
-  if (loading) {
-    return <div className="bg-[var(--color-bg-tertiary)] px-6 py-4 text-xs text-[var(--color-text-secondary)]">Loading thread profile...</div>;
-  }
-  if (!profile) {
-    return <div className="bg-[var(--color-bg-tertiary)] px-6 py-4 text-xs text-[var(--color-error)]">{error || "Failed to load thread profile."}</div>;
-  }
-
-  const selectivity = profile.profile_events["SelectedRows"] > 0 && profile.profile_events["FilterTransformPassedRows"] > 0
-    ? ((profile.profile_events["FilterTransformPassedRows"] / profile.profile_events["SelectedRows"]) * 100).toFixed(1)
-    : null;
-
-  return (
-    <div className="space-y-4 bg-[var(--color-bg-tertiary)] px-6 py-4">
-      <div className="grid grid-cols-4 gap-3">
-        <div className="rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-          <div className="text-[10px] text-[var(--color-text-secondary)]">Peak Memory</div>
-          <div className="text-sm font-bold">{formatBytes(profile.peak_memory_usage)}</div>
-        </div>
-        <div className="rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-          <div className="text-[10px] text-[var(--color-text-secondary)]">Read</div>
-          <div className="text-sm font-bold">{formatNumber(profile.read_rows)} rows</div>
-          <div className="text-[10px] text-[var(--color-text-secondary)]">{formatBytes(profile.read_bytes)}</div>
-        </div>
-        <div className="rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-          <div className="text-[10px] text-[var(--color-text-secondary)]">CPU User / Sys</div>
-          <div className="text-sm font-bold">
-            {formatDuration((profile.profile_events["UserTimeMicroseconds"] || 0) / 1000)} / {formatDuration((profile.profile_events["SystemTimeMicroseconds"] || 0) / 1000)}
-          </div>
-        </div>
-        <div className="rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-          <div className="text-[10px] text-[var(--color-text-secondary)]">Wall Clock</div>
-          <div className="text-sm font-bold">{formatDuration(profile.duration_ms)}</div>
-        </div>
-      </div>
-
-      {selectivity !== null && (
-        <div className="rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-          <div className="text-[10px] text-[var(--color-text-secondary)]">Filter Selectivity</div>
-          <div className="flex items-center gap-3">
-            <div className="text-sm font-bold">{selectivity}% passed</div>
-            <div className="flex-1">
-              <div className="h-2 rounded-full bg-[var(--color-bg-tertiary)]">
-                <div className="h-2 rounded-full bg-green-500" style={{ width: `${selectivity}%` }} />
-              </div>
-            </div>
-            <div className="text-[10px] text-[var(--color-text-secondary)]">
-              {formatNumber(profile.profile_events["FilterTransformPassedRows"])} / {formatNumber(profile.profile_events["SelectedRows"])} rows
-            </div>
-          </div>
-        </div>
-      )}
-
-      {profile.top_functions.length > 0 && (
-        <div>
-          <div className="mb-2 text-[10px] font-medium text-[var(--color-text-secondary)]">
-            Top Functions ({formatNumber(profile.total_samples)} trace samples)
-          </div>
-          <div className="max-h-48 overflow-auto rounded border border-[var(--color-border)]">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
-                  <th className="px-3 py-1.5 text-left text-[10px] font-medium text-[var(--color-text-secondary)]">%</th>
-                  <th className="px-3 py-1.5 text-left text-[10px] font-medium text-[var(--color-text-secondary)]">Samples</th>
-                  <th className="px-3 py-1.5 text-left text-[10px] font-medium text-[var(--color-text-secondary)]">Function</th>
-                </tr>
-              </thead>
-              <tbody>
-                {profile.top_functions.map((f, i) => (
-                  <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="px-3 py-1 font-mono">
-                      <div className="flex items-center gap-2">
-                        <div className="w-12 rounded bg-[var(--color-bg-secondary)]">
-                          <div className="h-1.5 rounded bg-purple-500" style={{ width: `${Math.min(f.percent, 100)}%` }} />
-                        </div>
-                        <span className="text-[var(--color-text-secondary)]">{f.percent.toFixed(1)}%</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-1 font-mono text-[var(--color-text-secondary)]">{formatNumber(f.samples)}</td>
-                    <td className="px-3 py-1 font-mono">{f.name}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      <div>
-        <button onClick={onToggleEvents} className="flex items-center gap-1 text-[10px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
-          {showAllEvents ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          All Profile Events ({Object.keys(profile.profile_events).length})
-        </button>
-        {showAllEvents && (
-          <div className="mt-2 grid grid-cols-3 gap-x-6 gap-y-0.5">
-            {Object.entries(profile.profile_events)
-              .sort((a, b) => b[1] - a[1])
-              .map(([k, v]) => (
-                <div key={k} className="flex justify-between text-[10px]">
-                  <span className="text-[var(--color-text-secondary)]">{k}</span>
-                  <span className="font-mono">{formatNumber(v)}</span>
-                </div>
-              ))}
-          </div>
-        )}
-      </div>
-
-      <div>
-        <div className="mb-1 text-[10px] font-medium text-[var(--color-text-secondary)]">Key Metrics</div>
-        <div className="grid grid-cols-3 gap-x-6 gap-y-1">
-          {KEY_PROFILE_EVENTS.map(([key, label, fmt]) => {
-            const val = profile.profile_events[key];
-            if (!val) return null;
-            return (
-              <div key={key} className="flex justify-between text-[10px]">
-                <span className="text-[var(--color-text-secondary)]">{label}</span>
-                <span className="font-mono">{fmt(val)}</span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ThreadBreakdownTab({ queryId, threads, pipelineStr, querySettings }: { queryId: string; threads: ThreadEntry[]; pipelineStr?: string; querySettings?: Record<string, string> }) {
-  const [threadSummaries, setThreadSummaries] = useState<ThreadSummary[]>([]);
-  const [selectedThread, setSelectedThread] = useState<number | null>(null);
-  const [threadProfile, setThreadProfile] = useState<ThreadProfile | null>(null);
-  const [profileLoading, setProfileLoading] = useState(false);
-  const [profileError, setProfileError] = useState("");
-  const [showAllEvents, setShowAllEvents] = useState(false);
-
-  useEffect(() => {
-    if (threads.length === 0) return;
-    fetchThreadSummaries(queryId).then(setThreadSummaries).catch(() => {});
-  }, [threads.length, queryId]);
-
-  useEffect(() => {
-    if (selectedThread === null) { setThreadProfile(null); setProfileError(""); return; }
-    setProfileLoading(true);
-    setProfileError("");
-    fetchThreadProfile(queryId, selectedThread)
-      .then((p) => { setThreadProfile(p); setProfileError(""); })
-      .catch((e) => { setThreadProfile(null); setProfileError(e instanceof Error ? e.message : "Failed to load thread profile"); })
-      .finally(() => setProfileLoading(false));
-  }, [selectedThread, queryId]);
-
-  const pipelineSteps = pipelineStr ? parsePipeline(pipelineStr) : [];
-
-  const roleColor = (role: string) => {
-    switch (role) {
-      case "Coordinator": return "bg-[var(--color-accent)]/10 text-[var(--color-accent)]";
-      case "Scan + Filter": return "bg-[var(--color-success)]/10 text-[var(--color-success)]";
-      case "Table Scanner": return "bg-[var(--color-success)]/10 text-[var(--color-success)]";
-      case "Reader": return "bg-[var(--color-success)]/10 text-[var(--color-success)]";
-      case "Aggregator": return "bg-purple-500/10 text-purple-400";
-      case "Filter": return "bg-[var(--color-warning)]/10 text-[var(--color-warning)]";
-      case "I/O Pool": return "bg-[var(--color-warning)]/10 text-[var(--color-warning)]";
-      case "Pipeline Manager": return "bg-[var(--color-accent)]/10 text-[var(--color-accent)]";
-      default: return "bg-[var(--color-text-secondary)]/10 text-[var(--color-text-secondary)]";
-    }
-  };
-
-  if (threadSummaries.length === 0) {
-    return (
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-8 text-center text-sm text-[var(--color-text-secondary)]">
-        No thread data available for this query.
-        <SettingHint settings={querySettings} settingKey="log_query_threads" label="log_query_threads" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-6">
-      {pipelineSteps.length > 0 && (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-          <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">Execution Pipeline</div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {pipelineSteps.map((step, i) => (
-              <div key={i} className="flex items-center gap-1.5">
-                <span className="inline-flex items-center gap-1 rounded-md bg-[var(--color-bg-tertiary)] px-2 py-1 text-xs font-mono">
-                  {step.name}
-                  {step.count > 1 && <span className="text-[var(--color-text-secondary)]">x{step.count}</span>}
-                </span>
-                {i < pipelineSteps.length - 1 && <span className="text-[var(--color-text-secondary)]">&rarr;</span>}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <ChartSection title="Thread Breakdown">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[var(--color-border)]">
-                <th className="px-3 py-2 text-left text-xs font-medium text-[var(--color-text-secondary)]">Thread</th>
-                <th className="px-3 py-2 text-left text-xs font-medium text-[var(--color-text-secondary)]">Role</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-[var(--color-text-secondary)]">Peak Mem</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-[var(--color-text-secondary)]">Read Rows</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-[var(--color-text-secondary)]">Read Bytes</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-[var(--color-text-secondary)]">CPU Time</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-[var(--color-text-secondary)]">I/O Wait</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-[var(--color-text-secondary)]">Duration</th>
-                <th className="px-3 py-2 text-right text-xs font-medium text-[var(--color-text-secondary)]">Filter</th>
-              </tr>
-            </thead>
-            <tbody>
-              {threadSummaries.map((t) => {
-                const isSelected = selectedThread === t.thread_id;
-                const cpuUs = (t.user_time_us || 0) + (t.system_time_us || 0);
-                const selectivity = t.filter_total_rows > 0
-                  ? `${((t.filter_passed_rows / t.filter_total_rows) * 100).toFixed(0)}%`
-                  : "-";
-                return (
-                  <>
-                    <tr
-                      key={t.thread_id}
-                      onClick={() => setSelectedThread(isSelected ? null : t.thread_id)}
-                      className="cursor-pointer border-b border-[var(--color-border)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
-                    >
-                      <td className="px-3 py-2 text-xs font-mono">
-                        <span className="inline-flex items-center gap-1">
-                          {isSelected ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                          #{t.thread_id} {t.thread_name}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-xs">
-                        <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${roleColor(t.role)}`}>{t.role}</span>
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono text-xs">{formatBytes(t.peak_memory_usage)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-xs">{t.read_rows > 0 ? formatNumber(t.read_rows) : "-"}</td>
-                      <td className="px-3 py-2 text-right font-mono text-xs">{t.read_bytes > 0 ? formatBytes(t.read_bytes) : "-"}</td>
-                      <td className="px-3 py-2 text-right font-mono text-xs">{cpuUs > 0 ? formatDuration(cpuUs / 1000) : "-"}</td>
-                      <td className="px-3 py-2 text-right font-mono text-xs">{t.disk_read_us > 0 ? formatDuration(t.disk_read_us / 1000) : "-"}</td>
-                      <td className="px-3 py-2 text-right font-mono text-xs">{formatDuration(t.query_duration_ms)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-xs text-[var(--color-text-secondary)]">{selectivity}</td>
-                    </tr>
-                    {isSelected && (
-                      <tr key={`${t.thread_id}-detail`}>
-                        <td colSpan={9} className="border-b border-[var(--color-border)] p-0">
-                          <ThreadDetailPanel profile={threadProfile} loading={profileLoading} error={profileError} showAllEvents={showAllEvents} onToggleEvents={() => setShowAllEvents(!showAllEvents)} />
-                        </td>
-                      </tr>
-                    )}
-                  </>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </ChartSection>
-    </div>
-  );
-}
-
-function MemoryTab({ query, metrics }: { query: QueryLogEntry; metrics: MetricPoint[] }) {
-  const memCategories = extractMemoryCategories(query.profile_events);
-
-  const memOverTime = metrics.length > 1
-    ? metrics.map((m) => ({
-        time: new Date(m.event_time).toLocaleTimeString(),
-        memory: m.memory_usage,
-        peak: m.peak_memory_usage,
-      }))
-    : [];
-
-  const PIE_COLORS = ["#3b82f6", "#8b5cf6", "#ef4444", "#f59e0b", "#22c55e", "#06b6d4", "#ec4899", "#f97316"];
-
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-3 gap-4">
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-          <div className="mb-1 text-xs text-[var(--color-text-secondary)]">Peak Memory Usage</div>
-          <div className={`text-2xl font-bold ${memoryColor(query.memory_usage)}`}>
-            {formatBytes(query.memory_usage)}
-          </div>
-        </div>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-          <div className="mb-1 text-xs text-[var(--color-text-secondary)]">Data Read into Memory</div>
-          <div className="text-2xl font-bold text-[var(--color-text-primary)]">
-            {formatBytes(query.read_bytes)}
-          </div>
-          <div className="mt-1 text-xs text-[var(--color-text-secondary)]">
-            {formatNumber(query.read_rows)} rows
-          </div>
-        </div>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-          <div className="mb-1 text-xs text-[var(--color-text-secondary)]">Memory Profile</div>
-          <div className="text-sm text-[var(--color-text-primary)]">
-            {memCategories.length > 0 ? `${memCategories.length} categories` : "No categories"}
-          </div>
-        </div>
-      </div>
-
-      {memOverTime.length > 1 && (
-        <ChartSection title="Memory Usage Over Time">
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={memOverTime}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-              <XAxis dataKey="time" tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" />
-              <YAxis tickFormatter={(v: number) => formatBytes(v)} tick={{ fontSize: 11 }} stroke="var(--color-text-secondary)" width={80} />
-              <Tooltip
-                contentStyle={{ backgroundColor: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
-                formatter={tooltipFmt(formatBytes)}
-              />
-              <Area type="monotone" dataKey="memory" stroke="#3b82f6" fill="#3b82f680" name="Current" />
-              <Area type="monotone" dataKey="peak" stroke="#8b5cf6" fill="#8b5cf640" name="Peak" />
-              <Legend />
-            </AreaChart>
-          </ResponsiveContainer>
-        </ChartSection>
-      )}
-
-      {memCategories.length > 0 && (
-        <ChartSection title="Memory by Category">
-          <div className="flex gap-6">
-            <div className="w-64 shrink-0">
-              <ResponsiveContainer width="100%" height={250}>
-                <PieChart>
-                  <Pie
-                    data={memCategories}
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={100}
-                    label={({ name, percent }: { name?: string; percent?: number }) =>
-                      `${name || ""} ${((percent || 0) * 100).toFixed(0)}%`
-                    }
-                    labelLine={false}
-                  >
-                    {memCategories.map((_, i) => (
-                      <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 }}
-                    formatter={tooltipFmt(formatBytes)}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex-1 overflow-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-[var(--color-border)]">
-                    <th className="px-3 py-2 text-left text-xs font-medium text-[var(--color-text-secondary)]">Category</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-[var(--color-text-secondary)]">Bytes</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-[var(--color-text-secondary)]">Events</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {memCategories.map((c, i) => (
-                    <tr key={c.name} className="border-b border-[var(--color-border)] last:border-0">
-                      <td className="flex items-center gap-2 px-3 py-1.5 text-xs">
-                        <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
-                        {c.name}
-                      </td>
-                      <td className="px-3 py-1.5 text-right font-mono text-xs">{formatBytes(c.value)}</td>
-                      <td className="px-3 py-1.5 text-right font-mono text-xs text-[var(--color-text-secondary)]">{formatNumber(c.count)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </ChartSection>
-      )}
-
-      {memCategories.length === 0 && memOverTime.length === 0 && (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-8 text-center text-sm text-[var(--color-text-secondary)]">
-          No detailed memory data available.
-          <br />
-          <span className="text-xs">
-            Requires <code className="rounded bg-[var(--color-bg-primary)] px-1">query_metric_log</code> enabled in ClickHouse config
-            and <code className="rounded bg-[var(--color-bg-primary)] px-1">log_queries</code> enabled at query time.
-          </span>
-          <SettingHint settings={query.settings} settingKey="log_queries" label="log_queries" />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function extractMemoryCategories(events: Record<string, number>): { name: string; value: number; count: number }[] {
-  const categoryMap = new Map<string, { value: number; count: number }>();
-
-  const memEvents: [string, string][] = [
-    ["ArenaAllocBytes", "Arena"],
-    ["ArenaAllocCount", "Arena"],
-    ["CacheBytesReadFromFilesystem", "Filesystem Cache"],
-    ["CacheBytesWriteToFilesystem", "Filesystem Cache"],
-    ["CachedReadBufferCacheWriteBytes", "Cache Writes"],
-    ["MarkCacheHits", "Mark Cache"],
-    ["MarkCacheMisses", "Mark Cache"],
-    ["PrimaryKeyCacheHits", "PK Cache"],
-    ["PrimaryKeyCacheMisses", "PK Cache"],
-    ["CompressedReadBufferBytes", "Compressed Reads"],
-    ["UncompressedReadBufferBytes", "Uncompressed Reads"],
-    ["ReadBufferFromS3Bytes", "S3 I/O"],
-    ["ReadBufferFromAzureBytes", "Azure I/O"],
-    ["NetworkReceiveBytes", "Network Recv"],
-    ["NetworkSendBytes", "Network Send"],
-    ["IOBufferAllocBytes", "I/O Buffers"],
-    ["IOBufferAllocCount", "I/O Buffers"],
-    ["MemoryAllocatorAllocBytes", "Allocator"],
-    ["MemoryAllocatorDeallocBytes", "Allocator"],
-    ["MemoryTrackingAllocated", "Tracked Alloc"],
-    ["MemoryTrackingFreed", "Tracked Free"],
-    ["QueryMemoryLimit", "Query Limit"],
-    ["ExternalSortingUncompressedBytes", "External Sort"],
-    ["ExternalAggregationUncompressedBytes", "External Agg"],
-    ["GrpcClients", "gRPC"],
-    ["HTTPConnection", "HTTP"],
-    ["InterserverConnection", "Interserver"],
-    ["MySQLConnection", "MySQL"],
-    ["NaturalEqual", "JOIN Memory"],
-    ["NaturalIf", "JOIN Memory"],
-  ];
-
-  for (const [eventKey, category] of memEvents) {
-    const val = events[eventKey] || events[`ProfileEvent_${eventKey}`] || 0;
-    if (val > 0) {
-      const existing = categoryMap.get(category) || { value: 0, count: 0 };
-      categoryMap.set(category, {
-        value: existing.value + val,
-        count: existing.count + 1,
-      });
-    }
-  }
-
-  return Array.from(categoryMap.entries())
-    .map(([name, data]) => ({ name, ...data }))
-    .sort((a, b) => b.value - a.value);
-}
-
-function MetricCard({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: string; color?: string }) {
-  return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-      <div className="mb-1 flex items-center gap-2 text-[var(--color-text-secondary)]">
-        {icon}
-        <span className="text-xs">{label}</span>
-      </div>
-      <div className={`text-lg font-semibold ${color || "text-[var(--color-text-primary)]"}`}>{value}</div>
-    </div>
-  );
-}
-
-function ChartSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-      <h3 className="mb-4 text-sm font-medium text-[var(--color-text-secondary)]">{title}</h3>
-      {children}
-    </div>
-  );
-}
-
-interface MetricDelta {
-  time: string;
-  memory: number;
-  peak: number;
-  userTime: number;
-  systemTime: number;
-  readBytes: number;
-  writeBytes: number;
-  netRecv: number;
-  netSend: number;
-}
-
-function computeMetricDeltas(points: MetricPoint[]): MetricDelta[] {
-  if (points.length === 0) return [];
-  return points.map((p, i) => {
-    const prev = i > 0 ? points[i - 1] : p;
-    const t = new Date(p.event_time);
-    const time = t.toLocaleTimeString();
-    return {
-      time,
-      memory: p.memory_usage,
-      peak: p.peak_memory_usage,
-      userTime: Math.max(0, p.user_time_microseconds - prev.user_time_microseconds),
-      systemTime: Math.max(0, p.system_time_microseconds - prev.system_time_microseconds),
-      readBytes: Math.max(0, p.read_bytes - prev.read_bytes),
-      writeBytes: Math.max(0, p.write_bytes - prev.write_bytes),
-      netRecv: Math.max(0, p.network_receive_bytes - prev.network_receive_bytes),
-      netSend: Math.max(0, p.network_send_bytes - prev.network_send_bytes),
-    };
-  });
-}
-
-function getTopProfileEvents(events: Record<string, number>): [string, number, string][] {
-  return Object.entries(events)
-    .filter(([, v]) => v > 0)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 25)
-    .map(([name, value]) => [name, value, categorizeEvent(name)]);
 }

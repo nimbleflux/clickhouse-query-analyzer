@@ -29,6 +29,7 @@ type Client struct {
 	connURL    string
 	connUser   string
 	connPass   string
+	connDB     string
 	skipTLS    bool
 	isHTTP     bool
 	isCluster  bool
@@ -253,6 +254,7 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 		connURL:    params.URL,
 		connUser:   params.User,
 		connPass:   params.Password,
+		connDB:     params.Database,
 		skipTLS:    params.SkipTLS,
 		isHTTP:     isHTTPScheme(scheme),
 		isCluster:  isCluster,

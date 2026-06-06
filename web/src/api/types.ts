@@ -98,10 +98,21 @@ export interface ViewLogEntry {
   profile_events: Record<string, number>;
 }
 
+export interface ExplainEstimate {
+  rows: number;
+  blocks: number;
+  bytes: number;
+  parts: number;
+  marks: number;
+  raw?: string;
+}
+
 export interface ExplainResult {
   plan?: string;
   pipeline?: string;
+  pipeline_graph?: string;
   syntax?: string;
+  estimate?: ExplainEstimate;
 }
 
 export interface FlameGraphData {
@@ -308,6 +319,14 @@ export interface DashboardData {
   replication_queue: { database: string; table: string; replica_name: string; position: number; type: string; create_time: string; is_started: number; num_tries: number; last_exception: string }[];
   replica_statuses: { database: string; table: string; replica_name: string; is_leader: number; is_readonly: number; absolute_delay: number; queue_size: number; inserts_in_queue: number; merges_in_queue: number; log_max_index: number; log_pointer: number; total_replicas: number; active_replicas: number }[];
   nodes: { host: string; uptime: number; version: string }[];
+  log_tables: { table: string; rows: number; compressed_bytes: number; uncompressed_bytes: number; exists: boolean; enabled: boolean }[];
+  settings: { name: string; value: string }[];
+  warnings: string[];
+  cluster: string;
+  is_cluster: boolean;
+  database: string;
+  user: string;
+  host_name: string;
 }
 
 export interface FingerprintQuery {

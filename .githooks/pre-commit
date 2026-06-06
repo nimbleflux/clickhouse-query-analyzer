@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+# Go formatting
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+  echo "❌ Go files need formatting:"
+  echo "$unformatted"
+  echo ""
+  echo "Run: gofmt -w ."
+  exit 1
+fi
+
+# Go mod tidy check
+go mod tidy
+if ! git diff --exit-code go.mod go.sum >/dev/null 2>&1; then
+  echo "❌ go.mod or go.sum changed after 'go mod tidy'"
+  echo "Run: go mod tidy && git add go.mod go.sum"
+  exit 1
+fi
+
+# Frontend type check
+(cd web && npx tsc --noEmit)
+
+echo "✅ Pre-commit checks passed"

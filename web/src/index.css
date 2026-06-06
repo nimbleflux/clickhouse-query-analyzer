@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  /* Legacy tokens (kept for backward compatibility during migration) */
   --color-bg-primary: #0f172a;
   --color-bg-secondary: #1e293b;
   --color-bg-tertiary: #334155;
@@ -12,6 +13,42 @@
   --color-success: #22c55e;
   --color-warning: #eab308;
   --color-error: #ef4444;
+
+  /* Design system tokens — semantic surface aliases */
+  --surface-base: var(--color-bg-primary);
+  --surface-card: var(--color-bg-secondary);
+  --surface-elevated: var(--color-bg-tertiary);
+  --surface-hover: rgba(148, 163, 184, 0.08);
+  --surface-subtle: rgba(148, 163, 184, 0.04);
+
+  /* Borders */
+  --border-default: var(--color-border);
+  --border-subtle: rgba(148, 163, 184, 0.16);
+  --border-strong: rgba(148, 163, 184, 0.36);
+
+  /* State tints — used as semi-transparent backgrounds */
+  --state-accent: rgba(59, 130, 246, 0.12);
+  --state-accent-strong: rgba(59, 130, 246, 0.22);
+  --state-success: rgba(34, 197, 94, 0.12);
+  --state-warning: rgba(234, 179, 8, 0.12);
+  --state-error: rgba(239, 68, 68, 0.12);
+  --state-info: rgba(59, 130, 246, 0.12);
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  --shadow-overlay: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
 }
 
 [data-theme="light"] {
@@ -26,12 +63,57 @@
   --color-success: #16a34a;
   --color-warning: #ca8a04;
   --color-error: #dc2626;
+
+  --surface-hover: rgba(15, 23, 42, 0.06);
+  --surface-subtle: rgba(15, 23, 42, 0.03);
+  --border-subtle: rgba(15, 23, 42, 0.10);
+  --border-strong: rgba(15, 23, 42, 0.22);
+
+  --state-accent: rgba(37, 99, 235, 0.10);
+  --state-accent-strong: rgba(37, 99, 235, 0.18);
+  --state-success: rgba(22, 163, 74, 0.10);
+  --state-warning: rgba(202, 138, 4, 0.12);
+  --state-error: rgba(220, 38, 38, 0.10);
+  --state-info: rgba(37, 99, 235, 0.10);
+
+  --shadow-overlay: 0 25px 50px -12px rgba(15, 23, 42, 0.25);
+}
+
+@theme inline {
+  --color-background: var(--surface-base);
+  --color-foreground: var(--color-text-primary);
+  --color-card: var(--surface-card);
+  --color-card-foreground: var(--color-text-primary);
+  --color-muted: var(--surface-elevated);
+  --color-muted-foreground: var(--color-text-secondary);
+  --color-border: var(--border-default);
+  --color-input: var(--border-default);
+  --color-ring: var(--color-accent);
+  --color-primary: var(--color-accent);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--surface-elevated);
+  --color-secondary-foreground: var(--color-text-primary);
+  --color-destructive: var(--color-error);
+  --color-destructive-foreground: #ffffff;
+  --color-accent: var(--color-accent);
+  --color-accent-foreground: #ffffff;
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-error: var(--color-error);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  background-color: var(--color-bg-primary);
+  font-family: var(--font-sans);
+  background-color: var(--surface-base);
   color: var(--color-text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -71,11 +153,11 @@ select:focus-visible {
 }
 
 .cm-editor {
-  background-color: var(--color-bg-primary) !important;
+  background-color: var(--surface-base) !important;
 }
 
 .cm-editor .cm-scroller {
-  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace) !important;
+  font-family: var(--font-mono) !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -97,4 +179,14 @@ select:focus-visible {
     opacity: 1;
     transform: translateX(0);
   }
+}
+
+@keyframes overlayShow {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes contentShow {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.96); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }

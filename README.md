@@ -121,6 +121,56 @@ make dev
 
 The dev ClickHouse runs on ports 18123 (HTTP) and 19000 (native) to avoid conflicts with existing instances. Connect using `clickhouse://localhost:19000` or `http://localhost:18123`.
 
+## Setup & Diagnostics
+
+ClickLens requires certain ClickHouse settings and log tables to be enabled for full functionality. The **Dashboard** page surfaces live diagnostics — connection info, log table status, key settings, and actionable warnings.
+
+### Required Settings
+
+Add these to your ClickHouse server config (`config.xml` or `users.xml`):
+
+```xml
+<!-- Enable query logging -->
+<log_queries>1</log_queries>
+
+<!-- Enable thread-level profiling -->
+<log_query_threads>1</log_query_threads>
+
+<!-- Enable materialized view logging (optional) -->
+<log_query_views>1</log_query_views>
+
+<!-- Enable detailed metric logging (optional) -->
+<log_query_metrics>1</log_query_metrics>
+
+<!-- Required for flamegraphs -->
+<allow_introspection_functions>1</allow_introspection_functions>
+
+<!-- Enable sampling profiler (for flamegraphs) -->
+<log_profiler_events>1</log_profiler_events>
+```
+
+### Log Table Sizing
+
+ClickLens queries these `system.*` log tables:
+
+| Table | Purpose | Recommended Retention |
+|-------|---------|----------------------|
+| `system.query_log` | Query history, metrics, errors | 7-30 days |
+| `system.query_thread_log` | Per-thread timing for flamegraphs | 7-30 days |
+| `system.query_views_log` | Materialized view execution | 7-30 days |
+| `system.query_metric_log` | Per-second metrics during query | 1-7 days |
+| `system.trace_log` | Sampling profiler data | 1-7 days |
+
+For large deployments, configure TTL to manage disk usage:
+
+```sql
+ALTER TABLE system.query_log MODIFY TTL event_time + INTERVAL 14 DAY;
+ALTER TABLE system.query_thread_log MODIFY TTL event_time + INTERVAL 14 DAY;
+ALTER TABLE system.trace_log MODIFY TTL event_time + INTERVAL 7 DAY;
+```
+
+The **Dashboard** page shows current row counts and on-disk sizes for these tables, plus warnings for empty or missing tables. Each missing table has an inline "enable" toggle that reveals the exact XML snippet to add to your `config.xml`.
+
 ## Architecture
 
 - **Backend**: Go with Chi router, `clickhouse-go/v2` driver (native + HTTP), stateless connection pool

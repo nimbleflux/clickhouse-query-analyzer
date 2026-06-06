@@ -5,6 +5,11 @@ import { fetchFingerprints } from "../api/client";
 import type { FingerprintListResponse } from "../api/types";
 import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor } from "../utils";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
+import { PageContainer, PageHeader } from "@/components/ui/page";
+import { Button } from "@/components/ui/button";
+import { Input, Checkbox } from "@/components/ui/input";
+import { Card } from "@/components/ui/card";
+import { EmptyState, ErrorState } from "@/components/ui/state";
 
 const DATE_PRESETS: { label: string; hours: number }[] = [
   { label: "Last 1h", hours: 1 },
@@ -14,6 +19,30 @@ const DATE_PRESETS: { label: string; hours: number }[] = [
 ];
 
 type SortField = "last_seen" | "execution_count" | "avg_duration_ms" | "p95_duration_ms" | "max_duration_ms" | "avg_memory_usage" | "max_memory_usage" | "error_count" | "avg_read_rows";
+
+interface SortableHeaderProps {
+  field: SortField;
+  sortBy: SortField;
+  sortDir: "DESC" | "ASC";
+  onToggle: (field: SortField) => void;
+  label: string;
+  align?: "left" | "right";
+}
+
+function SortableHeader({ field, sortBy, sortDir, onToggle, label, align = "left" }: SortableHeaderProps) {
+  const active = sortBy === field;
+  return (
+    <th
+      className={`cursor-pointer px-4 py-2.5 font-medium text-[var(--color-text-secondary)] ${align === "right" ? "text-right" : "text-left"}`}
+      onClick={() => onToggle(field)}
+    >
+      <span className="inline-flex select-none items-center gap-1 hover:text-[var(--color-text-primary)]">
+        {label}
+        {active && (sortDir === "ASC" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
+      </span>
+    </th>
+  );
+}
 
 export function QueryFingerprints() {
   const navigate = useNavigate();
@@ -75,162 +104,127 @@ export function QueryFingerprints() {
     setCurrentPage(1);
   };
 
-  const SortIcon = ({ field }: { field: SortField }) => (
-    sortBy === field ? (sortDir === "ASC" ? <ArrowUp className="inline h-3 w-3" /> : <ArrowDown className="inline h-3 w-3" />) : null
-  );
-
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Fingerprint className="h-5 w-5 text-[var(--color-text-secondary)]" />
-          <h2 className="text-lg font-semibold">Query Fingerprints</h2>
-          {data && (
-            <span className="text-sm text-[var(--color-text-secondary)]">
-              {data.total} unique queries
-            </span>
-          )}
-        </div>
-      </div>
+    <PageContainer>
+      <PageHeader
+        heading="h2"
+        title="Query Fingerprints"
+        description={data ? `${data.total} unique queries` : undefined}
+      />
 
-      <div className="flex flex-wrap gap-3">
-        <div className="relative flex-1 min-w-[200px]">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[200px] flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-secondary)]" />
           <input
+            data-search-input
             type="text"
-            placeholder="Search queries..."
+            placeholder="Search fingerprints… (Ctrl+K)"
             value={search}
             onChange={(e) => { setSearch(e.target.value); setCurrentPage(1); }}
-            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] py-2 pl-10 pr-4 text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)]"
+            className="h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--surface-card)] py-2 pl-9 pr-3 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-secondary)] outline-none transition-colors focus:border-[var(--color-accent)]"
           />
         </div>
-        <button
-          onClick={() => setShowFilters(!showFilters)}
-          className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm ${
-            showFilters
-              ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white"
-              : "border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-          }`}
-        >
-          <Filter className="h-4 w-4" />
+        <Button variant={showFilters ? "primary" : "secondary"} size="md" onClick={() => setShowFilters(!showFilters)}>
+          <Filter className="h-3.5 w-3.5" />
           Filters
-        </button>
-        <label className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-2 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={showSystem}
-            onChange={(e) => { setShowSystem(e.target.checked); setCurrentPage(1); }}
-            className="h-4 w-4 rounded border-[var(--color-border)] accent-[var(--color-accent)]"
-          />
-          Internal queries
-        </label>
+        </Button>
+        <Checkbox
+          checked={showSystem}
+          onChange={(e) => { setShowSystem(e.target.checked); setCurrentPage(1); }}
+          label="Internal queries"
+        />
       </div>
 
       {showFilters && (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-          <div className="mb-3 flex flex-wrap gap-2">
-            <span className="text-xs text-[var(--color-text-secondary)] self-center mr-1">Quick range:</span>
+        <Card className="p-4">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <span className="mr-1 self-center text-xs text-[var(--color-text-secondary)]">Quick range:</span>
             {DATE_PRESETS.map((p) => (
-              <button
-                key={p.hours}
-                onClick={() => applyDatePreset(p.hours)}
-                className="rounded border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-accent)]"
-              >
+              <Button key={p.hours} variant="outline" size="sm" onClick={() => applyDatePreset(p.hours)}>
                 {p.label}
-              </button>
+              </Button>
             ))}
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">From</label>
-              <input
+            <div className="space-y-1">
+              <label className="block text-xs text-[var(--color-text-secondary)]">From</label>
+              <Input
                 type="datetime-local"
                 value={fromTime ? fromTime.slice(0, 16) : ""}
                 onChange={(e) => { setFromTime(e.target.value ? new Date(e.target.value).toISOString() : ""); setCurrentPage(1); }}
-                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-text-primary)] outline-none"
+                className="w-full"
               />
             </div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">To</label>
-              <input
+            <div className="space-y-1">
+              <label className="block text-xs text-[var(--color-text-secondary)]">To</label>
+              <Input
                 type="datetime-local"
                 value={toTime ? toTime.slice(0, 16) : ""}
                 onChange={(e) => { setToTime(e.target.value ? new Date(e.target.value).toISOString() : ""); setCurrentPage(1); }}
-                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-text-primary)] outline-none"
+                className="w-full"
               />
             </div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">User</label>
-              <input
-                type="text"
+            <div className="space-y-1">
+              <label className="block text-xs text-[var(--color-text-secondary)]">User</label>
+              <Input
                 value={user}
                 onChange={(e) => { setUser(e.target.value); setCurrentPage(1); }}
                 placeholder="Username"
-                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] outline-none"
+                className="w-full"
               />
             </div>
           </div>
-        </div>
+        </Card>
       )}
 
-      {error && (
-        <div className="rounded-lg border border-[var(--color-error)] bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]">{error}</div>
-      )}
+      {error && <ErrorState error={error} onRetry={load} />}
 
       {loading && !data ? (
-        <div className="space-y-2">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="flex items-center gap-4 rounded border border-transparent py-3">
-              <div className="h-4 w-28 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
-              <div className="h-4 w-12 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
-              <div className="h-4 w-20 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
-              <div className="h-4 w-20 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
-              <div className="h-4 w-20 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
-              <div className="h-4 w-16 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
-              <div className="h-4 w-10 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
-              <div className="h-4 flex-1 animate-pulse rounded bg-[var(--color-bg-tertiary)]" />
-            </div>
-          ))}
-        </div>
+        <Card className="p-4">
+          <div className="space-y-2">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-4 py-2">
+                <div className="h-4 w-28 animate-pulse rounded bg-[var(--surface-elevated)]" />
+                <div className="h-4 w-12 animate-pulse rounded bg-[var(--surface-elevated)]" />
+                <div className="h-4 w-20 animate-pulse rounded bg-[var(--surface-elevated)]" />
+                <div className="h-4 w-20 animate-pulse rounded bg-[var(--surface-elevated)]" />
+                <div className="h-4 w-20 animate-pulse rounded bg-[var(--surface-elevated)]" />
+                <div className="h-4 w-16 animate-pulse rounded bg-[var(--surface-elevated)]" />
+                <div className="h-4 w-10 animate-pulse rounded bg-[var(--surface-elevated)]" />
+                <div className="h-4 flex-1 animate-pulse rounded bg-[var(--surface-elevated)]" />
+              </div>
+            ))}
+          </div>
+        </Card>
       ) : data && data.fingerprints.length === 0 ? (
-        <div className="py-12 text-center text-[var(--color-text-secondary)]">
-          <Fingerprint className="mx-auto mb-2 h-8 w-8 opacity-30" />
-          <p>No query fingerprints found</p>
-        </div>
+        <EmptyState
+          icon={Fingerprint}
+          title="No query fingerprints found"
+          description="Try adjusting filters, expanding the time range, or enabling internal queries."
+        />
       ) : data ? (
         <>
           <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]">
-                  <th className="cursor-pointer px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]" onClick={() => toggleSort("last_seen")}>
-                    Last Seen <SortIcon field="last_seen" />
-                  </th>
-                  <th className="cursor-pointer px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]" onClick={() => toggleSort("execution_count")}>
-                    Count <SortIcon field="execution_count" />
-                  </th>
-                  <th className="cursor-pointer px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]" onClick={() => toggleSort("avg_duration_ms")}>
-                    Avg Duration <SortIcon field="avg_duration_ms" />
-                  </th>
-                  <th className="cursor-pointer px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]" onClick={() => toggleSort("p95_duration_ms")}>
-                    P95 Duration <SortIcon field="p95_duration_ms" />
-                  </th>
-                  <th className="cursor-pointer px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]" onClick={() => toggleSort("avg_memory_usage")}>
-                    Avg Memory <SortIcon field="avg_memory_usage" />
-                  </th>
-                  <th className="cursor-pointer px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]" onClick={() => toggleSort("avg_read_rows")}>
-                    Avg Rows <SortIcon field="avg_read_rows" />
-                  </th>
-                  <th className="cursor-pointer px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]" onClick={() => toggleSort("error_count")}>
-                    Errors <SortIcon field="error_count" />
-                  </th>
+                <tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
+                  <SortableHeader field="last_seen" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="Last Seen" />
+                  <SortableHeader field="execution_count" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="Count" align="right" />
+                  <SortableHeader field="avg_duration_ms" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="Avg Duration" align="right" />
+                  <SortableHeader field="p95_duration_ms" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="P95 Duration" align="right" />
+                  <SortableHeader field="avg_memory_usage" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="Avg Memory" align="right" />
+                  <SortableHeader field="avg_read_rows" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="Avg Rows" align="right" />
+                  <SortableHeader field="error_count" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="Errors" align="right" />
                   <th className="px-4 py-2.5 font-medium text-[var(--color-text-secondary)]">Query</th>
                 </tr>
               </thead>
               <tbody>
                 {data.fingerprints.map((f) => (
-                  <tr key={f.normalized_query_hash} onClick={() => navigate(`/fingerprints/${f.normalized_query_hash}`, { state: { query: f.sample_query } })} className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-bg-secondary)] transition-colors">
+                  <tr
+                    key={f.normalized_query_hash}
+                    onClick={() => navigate(`/fingerprints/${f.normalized_query_hash}`, { state: { query: f.sample_query } })}
+                    className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)] transition-colors"
+                  >
                     <td className="whitespace-nowrap px-4 py-3 text-[var(--color-text-secondary)]">
                       <div className="flex items-center gap-1">
                         <Clock className="h-3 w-3" />
@@ -286,33 +280,34 @@ export function QueryFingerprints() {
           </div>
 
           {totalPages > 1 && (
-            <div className="mt-4 flex items-center justify-between">
+            <div className="flex items-center justify-between">
               <span className="text-sm text-[var(--color-text-secondary)]">
                 Page {currentPage} of {totalPages} ({data.total} fingerprints)
               </span>
               <div className="flex gap-2">
-                <button
+                <Button
+                  variant="secondary"
+                  size="md"
                   disabled={currentPage <= 1}
                   onClick={() => { setCurrentPage((p) => p - 1); document.querySelector("main")?.scrollTo(0, 0); }}
-                  className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-1.5 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
                 >
-                  <ChevronLeft className="h-4 w-4" />
+                  <ChevronLeft className="h-3.5 w-3.5" />
                   Previous
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="md"
                   disabled={currentPage >= totalPages}
                   onClick={() => { setCurrentPage((p) => p + 1); document.querySelector("main")?.scrollTo(0, 0); }}
-                  className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-1.5 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
                 >
                   Next
-                  <ChevronRight className="h-4 w-4" />
-                </button>
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
               </div>
             </div>
           )}
         </>
       ) : null}
-      </div>
-    </div>
+    </PageContainer>
   );
 }

@@ -20,26 +20,37 @@ import type {
   FingerprintQueriesResponse,
 } from "./types";
 import { getConnectionHeaders } from "./connection";
+import { ApiError } from "./errors";
 
 const BASE = "/api";
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      ...getConnectionHeaders(),
-      ...(options?.headers || {}),
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...options,
+      headers: {
+        ...getConnectionHeaders(),
+        ...(options?.headers || {}),
+      },
+    });
+  } catch (e) {
+    throw ApiError.wrap(e);
+  }
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || res.statusText);
+    throw await ApiError.fromResponse(res);
   }
   return res.json();
 }
 
-export async function testConnection(): Promise<{ status: string }> {
-  return fetchJSON<{ status: string }>(`${BASE}/connect`, { method: "POST" });
+export type ConnectResponse = {
+  status: string;
+  cluster?: string;
+  is_cluster?: boolean;
+};
+
+export async function testConnection(): Promise<ConnectResponse> {
+  return fetchJSON<ConnectResponse>(`${BASE}/connect`, { method: "POST" });
 }
 
 export async function fetchQueries(params: QueryListParams, signal?: AbortSignal): Promise<QueryListResponse> {
@@ -81,14 +92,18 @@ export async function fetchComparison(idA: string, idB: string, signal?: AbortSi
 }
 
 export async function fetchExplain(queryId: string, signal?: AbortSignal): Promise<ExplainResult> {
-  const res = await fetch(`${BASE}/queries/${encodeURIComponent(queryId)}/explain`, {
-    method: "POST",
-    headers: getConnectionHeaders(),
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/queries/${encodeURIComponent(queryId)}/explain`, {
+      method: "POST",
+      headers: getConnectionHeaders(),
+      signal,
+    });
+  } catch (e) {
+    throw ApiError.wrap(e);
+  }
   if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || res.statusText);
+    throw await ApiError.fromResponse(res);
   }
   return res.json();
 }
@@ -160,8 +175,7 @@ export function streamBulkAnalysis(
         headers: getConnectionHeaders(),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(body.error || res.statusText);
+        throw await ApiError.fromResponse(res);
       }
 
       const reader = res.body!.getReader();
@@ -187,7 +201,7 @@ export function streamBulkAnalysis(
       }
     } catch (e) {
       if (!ctrl.signal.aborted) {
-        onError?.(e instanceof Error ? e : new Error(String(e)));
+        onError?.(ApiError.wrap(e));
       }
     }
   })();
@@ -231,3 +245,17 @@ export async function fetchFingerprintQueries(hash: string, limit?: number, offs
   const qs = sp.toString();
   return fetchJSON<FingerprintQueriesResponse>(`${BASE}/queries/fingerprints/${hash}/queries${qs ? `?${qs}` : ""}`, { signal });
 }
+
+export type LogTableSize = {
+  table: string;
+  rows: number;
+  compressed_bytes: number;
+  uncompressed_bytes: number;
+  exists: boolean;
+  enabled: boolean;
+};
+
+export type SettingValue = {
+  name: string;
+  value: string;
+};

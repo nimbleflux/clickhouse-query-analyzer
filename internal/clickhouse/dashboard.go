@@ -76,10 +76,26 @@ type DashboardData struct {
 	ReplicationQueue []ReplicationQueueEntry `json:"replication_queue"`
 	ReplicaStatuses  []ReplicaStatus         `json:"replica_statuses"`
 	Nodes            []NodeInfo              `json:"nodes"`
+	LogTables        []LogTableSize          `json:"log_tables"`
+	Settings         []SettingValue          `json:"settings"`
+	Warnings         []string                `json:"warnings"`
+	Cluster          string                  `json:"cluster"`
+	IsCluster        bool                    `json:"is_cluster"`
+	Database         string                  `json:"database"`
+	User             string                  `json:"user"`
+	HostName         string                  `json:"host_name"`
 }
 
 func (c *Client) GetDashboard(ctx context.Context) (*DashboardData, error) {
-	d := &DashboardData{}
+	d := &DashboardData{
+		LogTables: []LogTableSize{},
+		Settings:  []SettingValue{},
+		Warnings:  []string{},
+		Cluster:   c.cluster,
+		IsCluster: c.isCluster,
+		Database:  c.connDB,
+		User:      c.connUser,
+	}
 
 	if err := c.queryMetrics(ctx, d); err != nil {
 		return nil, err
@@ -95,8 +111,31 @@ func (c *Client) GetDashboard(ctx context.Context) (*DashboardData, error) {
 	}
 	c.queryReplication(ctx, d)
 	c.queryServerInfo(ctx, d)
+	c.fillHostName(ctx, d)
+
+	report := &HealthReport{}
+	if len(d.Nodes) > 0 {
+		report.Uptime = d.Nodes[0].Uptime
+	}
+	c.queryLogTableSizes(ctx, report)
+	c.querySettings(ctx, report)
+	c.deriveWarnings(report)
+	d.LogTables = report.LogTables
+	d.Settings = report.Settings
+	d.Warnings = report.Warnings
 
 	return d, nil
+}
+
+func (c *Client) fillHostName(ctx context.Context, d *DashboardData) {
+	if len(d.Nodes) > 0 && d.Nodes[0].Host != "" {
+		d.HostName = d.Nodes[0].Host
+		return
+	}
+	var hostName string
+	if err := c.conn.QueryRow(ctx, "SELECT hostName()").Scan(&hostName); err == nil {
+		d.HostName = hostName
+	}
 }
 
 func (c *Client) queryMetrics(ctx context.Context, d *DashboardData) error {

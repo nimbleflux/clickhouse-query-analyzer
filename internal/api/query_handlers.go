@@ -12,19 +12,10 @@ import (
 	"github.com/nimbleflux/clickhouse-query-analyzer/internal/clickhouse"
 )
 
-func (a *API) Connect(w http.ResponseWriter, r *http.Request) {
-	_, err := a.clientFromRequest(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
 func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
@@ -57,7 +48,7 @@ func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 
 	queries, total, err := ch.ListQueries(r.Context(), params)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 	if queries == nil {
@@ -75,23 +66,19 @@ func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetQuery(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	queryID := chi.URLParam(r, "queryID")
 	if queryID == "" {
-		writeError(w, http.StatusBadRequest, "query_id is required")
+		MissingParam(w, "query_id")
 		return
 	}
 
 	query, err := ch.GetQuery(r.Context(), queryID)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			writeError(w, http.StatusNotFound, "query not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -101,19 +88,19 @@ func (a *API) GetQuery(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetQueryMetrics(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	queryID := chi.URLParam(r, "queryID")
 	if queryID == "" {
-		writeError(w, http.StatusBadRequest, "query_id is required")
+		MissingParam(w, "query_id")
 		return
 	}
 
 	metrics, err := ch.GetQueryMetrics(r.Context(), queryID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -123,19 +110,19 @@ func (a *API) GetQueryMetrics(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetQueryThreads(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	queryID := chi.URLParam(r, "queryID")
 	if queryID == "" {
-		writeError(w, http.StatusBadRequest, "query_id is required")
+		MissingParam(w, "query_id")
 		return
 	}
 
 	threads, err := ch.GetQueryThreads(r.Context(), queryID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -145,19 +132,19 @@ func (a *API) GetQueryThreads(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetThreadSummaries(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	queryID := chi.URLParam(r, "queryID")
 	if queryID == "" {
-		writeError(w, http.StatusBadRequest, "query_id is required")
+		MissingParam(w, "query_id")
 		return
 	}
 
 	summaries, err := ch.GetThreadSummaries(r.Context(), queryID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -167,31 +154,31 @@ func (a *API) GetThreadSummaries(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetThreadProfile(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	queryID := chi.URLParam(r, "queryID")
 	if queryID == "" {
-		writeError(w, http.StatusBadRequest, "query_id is required")
+		MissingParam(w, "query_id")
 		return
 	}
 
 	threadIDStr := chi.URLParam(r, "threadID")
 	if threadIDStr == "" {
-		writeError(w, http.StatusBadRequest, "thread_id is required")
+		MissingParam(w, "thread_id")
 		return
 	}
 
 	var threadID uint64
 	if _, err := fmt.Sscanf(threadIDStr, "%d", &threadID); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid thread_id")
+		InvalidParam(w, "thread_id", "thread_id must be a non-negative integer")
 		return
 	}
 
 	profile, err := ch.GetThreadProfile(r.Context(), queryID, threadID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -201,20 +188,20 @@ func (a *API) GetThreadProfile(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetTrace(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	queryID := chi.URLParam(r, "queryID")
 	if queryID == "" {
-		writeError(w, http.StatusBadRequest, "query_id is required")
+		MissingParam(w, "query_id")
 		return
 	}
 
 	traceType := r.URL.Query().Get("type")
 	traces, err := ch.GetTraceLog(r.Context(), queryID, traceType)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -224,13 +211,13 @@ func (a *API) GetTrace(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetFlameGraph(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	queryID := chi.URLParam(r, "queryID")
 	if queryID == "" {
-		writeError(w, http.StatusBadRequest, "query_id is required")
+		MissingParam(w, "query_id")
 		return
 	}
 
@@ -241,7 +228,7 @@ func (a *API) GetFlameGraph(w http.ResponseWriter, r *http.Request) {
 
 	data, err := ch.GetFlameGraph(r.Context(), queryID, traceType)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -251,19 +238,19 @@ func (a *API) GetFlameGraph(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetQueryViews(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	queryID := chi.URLParam(r, "queryID")
 	if queryID == "" {
-		writeError(w, http.StatusBadRequest, "query_id is required")
+		MissingParam(w, "query_id")
 		return
 	}
 
 	views, err := ch.GetQueryViews(r.Context(), queryID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -273,25 +260,25 @@ func (a *API) GetQueryViews(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetExplain(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	queryID := chi.URLParam(r, "queryID")
 	if queryID == "" {
-		writeError(w, http.StatusBadRequest, "query_id is required")
+		MissingParam(w, "query_id")
 		return
 	}
 
 	query, err := ch.GetQuery(r.Context(), queryID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "query not found")
+		respondErr(w, err, false)
 		return
 	}
 
 	result, err := ch.GetExplain(r.Context(), query.Query)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -301,26 +288,26 @@ func (a *API) GetExplain(w http.ResponseWriter, r *http.Request) {
 func (a *API) CompareQueries(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	idA := r.URL.Query().Get("a")
 	idB := r.URL.Query().Get("b")
 	if idA == "" || idB == "" {
-		writeError(w, http.StatusBadRequest, "query ids 'a' and 'b' are required")
+		MissingParam(w, "query ids 'a' and 'b'")
 		return
 	}
 
 	qA, err := ch.GetQuery(r.Context(), idA)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "query A not found")
+		respondErr(w, err, false)
 		return
 	}
 
 	qB, err := ch.GetQuery(r.Context(), idB)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "query B not found")
+		respondErr(w, err, false)
 		return
 	}
 
@@ -333,7 +320,7 @@ func (a *API) CompareQueries(w http.ResponseWriter, r *http.Request) {
 func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
@@ -343,11 +330,11 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		Settings map[string]string `json:"settings"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		InvalidBody(w, "")
 		return
 	}
 	if req.Query == "" {
-		writeError(w, http.StatusBadRequest, "query is required")
+		MissingParam(w, "query")
 		return
 	}
 	if isReadonly(r) && rejectWriteQuery(w, req.Query) {
@@ -359,7 +346,7 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 
 	result, err := ch.ExecuteQuery(r.Context(), req.Query, req.MaxRows, req.Settings)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -369,12 +356,12 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetSchema(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 	databases, err := ch.GetDatabases(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 	if databases == nil {
@@ -386,13 +373,13 @@ func (a *API) GetSchema(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetTables(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 	db := chi.URLParam(r, "db")
 	tables, err := ch.GetTables(r.Context(), db)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 	if tables == nil {
@@ -404,14 +391,14 @@ func (a *API) GetTables(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetColumns(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 	db := chi.URLParam(r, "db")
 	tbl := chi.URLParam(r, "table")
 	columns, err := ch.GetColumns(r.Context(), db, tbl)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 	if columns == nil {
@@ -423,13 +410,13 @@ func (a *API) GetColumns(w http.ResponseWriter, r *http.Request) {
 func (a *API) ListProcesses(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	processes, err := ch.ListProcesses(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -439,18 +426,18 @@ func (a *API) ListProcesses(w http.ResponseWriter, r *http.Request) {
 func (a *API) KillProcess(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	queryID := chi.URLParam(r, "queryID")
 	if queryID == "" {
-		writeError(w, http.StatusBadRequest, "query_id is required")
+		MissingParam(w, "query_id")
 		return
 	}
 
 	if err := ch.KillQuery(r.Context(), queryID); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -460,7 +447,7 @@ func (a *API) KillProcess(w http.ResponseWriter, r *http.Request) {
 func (a *API) ListFingerprints(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
@@ -483,7 +470,7 @@ func (a *API) ListFingerprints(w http.ResponseWriter, r *http.Request) {
 
 	fingerprints, total, err := ch.ListFingerprints(r.Context(), params)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 	if fingerprints == nil {
@@ -501,18 +488,18 @@ func (a *API) ListFingerprints(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetFingerprintTrend(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	hashStr := chi.URLParam(r, "hash")
 	if hashStr == "" {
-		writeError(w, http.StatusBadRequest, "hash is required")
+		MissingParam(w, "hash")
 		return
 	}
 	hash, err := strconv.ParseUint(hashStr, 10, 64)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid hash")
+		InvalidParam(w, "hash", "")
 		return
 	}
 
@@ -523,7 +510,7 @@ func (a *API) GetFingerprintTrend(w http.ResponseWriter, r *http.Request) {
 
 	points, err := ch.GetFingerprintTrend(r.Context(), hash, interval, r.URL.Query().Get("from_time"), r.URL.Query().Get("to_time"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -533,18 +520,18 @@ func (a *API) GetFingerprintTrend(w http.ResponseWriter, r *http.Request) {
 func (a *API) ListFingerprintQueries(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	hashStr := chi.URLParam(r, "hash")
 	if hashStr == "" {
-		writeError(w, http.StatusBadRequest, "hash is required")
+		MissingParam(w, "hash")
 		return
 	}
 	hash, err := strconv.ParseUint(hashStr, 10, 64)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid hash")
+		InvalidParam(w, "hash", "")
 		return
 	}
 
@@ -553,7 +540,7 @@ func (a *API) ListFingerprintQueries(w http.ResponseWriter, r *http.Request) {
 
 	queries, total, err := ch.ListFingerprintQueries(r.Context(), hash, limit, offset)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 
@@ -566,13 +553,13 @@ func (a *API) ListFingerprintQueries(w http.ResponseWriter, r *http.Request) {
 func (a *API) GetDashboard(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		CHUnreachable(w, false, err)
 		return
 	}
 
 	dashboard, err := ch.GetDashboard(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		respondErr(w, err, false)
 		return
 	}
 

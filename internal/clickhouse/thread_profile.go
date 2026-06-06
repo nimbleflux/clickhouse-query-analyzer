@@ -74,7 +74,7 @@ func (c *Client) GetThreadProfile(ctx context.Context, queryID string, threadID 
 		}
 	}
 	if thread == nil {
-		return nil, fmt.Errorf("thread %d not found for query %s", threadID, queryID)
+		return nil, NotFoundErrorf("thread %d for query %s", threadID, queryID)
 	}
 
 	role := inferRole(thread.ProfileEvents, thread.ThreadName)

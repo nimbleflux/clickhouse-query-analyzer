@@ -1,13 +1,21 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Filter, ChevronLeft, ChevronRight, Clock, MemoryStick, Database, Plug, GitCompare, ArrowUp, ArrowDown, AlertTriangle, Copy, List } from "lucide-react";
+import { Search, Filter, ChevronLeft, ChevronRight, Clock, MemoryStick, Database, Plug, GitCompare, ArrowUp, ArrowDown, AlertTriangle, Copy, FileSearch, Code } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { fetchQueries } from "../api/client";
 import type { QueryListParams, QueryLogEntry } from "../api/types";
+import { ApiError } from "../api/errors";
 import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor } from "../utils";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
+import { sendToEditor } from "@/lib/send-to-editor";
 import { TableSkeleton } from "../components/Skeleton";
+import { PageContainer, PageHeader } from "@/components/ui/page";
+import { Button } from "@/components/ui/button";
+import { Input, Select, Checkbox } from "@/components/ui/input";
+import { Card } from "@/components/ui/card";
+import { EmptyState, ErrorState } from "@/components/ui/state";
+import { Badge } from "@/components/ui/badge";
 
 const DATE_PRESETS: { label: string; hours: number }[] = [
   { label: "Last 1h", hours: 1 },
@@ -21,8 +29,8 @@ export function QueryList({ connected }: { connected: boolean }) {
   const copy = useCopyToClipboard();
   const [queries, setQueries] = useState<QueryLogEntry[]>([]);
   const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<ApiError | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [params, setParams] = useState<QueryListParams>({
     limit: 50,
@@ -50,13 +58,29 @@ export function QueryList({ connected }: { connected: boolean }) {
   useEffect(() => {
     if (!connected) return;
     const controller = new AbortController();
+    let active = true;
     setLoading(true);
-    setError("");
+    setError(null);
     fetchQueries({ ...params, search: debouncedSearch || undefined, hide_system_queries: !showSystem }, controller.signal)
-      .then((data) => { setQueries(data.queries || []); setTotal(data.total); })
-      .catch((e) => { if (!(e instanceof DOMException)) setError(e instanceof Error ? e.message : "Failed to load queries"); })
-      .finally(() => setLoading(false));
-    return () => controller.abort();
+      .then((data) => {
+        if (!active) return;
+        setQueries(data.queries || []);
+        setTotal(data.total);
+      })
+      .catch((e) => {
+        if (!active) return;
+        if (e instanceof ApiError && e.isAbort()) return;
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        setError(e instanceof ApiError ? e : ApiError.wrap(e));
+      })
+      .finally(() => {
+        if (!active) return;
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [params, debouncedSearch, connected, showSystem]);
 
   const totalPages = Math.ceil(total / (params.limit || 50));
@@ -67,107 +91,106 @@ export function QueryList({ connected }: { connected: boolean }) {
     setParams((p) => ({ ...p, from_time: from, to_time: undefined, offset: 0 }));
   };
 
+  const reload = () => {
+    setParams((p) => ({ ...p }));
+  };
+
   if (!connected) {
     return (
-      <div className="flex flex-col items-center gap-4 py-24">
-        <Plug className="h-12 w-12 text-[var(--color-text-secondary)]" />
-        <p className="text-lg font-medium text-[var(--color-text-secondary)]">Connect to ClickHouse</p>
-        <p className="text-sm text-[var(--color-text-secondary)]">Enter your connection details above to get started.</p>
-      </div>
+      <PageContainer>
+        <EmptyState
+          icon={Plug}
+          iconSize="lg"
+          title="Connect to ClickHouse"
+          description="Enter your connection details in the top bar to start exploring queries."
+        />
+      </PageContainer>
     );
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <List className="h-5 w-5 text-[var(--color-text-secondary)]" />
-          <h1 className="text-2xl font-bold">Queries</h1>
-          <span className="text-sm text-[var(--color-text-secondary)]">
-            {formatNumber(total)} queries found
-          </span>
-        </div>
-      </div>
+    <PageContainer>
+      <PageHeader
+        heading="h1"
+        title="Queries"
+        description={
+          total > 0 ? `${formatNumber(total)} queries found` : undefined
+        }
+      />
 
-      <div className="mb-4 flex flex-wrap gap-3">
-        <div className="relative flex-1 min-w-[200px]">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[200px] flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-secondary)]" />
           <input
             data-search-input
             type="text"
-            placeholder="Search queries... (Ctrl+K)"
+            placeholder="Search queries… (Ctrl+K)"
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
               setParams((p) => ({ ...p, offset: 0 }));
             }}
-            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] py-2 pl-10 pr-4 text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)]"
+            className="h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--surface-card)] py-2 pl-9 pr-3 text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-secondary)] outline-none transition-colors focus:border-[var(--color-accent)]"
           />
         </div>
-        <button
+        <Button
+          variant={showFilters ? "primary" : "secondary"}
+          size="md"
           onClick={() => setShowFilters(!showFilters)}
-          className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm ${
-            showFilters
-              ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white"
-              : "border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-          }`}
         >
-          <Filter className="h-4 w-4" />
+          <Filter className="h-3.5 w-3.5" />
           Filters
-        </button>
-        <label className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-2 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={showSystem}
-            onChange={(e) => {
-              setShowSystem(e.target.checked);
-              setParams((p) => ({ ...p, offset: 0 }));
-            }}
-            className="h-4 w-4 rounded border-[var(--color-border)] accent-[var(--color-accent)]"
-          />
-          Internal queries
-        </label>
+        </Button>
+        <Checkbox
+          checked={showSystem}
+          onChange={(e) => {
+            setShowSystem(e.target.checked);
+            setParams((p) => ({ ...p, offset: 0 }));
+          }}
+          label="Internal queries"
+        />
       </div>
 
       {showFilters && (
-        <div className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-          <div className="mb-3 flex flex-wrap gap-2">
-            <span className="text-xs text-[var(--color-text-secondary)] self-center mr-1">Quick range:</span>
+        <Card className="p-4">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <span className="mr-1 self-center text-xs text-[var(--color-text-secondary)]">Quick range:</span>
             {DATE_PRESETS.map((p) => (
-              <button
+              <Button
                 key={p.hours}
+                variant="outline"
+                size="sm"
                 onClick={() => applyDatePreset(p.hours)}
-                className="rounded border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-accent)]"
               >
                 {p.label}
-              </button>
+              </Button>
             ))}
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">From</label>
-              <input
+            <div className="space-y-1">
+              <label className="block text-xs text-[var(--color-text-secondary)]">From</label>
+              <Input
                 type="datetime-local"
                 value={params.from_time ? params.from_time.slice(0, 16) : ""}
                 onChange={(e) => setParams((p) => ({ ...p, from_time: e.target.value ? new Date(e.target.value).toISOString() : undefined, offset: 0 }))}
-                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-text-primary)] outline-none"
+                className="w-full"
               />
             </div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">To</label>
-              <input
+            <div className="space-y-1">
+              <label className="block text-xs text-[var(--color-text-secondary)]">To</label>
+              <Input
                 type="datetime-local"
                 value={params.to_time ? params.to_time.slice(0, 16) : ""}
                 onChange={(e) => setParams((p) => ({ ...p, to_time: e.target.value ? new Date(e.target.value).toISOString() : undefined, offset: 0 }))}
-                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-xs text-[var(--color-text-primary)] outline-none"
+                className="w-full"
               />
             </div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">Query Kind</label>
-              <select
+            <div className="space-y-1">
+              <label className="block text-xs text-[var(--color-text-secondary)]">Query Kind</label>
+              <Select
                 value={params.query_kind || ""}
                 onChange={(e) => setParams((p) => ({ ...p, query_kind: e.target.value || undefined, offset: 0 }))}
-                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] outline-none"
+                className="w-full"
               >
                 <option value="">All</option>
                 <option value="Select">SELECT</option>
@@ -176,72 +199,83 @@ export function QueryList({ connected }: { connected: boolean }) {
                 <option value="Create">CREATE</option>
                 <option value="System">SYSTEM</option>
                 <option value="Other">Other</option>
-              </select>
+              </Select>
             </div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">User</label>
-              <input
-                type="text"
+            <div className="space-y-1">
+              <label className="block text-xs text-[var(--color-text-secondary)]">User</label>
+              <Input
                 value={params.user || ""}
                 onChange={(e) => setParams((p) => ({ ...p, user: e.target.value || undefined, offset: 0 }))}
                 placeholder="Username"
-                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] outline-none"
+                className="w-full"
               />
             </div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">Min Duration (ms)</label>
-              <input
+            <div className="space-y-1">
+              <label className="block text-xs text-[var(--color-text-secondary)]">Min Duration (ms)</label>
+              <Input
                 type="number"
                 value={params.min_duration || ""}
                 onChange={(e) =>
                   setParams((p) => ({ ...p, min_duration: e.target.value ? Number(e.target.value) : undefined, offset: 0 }))
                 }
                 placeholder="e.g. 1000"
-                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] outline-none"
+                className="w-full"
               />
             </div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">Sort Direction</label>
-              <select
+            <div className="space-y-1">
+              <label className="block text-xs text-[var(--color-text-secondary)]">Sort Direction</label>
+              <Select
                 value={params.sort_dir}
                 onChange={(e) => setParams((p) => ({ ...p, sort_dir: e.target.value as "ASC" | "DESC", offset: 0 }))}
-                className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] outline-none"
+                className="w-full"
               >
                 <option value="DESC">Descending</option>
                 <option value="ASC">Ascending</option>
-              </select>
+              </Select>
             </div>
           </div>
-        </div>
+        </Card>
       )}
 
       {error && (
-        <div className="mb-4 rounded-lg border border-[var(--color-error)] bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]">
-          {error}
-        </div>
+        <ErrorState error={error} onRetry={reload} />
       )}
 
-      {selected.size === 2 && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent)]/10 px-4 py-3">
-          <span className="text-sm text-[var(--color-text-primary)]">2 queries selected</span>
-          <button
-            onClick={() => navigate(`/compare?a=${selectedArr[0]}&b=${selectedArr[1]}`)}
-            className="flex items-center gap-1.5 rounded bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--color-accent-hover)]"
-          >
-            <GitCompare className="h-3.5 w-3.5" />
-            Compare
-          </button>
+      {selected.size > 0 && selected.size < 2 && (
+        <div className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--surface-card)] px-4 py-2 text-xs text-[var(--color-text-secondary)]">
+          <GitCompare className="h-3.5 w-3.5" />
+          Select one more query to compare (max 2).
           <button
             onClick={() => setSelected(new Set())}
-            className="text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+            className="ml-auto text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
           >
             Clear
           </button>
         </div>
       )}
 
+      {selected.size === 2 && (
+        <div className="flex items-center gap-3 rounded-md border border-[var(--color-accent)]/30 bg-[var(--state-accent)] px-4 py-2">
+          <Badge variant="default">2 selected</Badge>
+          <span className="text-xs text-[var(--color-text-secondary)]">Ready to compare</span>
+          <div className="ml-auto flex gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => navigate(`/compare?a=${selectedArr[0]}&b=${selectedArr[1]}`)}
+            >
+              <GitCompare className="h-3.5 w-3.5" />
+              Compare
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+              Clear
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
-        <div className="flex items-center border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-sm">
+        <div className="flex items-center border-b border-[var(--color-border)] bg-[var(--surface-card)] text-sm">
           <div className="w-10 shrink-0 px-2 py-3"></div>
           <div className="w-40 shrink-0 px-4 py-3 font-medium text-[var(--color-text-secondary)]">
             <span className="inline-flex cursor-pointer items-center gap-1 select-none hover:text-[var(--color-text-primary)]" onClick={() => setParams((p) => ({ ...p, sort_by: "query_start_time", sort_dir: p.sort_by === "query_start_time" && p.sort_dir === "DESC" ? "ASC" : "DESC", offset: 0 }))}>
@@ -280,12 +314,17 @@ export function QueryList({ connected }: { connected: boolean }) {
               {params.sort_by === "read_bytes" && (params.sort_dir === "DESC" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
             </span>
           </div>
-          <div className="w-10 shrink-0 px-2 py-3"></div>
+          <div className="w-20 shrink-0 px-2 py-3"></div>
         </div>
         {loading && queries.length === 0 ? (
           <div className="px-4 py-6"><TableSkeleton rows={8} cols={7} /></div>
         ) : queries.length === 0 ? (
-          <div className="px-4 py-12 text-center text-[var(--color-text-secondary)]">No queries found</div>
+          <EmptyState
+            icon={FileSearch}
+            title="No queries found"
+            description="Try adjusting your filters or expanding the time range."
+            className="rounded-none border-0"
+          />
         ) : (
           <VirtualQueryRows
             queries={queries}
@@ -293,36 +332,39 @@ export function QueryList({ connected }: { connected: boolean }) {
             onToggleSelect={toggleSelect}
             onNavigate={(id) => navigate(`/query/${id}`)}
             onCopy={copy}
+            onSendToEditor={(sql) => sendToEditor(navigate, sql, { origin: "query-list" })}
           />
         )}
       </div>
 
       {totalPages > 1 && (
-        <div className="mt-4 flex items-center justify-between">
+        <div className="flex items-center justify-between">
           <span className="text-sm text-[var(--color-text-secondary)]">
             Page {currentPage} of {totalPages}
           </span>
           <div className="flex gap-2">
-            <button
+            <Button
+              variant="secondary"
+              size="md"
               disabled={(params.offset || 0) === 0}
               onClick={() => { setParams((p) => ({ ...p, offset: Math.max(0, (p.offset || 0) - (p.limit || 50)) })); document.querySelector("main")?.scrollTo(0, 0); }}
-              className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-1.5 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
             >
-              <ChevronLeft className="h-4 w-4" />
+              <ChevronLeft className="h-3.5 w-3.5" />
               Previous
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="md"
               disabled={currentPage >= totalPages}
               onClick={() => { setParams((p) => ({ ...p, offset: (p.offset || 0) + (p.limit || 50) })); document.querySelector("main")?.scrollTo(0, 0); }}
-              className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-1.5 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
             >
               Next
-              <ChevronRight className="h-4 w-4" />
-            </button>
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Button>
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }
 
@@ -332,12 +374,14 @@ function VirtualQueryRows({
   onToggleSelect,
   onNavigate,
   onCopy,
+  onSendToEditor,
 }: {
   queries: QueryLogEntry[];
   selected: Set<string>;
   onToggleSelect: (id: string) => void;
   onNavigate: (id: string) => void;
   onCopy: (text: string, label?: string) => void;
+  onSendToEditor: (sql: string) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const rowHeight = 45;
@@ -368,7 +412,7 @@ function VirtualQueryRows({
             <div
               key={q.query_id}
               onClick={() => onNavigate(q.query_id)}
-              className={`absolute top-0 left-0 w-full flex cursor-pointer items-center border-b border-[var(--color-border)] hover:bg-[var(--color-bg-secondary)] transition-colors ${selected.has(q.query_id) ? "bg-[var(--color-accent)]/10" : ""}`}
+              className={`absolute top-0 left-0 w-full flex cursor-pointer items-center border-b border-[var(--color-border)] hover:bg-[var(--surface-hover)] transition-colors ${selected.has(q.query_id) ? "bg-[var(--state-accent)]" : ""}`}
               style={{
                 height: `${virtualRow.size}px`,
                 transform: `translateY(${virtualRow.start}px)`,
@@ -412,14 +456,23 @@ function VirtualQueryRows({
               <div className="w-28 shrink-0 whitespace-nowrap px-4 py-3 text-right font-mono text-[var(--color-text-secondary)]">
                 {formatBytes(q.read_bytes)}
               </div>
-              <div className="w-10 shrink-0 px-2 py-3" onClick={(e) => e.stopPropagation()}>
-                <button
-                  onClick={() => onCopy(q.query_id, "Query ID copied!")}
-                  className="rounded p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                  title="Copy query ID"
-                >
-                  <Copy className="h-3 w-3" />
-                </button>
+              <div className="w-20 shrink-0 px-2 py-3" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center gap-0.5">
+                  <button
+                    onClick={() => onSendToEditor(q.query)}
+                    className="rounded p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                    title="Open in Editor"
+                  >
+                    <Code className="h-3 w-3" />
+                  </button>
+                  <button
+                    onClick={() => onCopy(q.query_id, "Query ID copied!")}
+                    className="rounded p-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                    title="Copy query ID"
+                  >
+                    <Copy className="h-3 w-3" />
+                  </button>
+                </div>
               </div>
             </div>
           );
