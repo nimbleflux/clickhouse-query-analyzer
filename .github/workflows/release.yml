@@ -136,6 +136,25 @@ jobs:
     needs: [tag, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate AI release notes
+        id: notes
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | sed -n '2p' || echo "")
+          if bash .github/scripts/generate-release-notes.sh "$PREV_TAG" "${{ needs.tag.outputs.version }}" > release-notes.md 2>notes-error.log; then
+            echo "use_ai=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Generated release notes with Groq"
+          else
+            echo "use_ai=false" >> "$GITHUB_OUTPUT"
+            rm -f release-notes.md
+            echo "::warning::Groq release notes generation failed, falling back to auto-generated. Error: $(cat notes-error.log)"
+          fi
+
       - uses: actions/download-artifact@v4.3.0
         with:
           name: binary-linux-amd64
@@ -161,7 +180,8 @@ jobs:
         with:
           tag_name: ${{ needs.tag.outputs.version }}
           files: release-assets/*
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.use_ai == 'true' && 'release-notes.md' || '' }}
+          generate_release_notes: ${{ steps.notes.outputs.use_ai != 'true' }}
 
   docker:
     needs: tag
