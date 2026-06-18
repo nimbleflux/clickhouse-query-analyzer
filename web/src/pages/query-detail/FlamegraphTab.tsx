@@ -9,6 +9,7 @@ interface FlamegraphTabProps {
   flameData: FlameGraphData[];
   flameError: ApiError | null;
   flameLoading: boolean;
+  flameAttempted: boolean;
   query: QueryLogEntry;
   onSelectType: (type: string) => void;
   activeType?: string;
@@ -22,12 +23,13 @@ const TRACE_TYPES = [
   { key: "CPU", label: "CPU Time" },
 ];
 
-export function FlamegraphTab({ flameData, flameError, flameLoading, query, onSelectType, activeType = "Real" }: FlamegraphTabProps) {
+export function FlamegraphTab({ flameData, flameError, flameLoading, flameAttempted, query, onSelectType, activeType = "Real" }: FlamegraphTabProps) {
   const isTraceLogMissing = flameError !== null
     && flameError.message.toLowerCase().includes("trace_log")
     && flameError.isClickHouseError();
   const isRunning = query.type === "QueryStart";
   const hasData = flameData.length > 0;
+  const showLoading = flameLoading || (!flameAttempted && !flameError);
 
   return (
     <ChartSection title="Flame Graph">
@@ -44,7 +46,7 @@ export function FlamegraphTab({ flameData, flameError, flameLoading, query, onSe
           </Button>
         ))}
       </div>
-      {flameLoading ? (
+      {showLoading ? (
         <LoadingState message="Loading trace data..." />
       ) : hasData ? (
         <FlameGraph data={flameData} />

@@ -59,6 +59,7 @@ export function QueryDetail({ connected }: { connected: boolean }) {
   const [flameError, setFlameError] = useState<ApiError | null>(null);
   const [flameData, setFlameData] = useState<FlameGraphData[]>([]);
   const [flameLoading, setFlameLoading] = useState(false);
+  const [flameAttempted, setFlameAttempted] = useState(false);
   const [activeFlameType, setActiveFlameType] = useState<string>("Real");
 
   useEffect(() => {
@@ -119,6 +120,7 @@ export function QueryDetail({ connected }: { connected: boolean }) {
       setFlameError(ApiError.wrap(e));
     } finally {
       setFlameLoading(false);
+      setFlameAttempted(true);
     }
   };
 
@@ -292,6 +294,7 @@ export function QueryDetail({ connected }: { connected: boolean }) {
           flameData={flameData}
           flameError={flameError}
           flameLoading={flameLoading}
+          flameAttempted={flameAttempted}
           query={query}
           onSelectType={loadFlameGraphWithType}
           activeType={activeFlameType}

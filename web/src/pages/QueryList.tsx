@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Filter, ChevronLeft, ChevronRight, Clock, MemoryStick, Database, GitCompare, ArrowUp, ArrowDown, AlertTriangle, Copy, FileSearch, Code } from "lucide-react";
+import { Search, Filter, ChevronLeft, ChevronRight, Clock, MemoryStick, Database, GitCompare, ArrowUp, ArrowDown, Copy, FileSearch, Code } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { fetchQueries } from "../api/client";
 import type { QueryListParams, QueryLogEntry } from "../api/types";
@@ -22,6 +22,7 @@ const DATE_PRESETS: { label: string; hours: number }[] = [
   { label: "Last 24h", hours: 24 },
   { label: "Last 7d", hours: 168 },
   { label: "Last 30d", hours: 720 },
+  { label: "All time", hours: 0 },
 ];
 
 export function QueryList({ connected }: { connected: boolean }) {
@@ -36,9 +37,10 @@ export function QueryList({ connected }: { connected: boolean }) {
   const [params, setParams] = useState<QueryListParams>({
     limit: 50,
     offset: 0,
-    sort_by: "query_start_time",
+    sort_by: "event_time",
     sort_dir: "DESC",
     hide_system_queries: true,
+    from_time: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
   });
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -57,6 +59,8 @@ export function QueryList({ connected }: { connected: boolean }) {
   const selectedArr = Array.from(selected);
 
   const isFirstPage = (params.offset || 0) === 0;
+  const hasDateFilter = !!(params.from_time || params.to_time);
+  const wantsCount = isFirstPage && hasDateFilter;
 
   useEffect(() => {
     if (!connected) return;
@@ -65,14 +69,16 @@ export function QueryList({ connected }: { connected: boolean }) {
     setLoading(true);
     setError(null);
     fetchQueries(
-      { ...params, search: debouncedSearch || undefined, hide_system_queries: !showSystem, include_count: isFirstPage },
+      { ...params, search: debouncedSearch || undefined, hide_system_queries: !showSystem, include_count: wantsCount },
       controller.signal,
     )
       .then((data) => {
         if (!active) return;
         setQueries(data.queries || []);
-        setTotal(data.total);
-        if (isFirstPage) setCachedTotal(data.total);
+        if (wantsCount) {
+          setTotal(data.total);
+          setCachedTotal(data.total);
+        }
       })
       .catch((e) => {
         if (!active) return;
@@ -88,13 +94,20 @@ export function QueryList({ connected }: { connected: boolean }) {
       active = false;
       controller.abort();
     };
-  }, [params, debouncedSearch, connected, showSystem, isFirstPage]);
+  }, [params, debouncedSearch, connected, showSystem, wantsCount]);
 
   const displayTotal = cachedTotal ?? total;
-  const totalPages = Math.ceil(displayTotal / (params.limit || 50));
+  const totalPages = displayTotal > 0 ? Math.ceil(displayTotal / (params.limit || 50)) : 0;
   const currentPage = Math.floor((params.offset || 0) / (params.limit || 50)) + 1;
+  const totalKnown = displayTotal > 0;
 
   const applyDatePreset = (hours: number) => {
+    setTotal(0);
+    setCachedTotal(null);
+    if (hours === 0) {
+      setParams((p) => ({ ...p, from_time: undefined, to_time: undefined, offset: 0 }));
+      return;
+    }
     const from = new Date(Date.now() - hours * 3600 * 1000).toISOString();
     setParams((p) => ({ ...p, from_time: from, to_time: undefined, offset: 0 }));
   };
@@ -273,13 +286,13 @@ export function QueryList({ connected }: { connected: boolean }) {
         </div>
       )}
 
-      <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
+      <div className={`overflow-hidden rounded-lg border border-[var(--color-border)] ${loading && queries.length > 0 ? "opacity-50 pointer-events-none transition-opacity" : ""}`}>
         <div className="flex items-center border-b border-[var(--color-border)] bg-[var(--surface-card)] text-sm">
           <div className="w-10 shrink-0 px-2 py-3"></div>
           <div className="w-40 shrink-0 px-4 py-3 font-medium text-[var(--color-text-secondary)]">
-            <span className="inline-flex cursor-pointer items-center gap-1 select-none hover:text-[var(--color-text-primary)]" onClick={() => setParams((p) => ({ ...p, sort_by: "query_start_time", sort_dir: p.sort_by === "query_start_time" && p.sort_dir === "DESC" ? "ASC" : "DESC", offset: 0 }))}>
+            <span className="inline-flex cursor-pointer items-center gap-1 select-none hover:text-[var(--color-text-primary)]" onClick={() => setParams((p) => ({ ...p, sort_by: "event_time", sort_dir: p.sort_by === "event_time" && p.sort_dir === "DESC" ? "ASC" : "DESC", offset: 0 }))}>
               Time
-              {params.sort_by === "query_start_time" && (params.sort_dir === "DESC" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
+              {params.sort_by === "event_time" && (params.sort_dir === "DESC" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
             </span>
           </div>
           <div className="w-32 shrink-0 px-4 py-3 font-medium text-[var(--color-text-secondary)]">
@@ -336,16 +349,17 @@ export function QueryList({ connected }: { connected: boolean }) {
         )}
       </div>
 
-      {totalPages > 1 && (
+      {(totalPages > 1 || !totalKnown || (params.offset || 0) > 0) && (
         <div className="flex items-center justify-between">
           <span className="text-sm text-[var(--color-text-secondary)]">
-            Page {currentPage} of {totalPages}
+            {totalKnown ? `Page ${currentPage} of ${totalPages}` : `Page ${currentPage}`}
+            {loading && <span className="ml-2 animate-pulse">Loading…</span>}
           </span>
           <div className="flex gap-2">
             <Button
               variant="secondary"
               size="md"
-              disabled={(params.offset || 0) === 0}
+              disabled={(params.offset || 0) === 0 || loading}
               onClick={() => { setParams((p) => ({ ...p, offset: Math.max(0, (p.offset || 0) - (p.limit || 50)) })); document.querySelector("main")?.scrollTo(0, 0); }}
             >
               <ChevronLeft className="h-3.5 w-3.5" />
@@ -354,7 +368,7 @@ export function QueryList({ connected }: { connected: boolean }) {
             <Button
               variant="secondary"
               size="md"
-              disabled={currentPage >= totalPages}
+              disabled={loading || (totalKnown && currentPage >= totalPages) || queries.length < (params.limit || 50)}
               onClick={() => { setParams((p) => ({ ...p, offset: (p.offset || 0) + (p.limit || 50) })); document.querySelector("main")?.scrollTo(0, 0); }}
             >
               Next
@@ -435,8 +449,9 @@ function VirtualQueryRows({
               <div className="w-32 shrink-0 truncate px-4 py-3 text-[var(--color-text-secondary)]" title={q.user}>{q.user}</div>
               <div className="min-w-0 flex-1 truncate px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]" title={q.query}>
                 <div className="flex items-center gap-1">
-                  {q.type === "QueryStart" && <Clock className="h-3 w-3 shrink-0 animate-spin text-[var(--color-warning)]" />}
-                  {(q.type === "ExceptionBeforeStart" || q.type === "ExceptionWhileProcessing") && <AlertTriangle className="h-3 w-3 shrink-0 text-[var(--color-error)]" />}
+                  {(q.type === "ExceptionBeforeStart" || q.type === "ExceptionWhileProcessing") && (
+                    <span className="shrink-0 rounded bg-[var(--state-error)] px-1 py-0.5 text-[9px] font-medium text-[var(--color-error)]" title={q.exception || undefined}>Error</span>
+                  )}
                   <Database className="h-3 w-3 shrink-0" />
                   <span className="truncate">{q.query}</span>
                 </div>

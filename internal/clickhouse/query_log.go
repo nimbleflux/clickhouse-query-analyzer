@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -77,53 +78,63 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 
 	table := c.tableRef("query_log")
 
-	where := "WHERE type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart') AND query != 'SELECT 1'"
-	args := []interface{}{}
-
-	if params.HideSystemQueries {
-		where += " AND NOT has(databases, 'system') AND lower(query_kind) NOT IN ('explain', 'system', 'show', 'create', 'drop', 'alter', 'set', 'use', 'kill', 'optimize', 'truncate', 'rename', 'check', 'detach', 'attach', 'none')"
-	}
+	// PREWHERE: selective filters on cheap columns (date range + search).
+	// ClickHouse reads only these columns first, then reads expensive columns
+	// (Settings, ProfileEvents, etc.) only for surviving rows.
+	prewhereParts := []string{}
+	prewhereArgs := []interface{}{}
 
 	if params.FromTime != "" {
-		where += " AND event_time >= ?"
-		args = append(args, params.FromTime)
+		prewhereParts = append(prewhereParts, "event_time >= ?")
+		prewhereArgs = append(prewhereArgs, params.FromTime)
 	}
 	if params.ToTime != "" {
-		where += " AND event_time <= ?"
-		args = append(args, params.ToTime)
-	}
-	if params.User != "" {
-		where += " AND user = ?"
-		args = append(args, params.User)
-	}
-	if params.QueryKind != "" {
-		where += " AND query_kind = ?"
-		args = append(args, params.QueryKind)
-	}
-	if params.MinDuration > 0 {
-		where += " AND query_duration_ms >= ?"
-		args = append(args, params.MinDuration)
-	}
-	if params.MinMemory > 0 {
-		where += " AND memory_usage >= ?"
-		args = append(args, params.MinMemory)
-	}
-	if params.MinReadBytes > 0 {
-		where += " AND read_bytes >= ?"
-		args = append(args, params.MinReadBytes)
+		prewhereParts = append(prewhereParts, "event_time <= ?")
+		prewhereArgs = append(prewhereArgs, params.ToTime)
 	}
 	if params.Search != "" {
-		where += " AND query ILIKE ?"
-		args = append(args, "%"+params.Search+"%")
+		prewhereParts = append(prewhereParts, "query ILIKE ?")
+		prewhereArgs = append(prewhereArgs, "%"+params.Search+"%")
 	}
-	where += " AND is_initial_query = 1"
+
+	// WHERE: remaining filters applied after PREWHERE.
+	whereParts := []string{
+		"type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')",
+		"query != 'SELECT 1'",
+		"is_initial_query = 1",
+	}
+	whereArgs := []interface{}{}
+
+	if params.HideSystemQueries {
+		whereParts = append(whereParts, "NOT has(databases, 'system') AND lower(query_kind) NOT IN ('explain', 'system', 'show', 'create', 'drop', 'alter', 'set', 'use', 'kill', 'optimize', 'truncate', 'rename', 'check', 'detach', 'attach', 'none')")
+	}
+	if params.User != "" {
+		whereParts = append(whereParts, "user = ?")
+		whereArgs = append(whereArgs, params.User)
+	}
+	if params.QueryKind != "" {
+		whereParts = append(whereParts, "query_kind = ?")
+		whereArgs = append(whereArgs, params.QueryKind)
+	}
+	if params.MinDuration > 0 {
+		whereParts = append(whereParts, "query_duration_ms >= ?")
+		whereArgs = append(whereArgs, params.MinDuration)
+	}
+	if params.MinMemory > 0 {
+		whereParts = append(whereParts, "memory_usage >= ?")
+		whereArgs = append(whereArgs, params.MinMemory)
+	}
+	if params.MinReadBytes > 0 {
+		whereParts = append(whereParts, "read_bytes >= ?")
+		whereArgs = append(whereArgs, params.MinReadBytes)
+	}
 
 	allowedSorts := map[string]bool{
-		"query_start_time": true, "query_duration_ms": true,
+		"event_time": true, "query_start_time": true, "query_duration_ms": true,
 		"memory_usage": true, "read_rows": true, "read_bytes": true,
 		"result_rows": true, "user": true,
 	}
-	sortCol := "query_start_time"
+	sortCol := "event_time"
 	if allowedSorts[params.SortBy] {
 		sortCol = params.SortBy
 	}
@@ -132,13 +143,27 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 		sortDir = "ASC"
 	}
 
-	countQuery := fmt.Sprintf("SELECT count() FROM %s %s", table, where)
+	// Combined WHERE clause for count() (all conditions, no PREWHERE needed
+	// since count() only reads filtered columns, not expensive Maps).
+	allParts := append(append([]string{}, prewhereParts...), whereParts...)
+	allArgs := append(append([]interface{}{}, prewhereArgs...), whereArgs...)
+	countWhere := "WHERE " + strings.Join(allParts, " AND ")
+
+	countQuery := fmt.Sprintf("SELECT count() FROM %s %s", table, countWhere)
 	var total uint64
 	if params.IncludeCount {
-		if err := c.conn.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		if err := c.conn.QueryRow(ctx, countQuery, allArgs...).Scan(&total); err != nil {
 			return nil, 0, fmt.Errorf("counting queries: %w", err)
 		}
 	}
+
+	// Data query: PREWHERE (selective) + WHERE (rest) for column-read efficiency.
+	prewhereClause := ""
+	if len(prewhereParts) > 0 {
+		prewhereClause = "PREWHERE " + strings.Join(prewhereParts, " AND ")
+	}
+	whereClause := "WHERE " + strings.Join(whereParts, " AND ")
+	dataArgs := append(prewhereArgs, whereArgs...)
 
 	dataQuery := fmt.Sprintf(`SELECT
 		type, event_time, query_start_time, query_duration_ms, query_id, query,
@@ -148,9 +173,9 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 		databases, tables, is_initial_query, initial_query_id,
 		COALESCE(Settings, map('','')), COALESCE(ProfileEvents, map('','')),
 		used_functions, used_storages, used_aggregate_functions
-	FROM %s %s ORDER BY %s %s, query_id LIMIT %d OFFSET %d`, table, where, sortCol, sortDir, params.Limit, params.Offset)
+	FROM %s %s %s ORDER BY %s %s, query_id LIMIT %d OFFSET %d`, table, prewhereClause, whereClause, sortCol, sortDir, params.Limit, params.Offset)
 
-	rows, err := c.conn.Query(ctx, dataQuery, args...)
+	rows, err := c.conn.Query(ctx, dataQuery, dataArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("querying query_log: %w", err)
 	}

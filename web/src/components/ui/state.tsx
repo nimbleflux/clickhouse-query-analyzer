@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { AlertCircle, RefreshCw, Plug, type LucideIcon } from "lucide-react";
+import { AlertCircle, Loader2, Plug, RefreshCw, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ApiError } from "@/api/errors";
 import { Button } from "./button";
@@ -144,7 +144,7 @@ export function LoadingState({ message = "Loading…", variant = "card", classNa
   if (variant === "inline") {
     return (
       <div className={cn("flex items-center gap-2 px-4 py-3 text-xs text-[var(--color-text-secondary)]", className)}>
-        <RefreshCw className="h-3 w-3 animate-spin" />
+        <Loader2 className="h-3 w-3 animate-spin" />
         {message}
       </div>
     );
@@ -156,7 +156,7 @@ export function LoadingState({ message = "Loading…", variant = "card", classNa
         className
       )}
     >
-      <RefreshCw className="h-6 w-6 animate-spin text-[var(--color-text-secondary)]" />
+      <Loader2 className="h-6 w-6 animate-spin text-[var(--color-text-secondary)]" />
       <div className="text-xs text-[var(--color-text-secondary)]">{message}</div>
     </div>
   );

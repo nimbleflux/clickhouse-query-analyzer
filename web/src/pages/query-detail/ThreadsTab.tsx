@@ -33,7 +33,7 @@ function sortValue(t: ThreadSummary, key: SortKey): number {
 
 export function ThreadsTab({ queryId, threads, pipelineStr, querySettings }: ThreadsTabProps) {
   const [threadSummaries, setThreadSummaries] = useState<ThreadSummary[]>([]);
-  const [summariesLoading, setSummariesLoading] = useState(false);
+  const [summariesLoading, setSummariesLoading] = useState(threads.length > 0);
   const [summariesError, setSummariesError] = useState("");
   const [selectedThread, setSelectedThread] = useState<number | null>(null);
   const [threadProfile, setThreadProfile] = useState<ThreadProfile | null>(null);

@@ -229,10 +229,13 @@ export function FlameGraph({ data }: { data: { name: string; value: number }[] }
     [locateNode, nodes]
   );
 
-  if (data.length === 0) {
+  if (nodes.length === 0) {
+    const allEmptyNames = data.length > 0 && data.every((d) => !d.name || !d.name.trim());
     return (
       <div className="py-8 text-center text-sm text-[var(--color-text-secondary)]">
-        No flame graph data available for this query. This can happen if the query was too fast to sample, or if trace_log is not enabled in ClickHouse settings.
+        {allEmptyNames
+          ? <>Trace data exists but symbol names are empty. Enable <code className="rounded bg-[var(--surface-base)] px-1">allow_introspection_functions</code> in ClickHouse for proper stack trace resolution.</>
+          : "No flame graph data available for this query. This can happen if the query was too fast to sample, or if trace_log is not enabled in ClickHouse settings."}
       </div>
     );
   }
@@ -252,6 +255,7 @@ export function FlameGraph({ data }: { data: { name: string; value: number }[] }
         role="img"
         aria-label="Flame graph of query profile"
         className="w-full cursor-pointer rounded"
+        style={{ height: 0 }}
         onMouseMove={handleMouseMove}
         onMouseLeave={() => { setHoveredIdx(-1); setTooltip(null); }}
         onClick={handleClick}

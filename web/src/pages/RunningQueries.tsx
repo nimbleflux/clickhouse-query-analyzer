@@ -243,6 +243,7 @@ export function RunningQueries({ connected }: { connected: boolean }) {
                 {filtered.map((p) => (
                   <tr
                     key={p.query_id}
+                    onClick={() => navigate(`/query/${p.query_id}`)}
                     className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)] transition-colors"
                   >
                     <td className={`whitespace-nowrap px-4 py-3 font-mono ${durationColor(p.query_duration_ms)}`}>
@@ -266,7 +267,6 @@ export function RunningQueries({ connected }: { connected: boolean }) {
                     <td className="whitespace-nowrap px-4 py-3 text-[var(--color-text-secondary)]">{p.user}</td>
                     <td
                       className="max-w-md truncate px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]"
-                      onClick={() => navigate(`/query/${p.query_id}`)}
                       title={p.query}
                     >
                       <div className="flex items-center gap-1">
