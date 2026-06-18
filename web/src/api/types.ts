@@ -330,6 +330,7 @@ export interface DashboardData {
   database: string;
   user: string;
   host_name: string;
+  partial_errors: string[];
 }
 
 export interface FingerprintQuery {

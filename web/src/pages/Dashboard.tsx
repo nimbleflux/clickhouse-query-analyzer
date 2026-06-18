@@ -175,6 +175,15 @@ export function Dashboard({ connected }: { connected: boolean }) {
         }
       />
 
+      {data.partial_errors?.length > 0 && (
+        <div className="flex items-center gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)] px-4 py-2 text-xs text-[var(--color-text-secondary)]">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
+          <span>
+            Some sections are unavailable — your ClickHouse user may lack access to: {data.partial_errors.join(", ")}.
+          </span>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           label={`Uptime${(data.nodes?.length ?? 0) > 1 ? ` (${data.nodes.length} nodes)` : ""}`}

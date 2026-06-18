@@ -85,31 +85,25 @@ type DashboardData struct {
 	Database         string                  `json:"database"`
 	User             string                  `json:"user"`
 	HostName         string                  `json:"host_name"`
+	PartialErrors    []string                `json:"partial_errors"`
 }
 
 func (c *Client) GetDashboard(ctx context.Context) (*DashboardData, error) {
 	d := &DashboardData{
-		LogTables: []LogTableSize{},
-		Settings:  []SettingValue{},
-		Warnings:  []string{},
-		Cluster:   c.cluster,
-		IsCluster: c.isCluster,
-		Database:  c.connDB,
-		User:      c.connUser,
+		LogTables:     []LogTableSize{},
+		Settings:      []SettingValue{},
+		Warnings:      []string{},
+		Cluster:       c.cluster,
+		IsCluster:     c.isCluster,
+		Database:      c.connDB,
+		User:          c.connUser,
+		PartialErrors: []string{},
 	}
 
-	if err := c.queryMetrics(ctx, d); err != nil {
-		return nil, err
-	}
-	if err := c.queryRecentEvents(ctx, d); err != nil {
-		return nil, err
-	}
-	if err := c.queryDatabaseSizes(ctx, d); err != nil {
-		return nil, err
-	}
-	if err := c.queryTopTables(ctx, d); err != nil {
-		return nil, err
-	}
+	c.queryMetrics(ctx, d)
+	c.queryRecentEvents(ctx, d)
+	c.queryDatabaseSizes(ctx, d)
+	c.queryTopTables(ctx, d)
 	c.queryReplication(ctx, d)
 	c.queryServerInfo(ctx, d)
 	c.fillHostName(ctx, d)
@@ -139,53 +133,57 @@ func (c *Client) fillHostName(ctx context.Context, d *DashboardData) {
 	}
 }
 
-func (c *Client) queryMetrics(ctx context.Context, d *DashboardData) error {
+func (c *Client) queryMetrics(ctx context.Context, d *DashboardData) {
 	table := c.tableRef("metrics")
 	query := fmt.Sprintf(`SELECT metric, hostName() AS host, toUInt64(value) AS value FROM %s ORDER BY metric`, table)
 
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
-		return fmt.Errorf("querying system.metrics: %w", err)
+		d.Metrics = []SystemMetrics{}
+		d.PartialErrors = append(d.PartialErrors, "system.metrics")
+		return
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var m SystemMetrics
 		if err := rows.Scan(&m.Metric, &m.Host, &m.Value); err != nil {
-			return err
+			d.Metrics = []SystemMetrics{}
+			return
 		}
 		d.Metrics = append(d.Metrics, m)
 	}
 	if d.Metrics == nil {
 		d.Metrics = []SystemMetrics{}
 	}
-	return nil
 }
 
-func (c *Client) queryRecentEvents(ctx context.Context, d *DashboardData) error {
+func (c *Client) queryRecentEvents(ctx context.Context, d *DashboardData) {
 	table := c.tableRef("events")
 	query := fmt.Sprintf(`SELECT event, hostName() AS host, toUInt64(value) AS value FROM %s WHERE value > 0 ORDER BY value DESC LIMIT 30`, table)
 
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
-		return fmt.Errorf("querying system.events: %w", err)
+		d.RecentEvents = []SystemEvent{}
+		d.PartialErrors = append(d.PartialErrors, "system.events")
+		return
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var e SystemEvent
 		if err := rows.Scan(&e.Event, &e.Host, &e.Value); err != nil {
-			return err
+			d.RecentEvents = []SystemEvent{}
+			return
 		}
 		d.RecentEvents = append(d.RecentEvents, e)
 	}
 	if d.RecentEvents == nil {
 		d.RecentEvents = []SystemEvent{}
 	}
-	return nil
 }
 
-func (c *Client) queryDatabaseSizes(ctx context.Context, d *DashboardData) error {
+func (c *Client) queryDatabaseSizes(ctx context.Context, d *DashboardData) {
 	table := c.tableRef("parts")
 	query := fmt.Sprintf(`SELECT
 		database,
@@ -200,24 +198,26 @@ func (c *Client) queryDatabaseSizes(ctx context.Context, d *DashboardData) error
 
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
-		return fmt.Errorf("querying database sizes: %w", err)
+		d.DatabaseSizes = []DatabaseSize{}
+		d.PartialErrors = append(d.PartialErrors, "system.parts")
+		return
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var ds DatabaseSize
 		if err := rows.Scan(&ds.Database, &ds.Tables, &ds.Rows, &ds.CompressedBytes, &ds.UncompressedBytes); err != nil {
-			return err
+			d.DatabaseSizes = []DatabaseSize{}
+			return
 		}
 		d.DatabaseSizes = append(d.DatabaseSizes, ds)
 	}
 	if d.DatabaseSizes == nil {
 		d.DatabaseSizes = []DatabaseSize{}
 	}
-	return nil
 }
 
-func (c *Client) queryTopTables(ctx context.Context, d *DashboardData) error {
+func (c *Client) queryTopTables(ctx context.Context, d *DashboardData) {
 	table := c.tableRef("parts")
 	query := fmt.Sprintf(`SELECT
 		database, table,
@@ -230,7 +230,12 @@ func (c *Client) queryTopTables(ctx context.Context, d *DashboardData) error {
 
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
-		return fmt.Errorf("querying top tables: %w", err)
+		d.TopTablesBySize = []PartSummary{}
+		d.TopTablesByParts = []PartSummary{}
+		if !sliceContains(d.PartialErrors, "system.parts") {
+			d.PartialErrors = append(d.PartialErrors, "system.parts")
+		}
+		return
 	}
 	defer rows.Close()
 
@@ -238,7 +243,9 @@ func (c *Client) queryTopTables(ctx context.Context, d *DashboardData) error {
 	for rows.Next() {
 		var ps PartSummary
 		if err := rows.Scan(&ps.Database, &ps.Table, &ps.Parts, &ps.Rows, &ps.CompressedBytes, &ps.UncompressedBytes); err != nil {
-			return err
+			d.TopTablesBySize = []PartSummary{}
+			d.TopTablesByParts = []PartSummary{}
+			return
 		}
 		all = append(all, ps)
 	}
@@ -272,7 +279,15 @@ func (c *Client) queryTopTables(ctx context.Context, d *DashboardData) error {
 		limit = len(byParts)
 	}
 	d.TopTablesByParts = byParts[:limit]
-	return nil
+}
+
+func sliceContains(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) queryReplication(ctx context.Context, d *DashboardData) {
