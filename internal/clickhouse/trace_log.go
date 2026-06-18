@@ -34,7 +34,8 @@ func (c *Client) GetTraceLog(ctx context.Context, queryID string, traceType stri
 		trace, symbols, lines, size
 	FROM %s
 	WHERE query_id = ?%s
-	ORDER BY event_time ASC`, table, typeFilter)
+	ORDER BY event_time ASC
+	LIMIT 10000`, table, typeFilter)
 
 	rows, err := c.conn.Query(ctx, query, args...)
 	if err != nil {

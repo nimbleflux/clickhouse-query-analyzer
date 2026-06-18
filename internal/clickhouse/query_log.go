@@ -69,6 +69,12 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 	if params.Limit <= 0 {
 		params.Limit = defaultListParams.Limit
 	}
+	if params.Limit > 500 {
+		params.Limit = 500
+	}
+	if params.Offset < 0 {
+		params.Offset = 0
+	}
 	if params.SortBy == "" {
 		params.SortBy = defaultListParams.SortBy
 	}

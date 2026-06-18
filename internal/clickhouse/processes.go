@@ -3,7 +3,6 @@ package clickhouse
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 type ProcessEntry struct {
@@ -64,6 +63,5 @@ func (c *Client) ListProcesses(ctx context.Context) ([]ProcessEntry, error) {
 }
 
 func (c *Client) KillQuery(ctx context.Context, queryID string) error {
-	escaped := strings.ReplaceAll(queryID, "'", "''")
-	return c.conn.Exec(ctx, fmt.Sprintf("KILL QUERY WHERE query_id = '%s'", escaped))
+	return c.conn.Exec(ctx, "KILL QUERY WHERE query_id = ?", queryID)
 }

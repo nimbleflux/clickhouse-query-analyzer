@@ -18,12 +18,16 @@ import (
 	"github.com/nimbleflux/clickhouse-query-analyzer/internal/metrics"
 )
 
+const maxRequestBodySize = 1 << 20 // 1 MB
+
 func Router(cfg *config.Config, api *API, frontendFS fs.FS) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(chiMW.RequestID)
 	r.Use(chiMW.RealIP)
 	r.Use(chiMW.Recoverer)
+	r.Use(securityHeadersMiddleware)
+	r.Use(bodyLimitMiddleware)
 	r.Use(slogMiddleware)
 	r.Use(corsMiddleware(cfg.CORSOrigin))
 	r.Use(apiTimeout(30 * time.Second))
@@ -106,12 +110,23 @@ func apiRoutes(api *API) http.Handler {
 }
 
 func corsMiddleware(origin string) func(http.Handler) http.Handler {
+	// When origin is empty, no CORS headers are emitted — requests are
+	// same-origin only. When origin is "*", standard headers are allowed but
+	// NOT the X-CH-* credential headers (prevents cross-origin CSRF).
+	// X-CH-* headers are only advertised for explicit operator-configured origins.
+	chHeaders := "Content-Type, Authorization"
+	if origin != "" && origin != "*" {
+		chHeaders += ", X-CH-URL, X-CH-User, X-CH-Password, X-CH-Database, X-CH-Skip-TLS, X-CH-Readonly"
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CH-URL, X-CH-User, X-CH-Password, X-CH-Database, X-CH-Skip-TLS, X-CH-Readonly")
-			w.Header().Set("Access-Control-Max-Age", "86400")
+			if origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", chHeaders)
+				w.Header().Set("Access-Control-Max-Age", "86400")
+			}
 
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusOK)
@@ -121,6 +136,22 @@ func corsMiddleware(origin string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func bodyLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+		next.ServeHTTP(w, r)
+	})
 }
 
 func apiTimeout(d time.Duration) func(http.Handler) http.Handler {
@@ -143,22 +174,31 @@ func slogMiddleware(next http.Handler) http.Handler {
 		if status == 0 {
 			status = 200
 		}
-		path := r.URL.Path
-		if path == "/metrics" || path == "/health" {
+		rawPath := r.URL.Path
+		if rawPath == "/metrics" || rawPath == "/health" {
 			slog.Debug("request",
 				"method", r.Method,
-				"path", path,
+				"path", rawPath,
 				"status", status,
 				"duration", duration.Round(time.Microsecond),
 				"req_id", chiMW.GetReqID(r.Context()),
 			)
 			return
 		}
-		metrics.HTTPRequestsTotal.WithLabelValues(r.Method, path, strconv.Itoa(status)).Inc()
-		metrics.HTTPRequestDuration.WithLabelValues(r.Method, path).Observe(duration.Seconds())
+		// Use the matched route pattern (e.g. /api/queries/{queryID}) instead
+		// of the raw path to prevent Prometheus cardinality explosion from
+		// unique query IDs, hashes, etc.
+		routePattern := chi.RouteContext(r.Context()).RoutePattern()
+		metricsPath := routePattern
+		if metricsPath == "" {
+			metricsPath = rawPath
+		}
+		metrics.HTTPRequestsTotal.WithLabelValues(r.Method, metricsPath, strconv.Itoa(status)).Inc()
+		metrics.HTTPRequestDuration.WithLabelValues(r.Method, metricsPath).Observe(duration.Seconds())
 		slog.Info("request",
 			"method", r.Method,
-			"path", path,
+			"path", rawPath,
+			"route", metricsPath,
 			"status", status,
 			"duration", duration.Round(time.Microsecond),
 			"req_id", chiMW.GetReqID(r.Context()),

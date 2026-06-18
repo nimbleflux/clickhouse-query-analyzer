@@ -109,11 +109,13 @@ func (c *Client) ExecuteQuery(ctx context.Context, query string, limit, offset i
 
 	u, _ := url.Parse(httpURL)
 	q := u.Query()
-	q.Set("max_result_rows", fmt.Sprintf("%d", limit))
-	q.Set("result_overflow_mode", "break")
 	for k, v := range settings {
 		q.Set(k, v)
 	}
+	// Apply defense-in-depth limits AFTER user settings so they can't be
+	// overridden by the client (e.g. sending max_result_rows=999999999).
+	q.Set("max_result_rows", fmt.Sprintf("%d", limit))
+	q.Set("result_overflow_mode", "break")
 	u.RawQuery = q.Encode()
 
 	body := bytes.NewBufferString(executedQuery)

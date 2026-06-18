@@ -27,7 +27,7 @@ func Parse() *Config {
 	flag.StringVar(&cfg.ClickHousePass, "clickhouse-password", "", "ClickHouse password")
 	flag.StringVar(&cfg.ClickHouseDB, "clickhouse-db", "system", "ClickHouse database for system tables")
 	flag.BoolVar(&cfg.DevMode, "dev", false, "Development mode (serve frontend from web/dist)")
-	flag.StringVar(&cfg.CORSOrigin, "cors-origin", "*", "Allowed CORS origin (e.g. https://example.com or * for any)")
+	flag.StringVar(&cfg.CORSOrigin, "cors-origin", "", "Allowed CORS origin (e.g. https://example.com). Empty = same-origin only, * = any origin (without credential headers).")
 	flag.Parse()
 
 	if v := os.Getenv("CLICKHOUSE_URL"); v != "" {

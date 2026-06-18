@@ -110,13 +110,13 @@ func (p *Pool) checkHealth() {
 
 	for key, c := range p.clients {
 		if time.Since(c.createdAt) >= connMaxAge {
-			slog.Info("evicting expired connection", "key", key)
+			slog.Info("evicting expired connection", "url", c.connURL)
 			p.evictLocked(key, c)
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := c.conn.Ping(ctx); err != nil {
-			slog.Warn("evicting unhealthy connection", "key", key, "error", err)
+			slog.Warn("evicting unhealthy connection", "url", c.connURL, "error", err)
 			p.evictLocked(key, c)
 		}
 		cancel()
@@ -266,15 +266,17 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 	p.mu.Lock()
 	if len(p.clients) >= maxPoolSize {
 		var oldestKey string
+		var oldestURL string
 		var oldestTime time.Time
 		for k, v := range p.clients {
 			if oldestKey == "" || v.lastUsedAt.Before(oldestTime) {
 				oldestKey = k
+				oldestURL = v.connURL
 				oldestTime = v.lastUsedAt
 			}
 		}
 		if oldestKey != "" {
-			slog.Info("evicting oldest connection to make room", "key", oldestKey)
+			slog.Info("evicting oldest connection to make room", "url", oldestURL)
 			if old, ok := p.clients[oldestKey]; ok {
 				old.conn.Close()
 				delete(p.clients, oldestKey)
@@ -286,7 +288,7 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 	p.mu.Unlock()
 	p.updatePoolGauge()
 
-	slog.Info("connected to clickhouse", "key", key, "cluster", isCluster)
+	slog.Info("connected to clickhouse", "url", params.URL, "user", params.User, "cluster", isCluster)
 	return c, nil
 }
 
