@@ -13,7 +13,7 @@ import { RunningQueries } from "./pages/RunningQueries";
 import { QueryFingerprints } from "./pages/QueryFingerprints";
 import { FingerprintDetail } from "./pages/FingerprintDetail";
 import { Dashboard } from "./pages/Dashboard";
-import { loadConnection, saveConnection, setConnectionHeaders, clearConnectionHeaders } from "./api/connection";
+import { loadConnection, saveConnection, setConnectionHeaders, clearConnectionHeaders, DEFAULT_CONNECTION } from "./api/connection";
 import type { ConnectionParams } from "./api/connection";
 import { testConnection, fetchServerConfig } from "./api/client";
 
@@ -34,35 +34,47 @@ function App() {
   useEffect(() => {
     const saved = loadConnection();
     const hasSavedConnection = !!localStorage.getItem("ch-query-analyzer-connection");
+    const userChoseExplicitly = hasSavedConnection && saved.url !== DEFAULT_CONNECTION.url;
 
-    if (hasSavedConnection && saved.url) {
-      // User has a saved connection — use it (existing behavior).
-      tryConnect(saved);
-      return;
-    }
-
-    // No saved connection — check if the server has env-var-configured defaults.
     let cancelled = false;
+
+    // Always fetch server config — the operator may have set CLICKHOUSE_URL
+    // etc. that should pre-fill (or override a stale localhost default).
     fetchServerConfig()
       .then((config) => {
-        if (cancelled || !config.default_connection) return;
+        if (cancelled) return;
         const dc = config.default_connection;
-        const params: ConnectionParams = {
-          url: dc.url,
-          user: dc.user || "default",
-          password: "",
-          database: dc.database || "system",
-          skip_tls: dc.skip_tls,
-          readonly: false,
-        };
-        setConnectionParams(params);
-        // If the server has a password configured, we can auto-connect without
-        // the user entering anything — the backend fills in the password.
-        if (dc.has_password) {
-          tryConnect(params);
+
+        if (dc && !userChoseExplicitly) {
+          // No saved connection, or saved connection is the unchanged default
+          // (localhost:9000) — use the server's URL instead.
+          const params: ConnectionParams = {
+            url: dc.url,
+            user: dc.user || "default",
+            password: "",
+            database: dc.database || "system",
+            skip_tls: dc.skip_tls,
+            readonly: false,
+          };
+          setConnectionParams(params);
+          if (dc.has_password) {
+            // Server has full credentials — auto-connect.
+            tryConnect(params);
+          } else if (hasSavedConnection) {
+            // No server password, but user has saved creds — try those.
+            tryConnect(saved);
+          }
+        } else if (hasSavedConnection && saved.url) {
+          // User explicitly chose a different URL — respect their choice.
+          tryConnect(saved);
         }
       })
-      .catch(() => { /* server config unavailable — fall back to defaults */ });
+      .catch(() => {
+        // Server config unavailable — fall back to saved connection or defaults.
+        if (hasSavedConnection && saved.url) {
+          tryConnect(saved);
+        }
+      });
 
     return () => { cancelled = true; };
   }, [tryConnect]);

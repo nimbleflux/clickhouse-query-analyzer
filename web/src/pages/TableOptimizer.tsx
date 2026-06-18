@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useSearchParams, useNavigate } from "react-router-dom";
-import { Plug, Loader2, ChevronDown, ChevronRight, Copy, ArrowDown, ArrowUp, Play, StopCircle, Zap, Send } from "lucide-react";
+import { Loader2, ChevronDown, ChevronRight, Copy, ArrowDown, ArrowUp, Play, StopCircle, Zap, Send } from "lucide-react";
 import { fetchDatabases, fetchTables, fetchTableAnalysis, streamBulkAnalysis } from "../api/client";
 import { getCachedDatabases, getCachedSchemaData, setCachedDatabases, updateSchemaDb } from "../api/schema-cache";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -11,7 +11,7 @@ import { Select } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/dialog";
-import { EmptyState, ErrorState } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
 import { TableSummary } from "./optimizer/TableSummary";
 import { RecommendationCards } from "./optimizer/RecommendationCards";
 import { countBySeverity, severityScore, type AnalysisMode, type SortField } from "./optimizer/types";
@@ -168,16 +168,7 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
   );
 
   if (!connected) {
-    return (
-      <PageContainer>
-        <EmptyState
-          icon={Plug}
-          iconSize="lg"
-          title="Connect to ClickHouse"
-          description="Enter your connection details in the top bar to start optimizing tables."
-        />
-      </PageContainer>
-    );
+    return <NotConnectedState />;
   }
 
   return (

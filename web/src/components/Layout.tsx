@@ -39,6 +39,18 @@ export function Layout({
   const [cluster, setCluster] = useState<string>("");
   const location = useLocation();
 
+  // Sync the form when the parent updates the connection params (e.g. after
+  // /api/config resolves with server-side defaults).
+  useEffect(() => {
+    setParams(connection);
+  }, [connection]);
+
+  // Collapse the connection bar once a connection is established (covers the
+  // auto-connect path on page refresh, which doesn't go through handleConnect).
+  useEffect(() => {
+    if (connected) setEditing(false);
+  }, [connected]);
+
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
