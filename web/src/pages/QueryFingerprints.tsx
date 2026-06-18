@@ -18,6 +18,10 @@ const DATE_PRESETS: { label: string; hours: number }[] = [
   { label: "Last 30d", hours: 720 },
 ];
 
+function toCHDateTime(d: Date): string {
+  return d.toISOString().slice(0, 19).replace("T", " ");
+}
+
 type SortField = "last_seen" | "execution_count" | "avg_duration_ms" | "p95_duration_ms" | "max_duration_ms" | "avg_memory_usage" | "max_memory_usage" | "error_count" | "avg_read_rows";
 
 interface SortableHeaderProps {
@@ -99,7 +103,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
   };
 
   const applyDatePreset = (hours: number) => {
-    setFromTime(new Date(Date.now() - hours * 3600 * 1000).toISOString());
+    setFromTime(toCHDateTime(new Date(Date.now() - hours * 3600 * 1000)));
     setToTime("");
     setCurrentPage(1);
   };
@@ -153,7 +157,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
               <Input
                 type="datetime-local"
                 value={fromTime ? fromTime.slice(0, 16) : ""}
-                onChange={(e) => { setFromTime(e.target.value ? new Date(e.target.value).toISOString() : ""); setCurrentPage(1); }}
+                onChange={(e) => { setFromTime(e.target.value ? toCHDateTime(new Date(e.target.value)) : ""); setCurrentPage(1); }}
                 className="w-full"
               />
             </div>
@@ -162,7 +166,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
               <Input
                 type="datetime-local"
                 value={toTime ? toTime.slice(0, 16) : ""}
-                onChange={(e) => { setToTime(e.target.value ? new Date(e.target.value).toISOString() : ""); setCurrentPage(1); }}
+                onChange={(e) => { setToTime(e.target.value ? toCHDateTime(new Date(e.target.value)) : ""); setCurrentPage(1); }}
                 className="w-full"
               />
             </div>

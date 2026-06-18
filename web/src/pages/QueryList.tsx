@@ -25,6 +25,10 @@ const DATE_PRESETS: { label: string; hours: number }[] = [
   { label: "All time", hours: 0 },
 ];
 
+function toCHDateTime(d: Date): string {
+  return d.toISOString().slice(0, 19).replace("T", " ");
+}
+
 export function QueryList({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
   const copy = useCopyToClipboard();
@@ -40,7 +44,7 @@ export function QueryList({ connected }: { connected: boolean }) {
     sort_by: "event_time",
     sort_dir: "DESC",
     hide_system_queries: true,
-    from_time: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
+    from_time: toCHDateTime(new Date(Date.now() - 24 * 3600 * 1000)),
   });
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -108,7 +112,7 @@ export function QueryList({ connected }: { connected: boolean }) {
       setParams((p) => ({ ...p, from_time: undefined, to_time: undefined, offset: 0 }));
       return;
     }
-    const from = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+    const from = toCHDateTime(new Date(Date.now() - hours * 3600 * 1000));
     setParams((p) => ({ ...p, from_time: from, to_time: undefined, offset: 0 }));
   };
 
@@ -184,7 +188,7 @@ export function QueryList({ connected }: { connected: boolean }) {
               <Input
                 type="datetime-local"
                 value={params.from_time ? params.from_time.slice(0, 16) : ""}
-                onChange={(e) => setParams((p) => ({ ...p, from_time: e.target.value ? new Date(e.target.value).toISOString() : undefined, offset: 0 }))}
+                onChange={(e) => setParams((p) => ({ ...p, from_time: e.target.value ? toCHDateTime(new Date(e.target.value)) : undefined, offset: 0 }))}
                 className="w-full"
               />
             </div>
@@ -193,7 +197,7 @@ export function QueryList({ connected }: { connected: boolean }) {
               <Input
                 type="datetime-local"
                 value={params.to_time ? params.to_time.slice(0, 16) : ""}
-                onChange={(e) => setParams((p) => ({ ...p, to_time: e.target.value ? new Date(e.target.value).toISOString() : undefined, offset: 0 }))}
+                onChange={(e) => setParams((p) => ({ ...p, to_time: e.target.value ? toCHDateTime(new Date(e.target.value)) : undefined, offset: 0 }))}
                 className="w-full"
               />
             </div>
