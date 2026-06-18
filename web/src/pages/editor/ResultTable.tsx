@@ -241,7 +241,7 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
           {showPagination && (
             <div className="mt-2 flex items-center justify-end gap-2 text-xs text-[var(--color-text-secondary)]">
               <span>
-                {resultPage * pageSize + 1}-{Math.min((resultPage + 1) * pageSize, totalKnown ? totalRows : result.rows.length)}
+                {resultPage * pageSize + 1}-{totalKnown ? Math.min((resultPage + 1) * pageSize, totalRows) : resultPage * pageSize + result.rows.length}
                 {totalKnown ? ` of ${formatNumber(totalRows)}` : ""}
               </span>
               {pageLoading && <Loader2 className="h-3 w-3 animate-spin" />}
