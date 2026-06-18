@@ -12,6 +12,7 @@ import { executeQuery, fetchDatabases, fetchTables, fetchColumns } from "@/api/c
 import type { QueryResult } from "@/api/types";
 import { useTheme } from "@/api/theme";
 import { ConfirmDialog } from "@/components/ui/dialog";
+import { NotConnectedState } from "@/components/ui/state";
 import { buildShareableUrl, readSnapshotFromLocation } from "@/lib/snapshot";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import {
@@ -43,7 +44,7 @@ import { ParametersPanel } from "./editor/ParametersPanel";
 import { SettingsBar, SaveQueryDialog } from "./editor/SettingsBar";
 import { SectionDivider } from "./editor/AccordionSection";
 
-export function QueryEditor() {
+export function QueryEditor({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
   const location = useLocation();
   const theme = useTheme();
@@ -135,7 +136,7 @@ export function QueryEditor() {
       .finally(() => setSchemaLoading(false));
   }, []);
 
-  useEffect(() => { loadDatabases(); }, [loadDatabases]);
+  useEffect(() => { if (connected) loadDatabases(); }, [loadDatabases, connected]);
 
   const loadTables = useCallback(async (db: string) => {
     const current = getCachedSchemaData();
@@ -269,7 +270,7 @@ export function QueryEditor() {
   }, [sqlText, activeTab.id, updateTab, resolvedSQL, emptyParams, settings.readonly]);
 
   const executeStatements = useCallback(async (stmts: string[], historyInput: string) => {
-    updateTab(activeTab.id, { results: [], errors: [], running: true });
+    updateTab(activeTab.id, { results: [], errors: [], running: true, resultPage: 0, statements: stmts });
     abortRef.current = new AbortController();
     startTimer();
 
@@ -279,12 +280,12 @@ export function QueryEditor() {
 
     for (let i = 0; i < stmts.length; i++) {
       try {
-        const r = await executeQuery(stmts[i], 5000, chSettings, settings.readonly, abortRef.current?.signal);
+        const r = await executeQuery(stmts[i], pageSize, 0, chSettings, settings.readonly, abortRef.current?.signal);
         allResults.push(r);
         allErrors.push("");
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") break;
-        allResults.push({ columns: [], rows: [], row_count: 0, timing_ms: 0, query_id: "" });
+        allResults.push({ columns: [], rows: [], row_count: 0, total_rows: -1, timing_ms: 0, query_id: "" });
         allErrors.push(e instanceof Error ? e.message : "Query failed");
       }
     }
@@ -296,7 +297,32 @@ export function QueryEditor() {
       addToHistory(historyInput);
       setQueryHistory(loadHistory());
     }
-  }, [activeTab.id, updateTab, startTimer, stopTimer, buildSettingsMap, settings.readonly]);
+  }, [activeTab.id, updateTab, startTimer, stopTimer, buildSettingsMap, settings.readonly, pageSize]);
+
+  const loadResultPage = useCallback(async (page: number) => {
+    const stmts = activeTab.statements;
+    if (!stmts || stmts.length === 0) return;
+    updateTab(activeTab.id, { resultPage: page, pageLoading: true });
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    const chSettings = buildSettingsMap();
+    const offset = page * pageSize;
+    const allResults: QueryResult[] = [];
+    const allErrors: string[] = [];
+    for (let i = 0; i < stmts.length; i++) {
+      try {
+        const r = await executeQuery(stmts[i], pageSize, offset, chSettings, settings.readonly, abortRef.current?.signal);
+        allResults.push(r);
+        allErrors.push("");
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        allResults.push({ columns: [], rows: [], row_count: 0, total_rows: -1, timing_ms: 0, query_id: "" });
+        allErrors.push(e instanceof Error ? e.message : "Query failed");
+      }
+    }
+    updateTab(activeTab.id, { results: allResults, errors: allErrors, pageLoading: false });
+    abortRef.current = null;
+  }, [activeTab.id, activeTab.statements, updateTab, buildSettingsMap, settings.readonly, pageSize]);
 
   const runSelection = useCallback(async () => {
     const view = (editorRef.current as { view?: { state: { selection: { main: { from: number; to: number; head: number } }; sliceDoc: (from: number, to: number) => string; doc: { toString: () => string } } } })?.view;
@@ -641,6 +667,8 @@ export function QueryEditor() {
 
   const onSettingsChange = (s: EditorSettings) => setSettings(s);
 
+  if (!connected) return <NotConnectedState />;
+
   return (
     <div className="flex h-full overflow-hidden">
       <div
@@ -935,7 +963,11 @@ export function QueryEditor() {
                       result={result}
                       pageSize={pageSize}
                       resultPage={activeTab.resultPage}
-                      setResultPage={(fn) => updateTab(activeTab.id, { resultPage: fn(activeTab.resultPage) })}
+                      pageLoading={activeTab.pageLoading}
+                      setResultPage={(fn) => {
+                        const next = fn(activeTab.resultPage);
+                        loadResultPage(next);
+                      }}
                       onNavigate={(path) => navigate(path)}
                     />
                   )}

@@ -10,7 +10,7 @@ import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { ErrorState, EmptyState } from "@/components/ui/state";
+import { ErrorState, EmptyState, NotConnectedState } from "@/components/ui/state";
 
 interface ComparisonMetric {
   label: string;
@@ -30,7 +30,7 @@ const METRICS: ComparisonMetric[] = [
   { label: "Peak Threads", key: "peak_threads_usage", format: (v) => String(v) },
 ];
 
-export function QueryCompare() {
+export function QueryCompare({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const urlA = searchParams.get("a") || "";
@@ -60,14 +60,14 @@ export function QueryCompare() {
   };
 
   useEffect(() => {
-    if (urlA && urlB) {
-      setIdA(urlA);
-      setIdB(urlB);
-      const controller = new AbortController();
-      handleCompare(urlA, urlB, controller.signal);
-      return () => controller.abort();
-    }
-  }, [urlA, urlB]);
+    if (!connected || !urlA || !urlB) return;
+    setIdA(urlA);
+    setIdB(urlB);
+    const controller = new AbortController();
+    handleCompare(urlA, urlB, controller.signal);
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlA, urlB, connected]);
 
   const swap = () => {
     const next = `${idB}|${idA}`.split("|");
@@ -75,6 +75,8 @@ export function QueryCompare() {
     setIdB(next[1]);
     setSearchParams({ a: next[0], b: next[1] });
   };
+
+  if (!connected) return <NotConnectedState />;
 
   return (
     <PageContainer>

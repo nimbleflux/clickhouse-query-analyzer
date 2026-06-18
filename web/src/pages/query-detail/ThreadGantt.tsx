@@ -76,7 +76,6 @@ export function ThreadGantt({ threads }: ThreadGanttProps) {
   const minStart = Math.min(...rows.map((r) => r.startMs));
   const maxEnd = Math.max(...rows.map((r) => r.endMs));
   const totalSpan = Math.max(1, maxEnd - minStart);
-  const bucketSize = Math.max(1, Math.floor(rows.length / 30));
 
   const visibleRows = rows.slice(0, 100);
   const maxDuration = Math.max(...visibleRows.map((r) => r.durationMs));
@@ -113,14 +112,13 @@ export function ThreadGantt({ threads }: ThreadGanttProps) {
               const startPct = ((row.startMs - minStart) / totalSpan) * 100;
               const widthPct = Math.max(0.1, ((row.endMs - row.startMs) / totalSpan) * 100);
               const intensity = Math.max(0.3, Math.min(1, row.durationMs / maxDuration));
-              const isBucketStart = idx % bucketSize === 0;
               return (
                 <div key={`${row.threadId}-${idx}`} className="group flex items-center gap-2">
                   <div
                     className="w-44 shrink-0 truncate text-right font-mono text-[10px] text-[var(--color-text-secondary)]"
                     title={`${row.threadName} (id=${row.threadId})`}
                   >
-                    {isBucketStart || row.durationMs > maxDuration * 0.5 ? row.threadName : ""}
+                    {row.threadName} <span className="opacity-50">#{row.threadId}</span>
                   </div>
                   <div className="relative h-3 flex-1 rounded-sm bg-[var(--surface-elevated)]">
                     <div

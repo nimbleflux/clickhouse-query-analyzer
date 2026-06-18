@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { useNavigate } from "react-router-dom";
-import { Gauge, Database, HardDrive, Activity, RefreshCw, Server, AlertTriangle, Layers, Network, User, CheckCircle2, XCircle, Settings as SettingsIcon } from "lucide-react";
+import { Gauge, Database, HardDrive, Activity, RefreshCw, Server, AlertTriangle, Layers, Network, User, CheckCircle2, XCircle, Settings as SettingsIcon, ChevronDown, ChevronRight } from "lucide-react";
 import { fetchDashboard } from "../api/client";
 import type { DashboardData } from "../api/types";
 import { ApiError } from "../api/errors";
@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ErrorState } from "@/components/ui/state";
+import { ErrorState, NotConnectedState } from "@/components/ui/state";
 
 interface StatCardProps {
   label: string;
@@ -56,15 +56,6 @@ function TableCard({ title, icon, scrollable, children }: TableCardProps) {
   );
 }
 
-function MetricRow({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div className="flex items-center justify-between border-b border-[var(--color-border)] py-1.5 last:border-0">
-      <span className="text-xs text-[var(--color-text-secondary)]">{label}</span>
-      <span className={`font-mono text-xs ${color || "text-[var(--color-text-primary)]"}`}>{value}</span>
-    </div>
-  );
-}
-
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
@@ -79,7 +70,7 @@ function formatEventValue(name: string, value: number): string {
   return formatNumber(value);
 }
 
-export function Dashboard() {
+export function Dashboard({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -104,19 +95,22 @@ export function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (!connected) return;
     const controller = new AbortController();
     load(controller.signal);
     return () => controller.abort();
-  }, [load]);
+  }, [load, connected]);
 
   useEffect(() => {
-    if (autoRefresh) {
-      const controller = new AbortController();
-      intervalRef.current = setInterval(() => load(controller.signal), refreshInterval * 1000);
-      return () => { if (intervalRef.current) clearInterval(intervalRef.current); controller.abort(); };
-    }
-    return () => {};
-  }, [autoRefresh, refreshInterval, load]);
+    if (!connected || !autoRefresh) return;
+    const controller = new AbortController();
+    intervalRef.current = setInterval(() => load(controller.signal), refreshInterval * 1000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); controller.abort(); };
+  }, [autoRefresh, refreshInterval, load, connected]);
+
+  if (!connected) {
+    return <NotConnectedState />;
+  }
 
   if (error) {
     return (
@@ -336,9 +330,17 @@ export function Dashboard() {
         </TableCard>
 
         <TableCard title="System Metrics" icon={<Gauge className="h-3.5 w-3.5" />} scrollable>
-          {data.metrics.map((m) => (
-            <MetricRow key={m.metric} label={m.metric.replace(/([A-Z])/g, " $1").trim()} value={formatEventValue(m.metric, m.value)} />
-          ))}
+          <div>
+            {data.metrics.map((m, i) => (
+              <div key={`${m.metric}-${m.host}-${i}`} className="flex items-center justify-between border-b border-[var(--color-border)] py-1.5 last:border-0">
+                <span className="text-xs text-[var(--color-text-secondary)]">
+                  {m.metric.replace(/([A-Z])/g, " $1").trim()}
+                  {(data.nodes?.length ?? 0) > 1 && <span className="ml-1 opacity-60">({m.host})</span>}
+                </span>
+                <span className="font-mono text-xs text-[var(--color-text-primary)]">{formatEventValue(m.metric, m.value)}</span>
+              </div>
+            ))}
+          </div>
         </TableCard>
 
         {data.replica_statuses.length > 0 && (
@@ -412,6 +414,15 @@ interface Anomaly {
 }
 
 function AnomaliesAndWarningsCard({ data }: { data: DashboardData }) {
+  const STORAGE_KEY = "ch-dashboard-action-items-collapsed";
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem(STORAGE_KEY) === "1"; } catch { return false; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0"); } catch { /* ignore */ }
+  }, [collapsed]);
+
   const anomalies: Anomaly[] = [];
 
   for (const w of data.warnings || []) {
@@ -502,27 +513,33 @@ function AnomaliesAndWarningsCard({ data }: { data: DashboardData }) {
 
   return (
     <Card className="p-4">
-      <div className="mb-3 flex items-center gap-2 text-xs font-medium text-[var(--color-text-secondary)]">
+      <div
+        className={`mb-3 flex items-center gap-2 text-xs font-medium text-[var(--color-text-secondary)] ${collapsed ? "mb-0" : ""} cursor-pointer select-none hover:text-[var(--color-text-primary)]`}
+        onClick={() => setCollapsed((c) => !c)}
+      >
+        {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
         <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
         Action Items ({anomalies.length})
       </div>
-      <ul className="space-y-2">
-        {anomalies.map((a, i) => (
-          <li key={i} className="flex items-start gap-2 text-xs">
-            {a.severity === "error" ? (
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-500" />
-            ) : (
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
-            )}
-            <div className="flex-1">
-              <div className={`font-medium ${a.severity === "error" ? "text-rose-500" : "text-amber-500"}`}>
-                {a.title}
+      {!collapsed && (
+        <ul className="space-y-2">
+          {anomalies.map((a, i) => (
+            <li key={i} className="flex items-start gap-2 text-xs">
+              {a.severity === "error" ? (
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-500" />
+              ) : (
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+              )}
+              <div className="flex-1">
+                <div className={`font-medium ${a.severity === "error" ? "text-rose-500" : "text-amber-500"}`}>
+                  {a.title}
+                </div>
+                <div className="text-[var(--color-text-secondary)]">{a.detail}</div>
               </div>
-              <div className="text-[var(--color-text-secondary)]">{a.detail}</div>
-            </div>
-          </li>
-        ))}
-      </ul>
+            </li>
+          ))}
+        </ul>
+      )}
     </Card>
   );
 }

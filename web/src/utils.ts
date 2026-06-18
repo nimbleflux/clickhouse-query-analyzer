@@ -63,3 +63,28 @@ export function categorizeEvent(name: string): string {
   }
   return "Other";
 }
+
+export type QueryStatusVariant = "success" | "warning" | "error" | "outline";
+
+export interface QueryStatus {
+  label: string;
+  variant: QueryStatusVariant;
+}
+
+export function queryStatus(type: string): QueryStatus {
+  switch (type) {
+    case "QueryStart":
+      return { label: "Running", variant: "warning" };
+    case "QueryFinish":
+      return { label: "Complete", variant: "success" };
+    case "ExceptionBeforeStart":
+    case "ExceptionWhileProcessing":
+      return { label: "Exception", variant: "error" };
+    default:
+      return { label: type, variant: "outline" };
+  }
+}
+
+export function isException(type: string): boolean {
+  return type === "ExceptionBeforeStart" || type === "ExceptionWhileProcessing";
+}

@@ -9,6 +9,8 @@ export interface EditorTab {
   running: boolean;
   resultPage: number;
   paramValues: Record<string, string>;
+  statements?: string[];
+  pageLoading?: boolean;
 }
 
 export interface SidebarSections {

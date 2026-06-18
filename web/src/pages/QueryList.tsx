@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Filter, ChevronLeft, ChevronRight, Clock, MemoryStick, Database, Plug, GitCompare, ArrowUp, ArrowDown, AlertTriangle, Copy, FileSearch, Code } from "lucide-react";
+import { Search, Filter, ChevronLeft, ChevronRight, Clock, MemoryStick, Database, GitCompare, ArrowUp, ArrowDown, AlertTriangle, Copy, FileSearch, Code } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { fetchQueries } from "../api/client";
 import type { QueryListParams, QueryLogEntry } from "../api/types";
@@ -14,7 +14,7 @@ import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Checkbox } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { EmptyState, ErrorState } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
 import { Badge } from "@/components/ui/badge";
 
 const DATE_PRESETS: { label: string; hours: number }[] = [
@@ -29,6 +29,7 @@ export function QueryList({ connected }: { connected: boolean }) {
   const copy = useCopyToClipboard();
   const [queries, setQueries] = useState<QueryLogEntry[]>([]);
   const [total, setTotal] = useState(0);
+  const [cachedTotal, setCachedTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -55,17 +56,23 @@ export function QueryList({ connected }: { connected: boolean }) {
 
   const selectedArr = Array.from(selected);
 
+  const isFirstPage = (params.offset || 0) === 0;
+
   useEffect(() => {
     if (!connected) return;
     const controller = new AbortController();
     let active = true;
     setLoading(true);
     setError(null);
-    fetchQueries({ ...params, search: debouncedSearch || undefined, hide_system_queries: !showSystem }, controller.signal)
+    fetchQueries(
+      { ...params, search: debouncedSearch || undefined, hide_system_queries: !showSystem, include_count: isFirstPage },
+      controller.signal,
+    )
       .then((data) => {
         if (!active) return;
         setQueries(data.queries || []);
         setTotal(data.total);
+        if (isFirstPage) setCachedTotal(data.total);
       })
       .catch((e) => {
         if (!active) return;
@@ -81,9 +88,10 @@ export function QueryList({ connected }: { connected: boolean }) {
       active = false;
       controller.abort();
     };
-  }, [params, debouncedSearch, connected, showSystem]);
+  }, [params, debouncedSearch, connected, showSystem, isFirstPage]);
 
-  const totalPages = Math.ceil(total / (params.limit || 50));
+  const displayTotal = cachedTotal ?? total;
+  const totalPages = Math.ceil(displayTotal / (params.limit || 50));
   const currentPage = Math.floor((params.offset || 0) / (params.limit || 50)) + 1;
 
   const applyDatePreset = (hours: number) => {
@@ -96,16 +104,7 @@ export function QueryList({ connected }: { connected: boolean }) {
   };
 
   if (!connected) {
-    return (
-      <PageContainer>
-        <EmptyState
-          icon={Plug}
-          iconSize="lg"
-          title="Connect to ClickHouse"
-          description="Enter your connection details in the top bar to start exploring queries."
-        />
-      </PageContainer>
-    );
+    return <NotConnectedState />;
   }
 
   return (
@@ -283,7 +282,7 @@ export function QueryList({ connected }: { connected: boolean }) {
               {params.sort_by === "query_start_time" && (params.sort_dir === "DESC" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
             </span>
           </div>
-          <div className="w-24 shrink-0 px-4 py-3 font-medium text-[var(--color-text-secondary)]">
+          <div className="w-32 shrink-0 px-4 py-3 font-medium text-[var(--color-text-secondary)]">
             <span className="inline-flex cursor-pointer items-center gap-1 select-none hover:text-[var(--color-text-primary)]" onClick={() => setParams((p) => ({ ...p, sort_by: "user", sort_dir: p.sort_by === "user" && p.sort_dir === "DESC" ? "ASC" : "DESC", offset: 0 }))}>
               User
               {params.sort_by === "user" && (params.sort_dir === "DESC" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
@@ -317,7 +316,7 @@ export function QueryList({ connected }: { connected: boolean }) {
           <div className="w-20 shrink-0 px-2 py-3"></div>
         </div>
         {loading && queries.length === 0 ? (
-          <div className="px-4 py-6"><TableSkeleton rows={8} cols={7} /></div>
+          <div className="px-4 py-6"><TableSkeleton rows={20} cols={7} /></div>
         ) : queries.length === 0 ? (
           <EmptyState
             icon={FileSearch}
@@ -398,7 +397,7 @@ function VirtualQueryRows({
   }, [queries]);
 
   return (
-    <div ref={parentRef} className="max-h-[600px] overflow-auto text-sm">
+    <div ref={parentRef} className="max-h-[calc(100vh-280px)] overflow-auto text-sm">
       <div
         style={{
           height: `${virtualizer.getTotalSize()}px`,
@@ -433,10 +432,11 @@ function VirtualQueryRows({
                   {formatTime(q.query_start_time)}
                 </div>
               </div>
-              <div className="w-24 shrink-0 whitespace-nowrap px-4 py-3 text-[var(--color-text-secondary)]">{q.user}</div>
+              <div className="w-32 shrink-0 truncate px-4 py-3 text-[var(--color-text-secondary)]" title={q.user}>{q.user}</div>
               <div className="min-w-0 flex-1 truncate px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]" title={q.query}>
                 <div className="flex items-center gap-1">
-                  {q.type !== "QueryFinish" && <AlertTriangle className="h-3 w-3 shrink-0 text-[var(--color-error)]" />}
+                  {q.type === "QueryStart" && <Clock className="h-3 w-3 shrink-0 animate-spin text-[var(--color-warning)]" />}
+                  {(q.type === "ExceptionBeforeStart" || q.type === "ExceptionWhileProcessing") && <AlertTriangle className="h-3 w-3 shrink-0 text-[var(--color-error)]" />}
                   <Database className="h-3 w-3 shrink-0" />
                   <span className="truncate">{q.query}</span>
                 </div>

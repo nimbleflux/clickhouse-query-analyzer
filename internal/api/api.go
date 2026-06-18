@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nimbleflux/clickhouse-query-analyzer/internal/clickhouse"
+	"github.com/nimbleflux/clickhouse-query-analyzer/internal/config"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -26,11 +27,22 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 }
 
 type API struct {
-	pool *clickhouse.Pool
+	pool            *clickhouse.Pool
+	defaultURL      string
+	defaultUser     string
+	defaultPassword string
+	defaultDatabase string
 }
 
-func New(pool *clickhouse.Pool) *API {
-	return &API{pool: pool}
+func New(pool *clickhouse.Pool, cfg *config.Config) *API {
+	api := &API{pool: pool}
+	if cfg != nil {
+		api.defaultURL = cfg.ClickHouseURL
+		api.defaultUser = cfg.ClickHouseUser
+		api.defaultPassword = cfg.ClickHousePass
+		api.defaultDatabase = cfg.ClickHouseDB
+	}
+	return api
 }
 
 func (a *API) clientFromRequest(r *http.Request) (*clickhouse.Client, error) {
@@ -40,6 +52,21 @@ func (a *API) clientFromRequest(r *http.Request) (*clickhouse.Client, error) {
 		Password: r.Header.Get("X-CH-Password"),
 		Database: r.Header.Get("X-CH-Database"),
 		SkipTLS:  r.Header.Get("X-CH-Skip-TLS") == "1",
+	}
+	// Fall back to server-side defaults (from env vars / CLI flags) when the
+	// browser didn't provide a value. This lets operators pre-configure the
+	// connection so users don't have to enter anything.
+	if params.URL == "" {
+		params.URL = a.defaultURL
+	}
+	if params.User == "" {
+		params.User = a.defaultUser
+	}
+	if params.Password == "" {
+		params.Password = a.defaultPassword
+	}
+	if params.Database == "" {
+		params.Database = a.defaultDatabase
 	}
 	if params.User == "" {
 		params.User = "default"

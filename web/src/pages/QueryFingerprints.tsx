@@ -9,7 +9,7 @@ import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Input, Checkbox } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { EmptyState, ErrorState } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
 
 const DATE_PRESETS: { label: string; hours: number }[] = [
   { label: "Last 1h", hours: 1 },
@@ -44,7 +44,7 @@ function SortableHeader({ field, sortBy, sortDir, onToggle, label, align = "left
   );
 }
 
-export function QueryFingerprints() {
+export function QueryFingerprints({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
   const [data, setData] = useState<FingerprintListResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -84,7 +84,7 @@ export function QueryFingerprints() {
     }
   }, [debouncedSearch, user, sortBy, sortDir, currentPage, showSystem, fromTime, toTime]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (connected) load(); }, [load, connected]);
 
   const totalPages = data ? Math.ceil(data.total / pageSize) : 0;
 
@@ -103,6 +103,8 @@ export function QueryFingerprints() {
     setToTime("");
     setCurrentPage(1);
   };
+
+  if (!connected) return <NotConnectedState />;
 
   return (
     <PageContainer>

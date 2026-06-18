@@ -1,4 +1,4 @@
-import { Play } from "lucide-react";
+import { Play, AlertCircle } from "lucide-react";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -50,15 +50,18 @@ export function ExplainTab({ explain }: ExplainTabProps) {
   const theme = useTheme();
   const cmTheme = theme === "dark" ? oneDark : undefined;
 
+  const hasContent = !!(explain && (explain.plan || explain.pipeline || explain.pipeline_graph || explain.syntax || explain.estimate));
+  const errorEntries = explain?.errors ? Object.entries(explain.errors) : [];
+
   return (
     <div className="space-y-4">
-      {explain ? (
+      {hasContent ? (
         <>
-          {explain.estimate && <EstimateCard estimate={explain.estimate} />}
-          {explain.plan && (
+          {explain && explain.estimate && <EstimateCard estimate={explain.estimate} />}
+          {explain && explain.plan && (
             <VisualExplain plan={explain.plan} />
           )}
-          {explain.pipeline_graph && (
+          {explain && explain.pipeline_graph && (
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)] p-4">
               <div className="mb-3 flex items-center justify-between">
                 <span className="text-xs font-medium text-[var(--color-text-secondary)]">Pipeline Diagram (EXPLAIN PIPELINE graph=1)</span>
@@ -67,7 +70,7 @@ export function ExplainTab({ explain }: ExplainTabProps) {
               <PipelineDiagram dot={explain.pipeline_graph} />
             </div>
           )}
-          {explain.syntax && (
+          {explain && explain.syntax && (
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)] p-4">
               <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">Normalized Syntax</div>
               <CodeMirror
@@ -86,7 +89,7 @@ export function ExplainTab({ explain }: ExplainTabProps) {
               Raw EXPLAIN text
             </summary>
             <div className="p-4 pt-0">
-              {(["plan", "pipeline", "syntax"] as const).map((type) => {
+              {explain && (["plan", "pipeline", "syntax"] as const).map((type) => {
                 const content = explain[type];
                 if (typeof content !== "string") return null;
                 return (
@@ -102,7 +105,29 @@ export function ExplainTab({ explain }: ExplainTabProps) {
               })}
             </div>
           </details>
+          {errorEntries.length > 0 && <ExplainErrors errors={explain?.errors || {}} />}
         </>
+      ) : explain ? (
+        <div className="flex flex-col items-center gap-4 rounded-lg border border-[var(--color-error)]/30 bg-[var(--state-error)] px-6 py-10 text-center">
+          <AlertCircle className="h-8 w-8 text-[var(--color-error)]" />
+          <div className="text-sm font-medium text-[var(--color-error)]">EXPLAIN returned no data for this query</div>
+          <p className="max-w-md text-xs text-[var(--color-text-secondary)]">
+            This usually means the query text can&apos;t be re-explained in isolation (e.g. it references a session-scoped temp object, uses a disallowed clause, or the role lacks EXPLAIN privileges).
+          </p>
+          {errorEntries.length > 0 && (
+            <div className="mt-2 w-full max-w-xl text-left">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-secondary)]">Per-variant errors</div>
+              <div className="space-y-1">
+                {errorEntries.map(([variant, msg]) => (
+                  <div key={variant} className="rounded border border-[var(--color-error)]/30 bg-[var(--surface-card)] px-2 py-1">
+                    <span className="font-mono text-[10px] font-medium text-[var(--color-error)]">{variant}:</span>{" "}
+                    <span className="font-mono text-[10px] text-[var(--color-text-secondary)]">{msg}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       ) : (
         <div className="flex flex-col items-center gap-4 py-12">
           <Play className="h-8 w-8 text-[var(--color-text-secondary)]" />
@@ -112,5 +137,25 @@ export function ExplainTab({ explain }: ExplainTabProps) {
         </div>
       )}
     </div>
+  );
+}
+
+function ExplainErrors({ errors }: { errors: Record<string, string> }) {
+  const entries = Object.entries(errors);
+  if (entries.length === 0) return null;
+  return (
+    <details className="rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)]">
+      <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-[var(--color-warning)]">
+        {entries.length} EXPLAIN variant{entries.length > 1 ? "s" : ""} failed
+      </summary>
+      <div className="space-y-1 p-4 pt-0">
+        {entries.map(([variant, msg]) => (
+          <div key={variant}>
+            <span className="font-mono text-[10px] font-medium text-[var(--color-warning)]">{variant}:</span>{" "}
+            <span className="font-mono text-[10px] text-[var(--color-text-secondary)]">{msg}</span>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }

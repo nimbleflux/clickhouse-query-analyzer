@@ -54,6 +54,7 @@ type QueryListParams struct {
 	Limit             int    `json:"limit"`
 	Offset            int    `json:"offset"`
 	HideSystemQueries bool   `json:"hide_system_queries"`
+	IncludeCount      bool   `json:"include_count"`
 }
 
 var defaultListParams = QueryListParams{
@@ -133,8 +134,10 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 
 	countQuery := fmt.Sprintf("SELECT count() FROM %s %s", table, where)
 	var total uint64
-	if err := c.conn.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("counting queries: %w", err)
+	if params.IncludeCount {
+		if err := c.conn.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("counting queries: %w", err)
+		}
 	}
 
 	dataQuery := fmt.Sprintf(`SELECT
@@ -145,7 +148,7 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 		databases, tables, is_initial_query, initial_query_id,
 		COALESCE(Settings, map('','')), COALESCE(ProfileEvents, map('','')),
 		used_functions, used_storages, used_aggregate_functions
-	FROM %s %s ORDER BY %s %s LIMIT %d OFFSET %d`, table, where, sortCol, sortDir, params.Limit, params.Offset)
+	FROM %s %s ORDER BY %s %s, query_id LIMIT %d OFFSET %d`, table, where, sortCol, sortDir, params.Limit, params.Offset)
 
 	rows, err := c.conn.Query(ctx, dataQuery, args...)
 	if err != nil {

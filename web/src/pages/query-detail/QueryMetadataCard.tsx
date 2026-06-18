@@ -1,6 +1,6 @@
 import { Database, Table2, FunctionSquare, FileOutput, FileInput, Type, GitBranch } from "lucide-react";
 import type { QueryLogEntry } from "@/api/types";
-import { formatBytes, formatNumber } from "@/utils";
+import { formatBytes, formatNumber, queryStatus } from "@/utils";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
@@ -59,8 +59,8 @@ export function QueryMetadataCard({ query }: QueryMetadataCardProps) {
         label="Type"
         value={
           <span className="flex items-center gap-1.5">
-            <Badge variant={query.type === "QueryFinish" ? "success" : query.exception ? "error" : "outline"} className="text-[10px]">
-              {query.type}
+            <Badge variant={queryStatus(query.type).variant} className="text-[10px]">
+              {queryStatus(query.type).label}
             </Badge>
             {query.query_kind && (
               <Badge variant="outline" className="text-[10px]">

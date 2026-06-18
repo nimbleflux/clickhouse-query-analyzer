@@ -8,11 +8,12 @@ import (
 )
 
 type ExplainResult struct {
-	Plan          string           `json:"plan,omitempty"`
-	Pipeline      string           `json:"pipeline,omitempty"`
-	PipelineGraph string           `json:"pipeline_graph,omitempty"`
-	Syntax        string           `json:"syntax,omitempty"`
-	Estimate      *ExplainEstimate `json:"estimate,omitempty"`
+	Plan          string            `json:"plan,omitempty"`
+	Pipeline      string            `json:"pipeline,omitempty"`
+	PipelineGraph string            `json:"pipeline_graph,omitempty"`
+	Syntax        string            `json:"syntax,omitempty"`
+	Estimate      *ExplainEstimate  `json:"estimate,omitempty"`
+	Errors        map[string]string `json:"errors,omitempty"`
 }
 
 type ExplainEstimate struct {
@@ -25,33 +26,46 @@ type ExplainEstimate struct {
 }
 
 func (c *Client) GetExplain(ctx context.Context, query string) (*ExplainResult, error) {
-	result := &ExplainResult{}
+	result := &ExplainResult{Errors: map[string]string{}}
 
 	plan, err := c.runExplain(ctx, "EXPLAIN PLAN", query)
 	if err == nil {
 		result.Plan = plan
+	} else {
+		result.Errors["plan"] = err.Error()
 	}
 
 	pipeline, err := c.runExplain(ctx, "EXPLAIN PIPELINE", query)
 	if err == nil {
 		result.Pipeline = pipeline
+	} else {
+		result.Errors["pipeline"] = err.Error()
 	}
 
 	pipelineGraph, err := c.runExplain(ctx, "EXPLAIN PIPELINE graph=1", query)
 	if err == nil {
 		result.PipelineGraph = pipelineGraph
+	} else {
+		result.Errors["pipeline_graph"] = err.Error()
 	}
 
 	syntax, err := c.runExplain(ctx, "EXPLAIN SYNTAX", query)
 	if err == nil {
 		result.Syntax = syntax
+	} else {
+		result.Errors["syntax"] = err.Error()
 	}
 
 	estimate, err := c.runExplainEstimate(ctx, query)
 	if err == nil && estimate != nil {
 		result.Estimate = estimate
+	} else if err != nil {
+		result.Errors["estimate"] = err.Error()
 	}
 
+	if len(result.Errors) == 0 {
+		result.Errors = nil
+	}
 	return result, nil
 }
 

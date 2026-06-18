@@ -10,11 +10,11 @@ import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { fetchFingerprintTrend, fetchFingerprintQueries } from "../api/client";
 import type { TrendPoint, FingerprintQuery } from "../api/types";
 import { CardSkeleton } from "../components/Skeleton";
-import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor } from "../utils";
+import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor, queryStatus } from "../utils";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { EmptyState, ErrorState } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
 import { sendToEditor } from "@/lib/send-to-editor";
 import { ApiError } from "@/api/errors";
 
@@ -45,7 +45,7 @@ function ChartCard({ title, children }: ChartCardProps) {
   );
 }
 
-export function FingerprintDetail() {
+export function FingerprintDetail({ connected }: { connected: boolean }) {
   const { hash } = useParams<{ hash: string }>();
   const location = useLocation();
   const sampleQuery = (location.state as { query?: string } | null)?.query;
@@ -109,10 +109,13 @@ export function FingerprintDetail() {
   }, [hash, queries.length, loadingMore]);
 
   useEffect(() => {
+    if (!connected) return;
     const controller = new AbortController();
     load(controller.signal);
     return () => controller.abort();
-  }, [load]);
+  }, [load, connected]);
+
+  if (!connected) return <NotConnectedState />;
 
   if (!hash) {
     return <PageContainer><ErrorState error="Invalid fingerprint hash" /></PageContainer>;
@@ -592,14 +595,16 @@ function RecentExecutionsCard({
                     {q.user}
                   </td>
                   <td className="whitespace-nowrap px-3 py-1.5 text-xs">
-                    {q.type === "QueryFinish" ? (
-                      <span className="text-[var(--color-success)]">OK</span>
-                    ) : (
-                      <span className="flex items-center gap-1 text-[var(--color-error)]" title={q.exception || undefined}>
-                        <AlertTriangle className="h-3 w-3" />
-                        Error
-                      </span>
-                    )}
+                    {(() => {
+                      const s = queryStatus(q.type);
+                      const color = s.variant === "success" ? "text-[var(--color-success)]" : s.variant === "warning" ? "text-[var(--color-warning)]" : s.variant === "error" ? "text-[var(--color-error)]" : "text-[var(--color-text-secondary)]";
+                      return (
+                        <span className={`flex items-center gap-1 ${color}`} title={q.exception || undefined}>
+                          {s.variant === "error" && <AlertTriangle className="h-3 w-3" />}
+                          {s.label}
+                        </span>
+                      );
+                    })()}
                   </td>
                 </tr>
               ))}

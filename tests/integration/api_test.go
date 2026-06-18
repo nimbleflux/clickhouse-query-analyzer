@@ -23,7 +23,7 @@ func setupIntegrationAPI(t *testing.T) (*api.API, http.Handler) {
 	t.Cleanup(pool.CloseAll)
 
 	cfg := &config.Config{Version: "test"}
-	a := api.New(pool)
+	a := api.New(pool, cfg)
 	return a, api.Router(cfg, a, nil)
 }
 

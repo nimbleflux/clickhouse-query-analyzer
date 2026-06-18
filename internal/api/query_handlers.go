@@ -28,6 +28,7 @@ func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 		SortBy:            r.URL.Query().Get("sort_by"),
 		SortDir:           strings.ToUpper(r.URL.Query().Get("sort_dir")),
 		HideSystemQueries: r.URL.Query().Get("hide_system_queries") != "false",
+		IncludeCount:      r.URL.Query().Get("include_count") != "false",
 	}
 
 	if v := r.URL.Query().Get("min_duration"); v != "" {
@@ -326,6 +327,8 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Query    string            `json:"query"`
+		Limit    int               `json:"limit"`
+		Offset   int               `json:"offset"`
 		MaxRows  int               `json:"max_rows"`
 		Settings map[string]string `json:"settings"`
 	}
@@ -340,11 +343,24 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 	if isReadonly(r) && rejectWriteQuery(w, req.Query) {
 		return
 	}
-	if req.MaxRows <= 0 {
-		req.MaxRows = 1000
+
+	// Prefer the explicit limit/offset window (server-side pagination).
+	// Fall back to max_rows for backwards compatibility with older clients.
+	limit, offset := req.Limit, req.Offset
+	if limit <= 0 {
+		limit = req.MaxRows
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	if offset < 0 {
+		offset = 0
 	}
 
-	result, err := ch.ExecuteQuery(r.Context(), req.Query, req.MaxRows, req.Settings)
+	result, err := ch.ExecuteQuery(r.Context(), req.Query, limit, offset, req.Settings)
 	if err != nil {
 		respondErr(w, err, false)
 		return

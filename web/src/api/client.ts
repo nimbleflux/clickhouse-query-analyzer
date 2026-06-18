@@ -49,6 +49,20 @@ export type ConnectResponse = {
   is_cluster?: boolean;
 };
 
+export type ServerConfig = {
+  default_connection?: {
+    url: string;
+    user: string;
+    database: string;
+    has_password: boolean;
+    skip_tls: boolean;
+  };
+};
+
+export async function fetchServerConfig(signal?: AbortSignal): Promise<ServerConfig> {
+  return fetchJSON<ServerConfig>(`${BASE}/config`, { signal });
+}
+
 export async function testConnection(): Promise<ConnectResponse> {
   return fetchJSON<ConnectResponse>(`${BASE}/connect`, { method: "POST" });
 }
@@ -116,7 +130,14 @@ export async function fetchThreadProfile(queryId: string, threadId: number, sign
   return fetchJSON<ThreadProfile>(`${BASE}/queries/${encodeURIComponent(queryId)}/threads/${threadId}/profile`, { signal });
 }
 
-export async function executeQuery(query: string, maxRows = 1000, settings?: Record<string, string>, readonly = false, signal?: AbortSignal): Promise<QueryResult> {
+export async function executeQuery(
+  query: string,
+  limit: number,
+  offset: number,
+  settings?: Record<string, string>,
+  readonly = false,
+  signal?: AbortSignal,
+): Promise<QueryResult> {
   const headers: Record<string, string> = {
     ...getConnectionHeaders(),
     "Content-Type": "application/json",
@@ -127,7 +148,7 @@ export async function executeQuery(query: string, maxRows = 1000, settings?: Rec
   return fetchJSON<QueryResult>(`${BASE}/execute`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ query, max_rows: maxRows, settings }),
+    body: JSON.stringify({ query, limit, offset, settings }),
     signal,
   });
 }

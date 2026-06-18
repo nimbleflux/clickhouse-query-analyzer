@@ -113,6 +113,7 @@ export interface ExplainResult {
   pipeline_graph?: string;
   syntax?: string;
   estimate?: ExplainEstimate;
+  errors?: Record<string, string>;
 }
 
 export interface FlameGraphData {
@@ -174,12 +175,14 @@ export interface QueryListParams {
   limit?: number;
   offset?: number;
   hide_system_queries?: boolean;
+  include_count?: boolean;
 }
 
 export interface QueryResult {
   columns: { name: string; type: string }[];
   rows: Record<string, any>[];
   row_count: number;
+  total_rows: number;
   timing_ms: number;
   query_id: string;
 }
@@ -311,7 +314,7 @@ export interface FingerprintListResponse {
 }
 
 export interface DashboardData {
-  metrics: { metric: string; value: number }[];
+  metrics: { metric: string; host: string; value: number }[];
   recent_events: { event: string; host: string; value: number }[];
   database_sizes: { database: string; tables: number; rows: number; compressed_bytes: number; uncompressed_bytes: number }[];
   top_tables_by_size: { database: string; table: string; parts: number; rows: number; compressed_bytes: number; uncompressed_bytes: number }[];

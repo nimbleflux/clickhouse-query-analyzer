@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Copy, Check, ExternalLink, Download, ArrowUp, ArrowDown, ChevronLeft, ChevronRightIcon } from "lucide-react";
+import { Copy, Check, ExternalLink, Download, ArrowUp, ArrowDown, ChevronLeft, ChevronRightIcon, Loader2 } from "lucide-react";
 import { formatNumber } from "@/utils";
 import type { QueryResult } from "@/api/types";
 import { exportResult, formatElapsed } from "./utils";
@@ -59,11 +59,12 @@ interface ResultTableProps {
   result: QueryResult;
   pageSize: number;
   resultPage: number;
+  pageLoading?: boolean;
   setResultPage: (fn: (p: number) => number) => void;
   onNavigate: (path: string) => void;
 }
 
-export function ResultTable({ result, pageSize, resultPage, setResultPage, onNavigate }: ResultTableProps) {
+export function ResultTable({ result, pageSize, resultPage, pageLoading, setResultPage, onNavigate }: ResultTableProps) {
   const [colFilters, setColFilters] = useState<Record<string, string>>({});
   const [sortCol, setSortCol] = useState<string>("");
   const [sortAsc, setSortAsc] = useState(true);
@@ -91,8 +92,19 @@ export function ResultTable({ result, pageSize, resultPage, setResultPage, onNav
       })
     : filteredRows;
 
-  const pageRows = sortedRows.slice(resultPage * pageSize, (resultPage + 1) * pageSize);
+  // Rows received from the server are already the current page (no client-side slicing).
+  const pageRows = sortedRows;
   const hasFilters = Object.values(colFilters).some((v) => v);
+
+  // total_rows >= 0 means the server computed a real total. -1 means unknown
+  // (e.g. non-SELECT query or count failed). In the unknown case, if we
+  // received a full page we assume there may be more.
+  const totalKnown = result.total_rows >= 0;
+  const totalRows = totalKnown ? result.total_rows : -1;
+  const hasMore = totalKnown
+    ? (resultPage + 1) * pageSize < totalRows
+    : result.rows.length >= pageSize;
+  const showPagination = resultPage > 0 || hasMore || totalKnown;
 
   const toggleSort = (col: string) => {
     if (sortCol === col) {
@@ -102,7 +114,6 @@ export function ResultTable({ result, pageSize, resultPage, setResultPage, onNav
       setSortCol(col);
       setSortAsc(true);
     }
-    setResultPage(() => 0);
   };
 
   return (
@@ -127,7 +138,9 @@ export function ResultTable({ result, pageSize, resultPage, setResultPage, onNav
             </button>
           </span>
           <span className="text-xs text-[var(--color-text-secondary)]">
-            {formatNumber(sortedRows.length)}{sortedRows.length !== result.row_count ? ` of ${formatNumber(result.row_count)}` : ""} rows in {formatElapsed(result.timing_ms)}
+            {totalKnown
+              ? `${formatNumber(totalRows)} rows in ${formatElapsed(result.timing_ms)}`
+              : `${formatNumber(result.row_count)} row${result.row_count !== 1 ? "s" : ""} in ${formatElapsed(result.timing_ms)}`}
           </span>
           {hasFilters && (
             <button
@@ -195,7 +208,6 @@ export function ResultTable({ result, pageSize, resultPage, setResultPage, onNav
                           value={colFilters[c.name] || ""}
                           onChange={(e) => {
                             setColFilters((prev) => ({ ...prev, [c.name]: e.target.value }));
-                            setResultPage(() => 0);
                           }}
                           placeholder="Filter..."
                           className="w-full min-w-[60px] rounded border border-[var(--color-border)] bg-[var(--surface-base)] px-1.5 py-0.5 text-[10px] text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)]"
@@ -226,21 +238,23 @@ export function ResultTable({ result, pageSize, resultPage, setResultPage, onNav
               </tbody>
             </table>
           </div>
-          {sortedRows.length > pageSize && (
+          {showPagination && (
             <div className="mt-2 flex items-center justify-end gap-2 text-xs text-[var(--color-text-secondary)]">
               <span>
-                {resultPage * pageSize + 1}-{Math.min((resultPage + 1) * pageSize, sortedRows.length)} of {formatNumber(sortedRows.length)}
+                {resultPage * pageSize + 1}-{Math.min((resultPage + 1) * pageSize, totalKnown ? totalRows : result.rows.length)}
+                {totalKnown ? ` of ${formatNumber(totalRows)}` : ""}
               </span>
+              {pageLoading && <Loader2 className="h-3 w-3 animate-spin" />}
               <button
                 onClick={() => setResultPage((p) => Math.max(0, p - 1))}
-                disabled={resultPage === 0}
+                disabled={resultPage === 0 || pageLoading}
                 className="rounded p-1 hover:bg-[var(--surface-elevated)] disabled:opacity-30"
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
               <button
                 onClick={() => setResultPage((p) => p + 1)}
-                disabled={(resultPage + 1) * pageSize >= sortedRows.length}
+                disabled={!hasMore || pageLoading}
                 className="rounded p-1 hover:bg-[var(--surface-elevated)] disabled:opacity-30"
               >
                 <ChevronRightIcon className="h-4 w-4" />

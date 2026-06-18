@@ -1,12 +1,14 @@
 import { FlameGraph } from "@/components/FlameGraph";
 import { ChartSection, SettingHint } from "./shared";
 import { Button } from "@/components/ui/button";
+import { LoadingState } from "@/components/ui/state";
 import type { FlameGraphData, QueryLogEntry } from "@/api/types";
 import type { ApiError } from "@/api/errors";
 
 interface FlamegraphTabProps {
   flameData: FlameGraphData[];
   flameError: ApiError | null;
+  flameLoading: boolean;
   query: QueryLogEntry;
   onSelectType: (type: string) => void;
   activeType?: string;
@@ -20,10 +22,12 @@ const TRACE_TYPES = [
   { key: "CPU", label: "CPU Time" },
 ];
 
-export function FlamegraphTab({ flameData, flameError, query, onSelectType, activeType = "Real" }: FlamegraphTabProps) {
+export function FlamegraphTab({ flameData, flameError, flameLoading, query, onSelectType, activeType = "Real" }: FlamegraphTabProps) {
   const isTraceLogMissing = flameError !== null
     && flameError.message.toLowerCase().includes("trace_log")
     && flameError.isClickHouseError();
+  const isRunning = query.type === "QueryStart";
+  const hasData = flameData.length > 0;
 
   return (
     <ChartSection title="Flame Graph">
@@ -40,7 +44,11 @@ export function FlamegraphTab({ flameData, flameError, query, onSelectType, acti
           </Button>
         ))}
       </div>
-      {flameData.length === 0 ? (
+      {flameLoading ? (
+        <LoadingState message="Loading trace data..." />
+      ) : hasData ? (
+        <FlameGraph data={flameData} />
+      ) : (
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)] p-6 text-center text-sm text-[var(--color-text-secondary)]">
           {isTraceLogMissing ? (
             <>
@@ -66,6 +74,13 @@ export function FlamegraphTab({ flameData, flameError, query, onSelectType, acti
                 <p className="mt-2 text-xs text-[var(--color-text-secondary)]">{flameError.hint}</p>
               )}
             </>
+          ) : isRunning ? (
+            <>
+              <p className="font-medium text-[var(--color-warning)]">Query still running</p>
+              <p className="mt-1 text-xs opacity-80">
+                Trace data will appear once the query finishes and <code className="rounded bg-[var(--surface-base)] px-1">trace_log</code> is flushed (typically within ~1s).
+              </p>
+            </>
           ) : (
             <>
               <p>No trace data available for this query.</p>
@@ -77,25 +92,25 @@ export function FlamegraphTab({ flameData, flameError, query, onSelectType, acti
             </>
           )}
         </div>
-      ) : (
-        <FlameGraph data={flameData} />
       )}
-      <div className="mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)] p-3 text-xs text-[var(--color-text-secondary)]">
-        <p className="font-medium text-[var(--color-text-primary)]">How to read this graph</p>
-        <ul className="mt-1 list-inside list-disc space-y-0.5 opacity-80">
-          <li>Each bar represents a function. Width shows relative time or memory (by sample count).</li>
-          <li>The stack grows upward: bottom is the entry point, top is the deepest nested call.</li>
-          <li>Hover over any bar to see the full function name and sample count.</li>
-          <li>Wider bars indicate functions consuming more resources. Narrow bars can be ignored.</li>
-          <li>Use the buttons above to switch between Memory (Sampled/Alloc/Peak), Real Time, and CPU Time views.</li>
-        </ul>
-        <p className="mt-2 font-medium text-[var(--color-text-primary)]">Requirements</p>
-        <ul className="mt-1 list-inside list-disc space-y-0.5 opacity-80">
-          <li><code className="rounded bg-[var(--surface-base)] px-1">trace_log</code> must be enabled in ClickHouse <code className="rounded bg-[var(--surface-base)] px-1">config.xml</code></li>
-          <li>Sampling profilers must be enabled at query time (Settings panel in SQL Editor)</li>
-          <li><code className="rounded bg-[var(--surface-base)] px-1">allow_introspection_functions</code> must be enabled for symbol resolution</li>
-        </ul>
-      </div>
+      {hasData && (
+        <div className="mt-3 rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)] p-3 text-xs text-[var(--color-text-secondary)]">
+          <p className="font-medium text-[var(--color-text-primary)]">How to read this graph</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5 opacity-80">
+            <li>Each bar represents a function. Width shows relative time or memory (by sample count).</li>
+            <li>The stack grows upward: bottom is the entry point, top is the deepest nested call.</li>
+            <li>Hover over any bar to see the full function name and sample count.</li>
+            <li>Wider bars indicate functions consuming more resources. Narrow bars can be ignored.</li>
+            <li>Use the buttons above to switch between Memory (Sampled/Alloc/Peak), Real Time, and CPU Time views.</li>
+          </ul>
+          <p className="mt-2 font-medium text-[var(--color-text-primary)]">Requirements</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5 opacity-80">
+            <li><code className="rounded bg-[var(--surface-base)] px-1">trace_log</code> must be enabled in ClickHouse <code className="rounded bg-[var(--surface-base)] px-1">config.xml</code></li>
+            <li>Sampling profilers must be enabled at query time (Settings panel in SQL Editor)</li>
+            <li><code className="rounded bg-[var(--surface-base)] px-1">allow_introspection_functions</code> must be enabled for symbol resolution</li>
+          </ul>
+        </div>
+      )}
     </ChartSection>
   );
 }

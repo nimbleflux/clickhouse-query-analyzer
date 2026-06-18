@@ -14,7 +14,7 @@ import { Select, Checkbox } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/dialog";
-import { EmptyState, ErrorState } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
 import { sendToEditor } from "@/lib/send-to-editor";
 import { ApiError } from "@/api/errors";
 
@@ -29,7 +29,7 @@ function queryKind(query: string): string {
   return "Other";
 }
 
-export function RunningQueries() {
+export function RunningQueries({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
   const { toast } = useToast();
   const copy = useCopyToClipboard();
@@ -64,16 +64,15 @@ export function RunningQueries() {
   }, []);
 
   useEffect(() => {
+    if (!connected) return;
     load();
-  }, [load]);
+  }, [load, connected]);
 
   useEffect(() => {
-    if (autoRefresh) {
-      intervalRef.current = setInterval(load, 3000);
-      return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-    }
-    return () => {};
-  }, [autoRefresh, load]);
+    if (!connected || !autoRefresh) return;
+    intervalRef.current = setInterval(load, 3000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [autoRefresh, load, connected]);
 
   const handleKill = async (queryId: string) => {
     setKilling((prev) => new Set(prev).add(queryId));
@@ -114,6 +113,8 @@ export function RunningQueries() {
   }, [processes, debouncedSearch, filterUser, filterKind, showSystem]);
 
   const users = useMemo(() => [...new Set(processes.map((p) => p.user))].sort(), [processes]);
+
+  if (!connected) return <NotConnectedState />;
 
   return (
     <PageContainer>

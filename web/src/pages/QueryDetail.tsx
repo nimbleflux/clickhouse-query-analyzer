@@ -11,10 +11,11 @@ import { ApiError } from "@/api/errors";
 import { CardSkeleton } from "@/components/Skeleton";
 import { Button } from "@/components/ui/button";
 import { PageContainer, PageHeader } from "@/components/ui/page";
-import { ErrorState } from "@/components/ui/state";
+import { ErrorState, NotConnectedState } from "@/components/ui/state";
+import { Badge } from "@/components/ui/badge";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { sendToEditor } from "@/lib/send-to-editor";
-import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor } from "@/utils";
+import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor, queryStatus } from "@/utils";
 import { MetricCard } from "./query-detail/shared";
 import { OverviewTab } from "./query-detail/OverviewTab";
 import { MemoryTab } from "./query-detail/MemoryTab";
@@ -38,7 +39,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "settings", label: "Settings" },
 ];
 
-export function QueryDetail() {
+export function QueryDetail({ connected }: { connected: boolean }) {
   const { queryId } = useParams<{ queryId: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -57,9 +58,11 @@ export function QueryDetail() {
   const [error, setError] = useState<ApiError | null>(null);
   const [flameError, setFlameError] = useState<ApiError | null>(null);
   const [flameData, setFlameData] = useState<FlameGraphData[]>([]);
+  const [flameLoading, setFlameLoading] = useState(false);
   const [activeFlameType, setActiveFlameType] = useState<string>("Real");
 
   useEffect(() => {
+    if (!connected) return;
     const controller = new AbortController();
     let aborted = false;
     if (!queryId) return;
@@ -87,7 +90,7 @@ export function QueryDetail() {
       setInitialLoad(false);
     });
     return () => { aborted = true; controller.abort(); };
-  }, [queryId]);
+  }, [queryId, connected]);
 
   const loadExplain = async () => {
     if (!queryId || explain) return;
@@ -99,6 +102,7 @@ export function QueryDetail() {
 
   const loadFlameGraph = async () => {
     if (!queryId || flameData.length > 0) return;
+    setFlameLoading(true);
     try {
       let data = await fetchFlameGraph(queryId);
       let foundType = "MemorySample";
@@ -113,12 +117,15 @@ export function QueryDetail() {
       setFlameError(null);
     } catch (e) {
       setFlameError(ApiError.wrap(e));
+    } finally {
+      setFlameLoading(false);
     }
   };
 
   const loadFlameGraphWithType = async (type: string) => {
     if (!queryId) return;
     setFlameData([]);
+    setFlameLoading(true);
     setActiveFlameType(type);
     try {
       const data = await fetchFlameGraph(queryId, type);
@@ -126,15 +133,21 @@ export function QueryDetail() {
       setFlameError(null);
     } catch (e) {
       setFlameError(ApiError.wrap(e));
+    } finally {
+      setFlameLoading(false);
     }
   };
 
   useEffect(() => {
-    if (tab === "flamegraph" && queryId && flameData.length === 0) {
+    if (tab === "flamegraph" && queryId && flameData.length === 0 && !flameLoading) {
       loadFlameGraph();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryId, tab]);
+
+  if (!connected) {
+    return <NotConnectedState />;
+  }
 
   if (loading && initialLoad) {
     return (
@@ -182,6 +195,7 @@ export function QueryDetail() {
             <span className="font-mono">{query.query_id}</span>
             <span>{formatTime(query.query_start_time)}</span>
             <span>{query.user}</span>
+            <Badge variant={queryStatus(query.type).variant} className="text-[10px]">{queryStatus(query.type).label}</Badge>
             <Link
               to={`/fingerprints/${query.normalized_query_hash}`}
               state={{ query: query.query }}
@@ -277,6 +291,7 @@ export function QueryDetail() {
         <FlamegraphTab
           flameData={flameData}
           flameError={flameError}
+          flameLoading={flameLoading}
           query={query}
           onSelectType={loadFlameGraphWithType}
           activeType={activeFlameType}

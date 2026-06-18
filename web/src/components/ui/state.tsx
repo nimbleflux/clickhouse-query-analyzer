@@ -1,8 +1,9 @@
 import { type ReactNode } from "react";
-import { AlertCircle, RefreshCw, type LucideIcon } from "lucide-react";
+import { AlertCircle, RefreshCw, Plug, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ApiError } from "@/api/errors";
 import { Button } from "./button";
+import { PageContainer } from "./page";
 
 interface StatePanelProps {
   icon?: ReactNode;
@@ -158,5 +159,22 @@ export function LoadingState({ message = "Loading…", variant = "card", classNa
       <RefreshCw className="h-6 w-6 animate-spin text-[var(--color-text-secondary)]" />
       <div className="text-xs text-[var(--color-text-secondary)]">{message}</div>
     </div>
+  );
+}
+
+/**
+ * Standard "not connected" gate. Pages that require a ClickHouse connection
+ * render this when `connected` is false, instead of firing API calls that
+ * would surface a "ClickHouse URL not configured" error.
+ */
+export function NotConnectedState() {
+  return (
+    <PageContainer>
+      <EmptyState
+        icon={Plug}
+        title="Connect to ClickHouse"
+        description="Enter your connection details in the top bar to start exploring queries."
+      />
+    </PageContainer>
   );
 }

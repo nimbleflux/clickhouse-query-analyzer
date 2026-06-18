@@ -75,6 +75,7 @@ func apiRoutes(api *API) http.Handler {
 	r.Use(apiTimeout(60 * time.Second))
 
 	r.Post("/connect", api.ConnectWithInfo)
+	r.Get("/config", api.GetConfig)
 	r.Post("/execute", api.ExecuteQuery)
 	r.Get("/schema", api.GetSchema)
 	r.Get("/schema/{db}/tables", api.GetTables)

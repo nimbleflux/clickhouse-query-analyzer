@@ -7,6 +7,7 @@ import (
 
 type SystemMetrics struct {
 	Metric string `json:"metric"`
+	Host   string `json:"host"`
 	Value  uint64 `json:"value"`
 }
 
@@ -140,7 +141,7 @@ func (c *Client) fillHostName(ctx context.Context, d *DashboardData) {
 
 func (c *Client) queryMetrics(ctx context.Context, d *DashboardData) error {
 	table := c.tableRef("metrics")
-	query := fmt.Sprintf(`SELECT metric, toUInt64(value) AS value FROM %s ORDER BY metric`, table)
+	query := fmt.Sprintf(`SELECT metric, hostName() AS host, toUInt64(value) AS value FROM %s ORDER BY metric`, table)
 
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
@@ -150,7 +151,7 @@ func (c *Client) queryMetrics(ctx context.Context, d *DashboardData) error {
 
 	for rows.Next() {
 		var m SystemMetrics
-		if err := rows.Scan(&m.Metric, &m.Value); err != nil {
+		if err := rows.Scan(&m.Metric, &m.Host, &m.Value); err != nil {
 			return err
 		}
 		d.Metrics = append(d.Metrics, m)

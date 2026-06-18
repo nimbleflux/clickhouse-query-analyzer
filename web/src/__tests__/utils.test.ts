@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration, formatBytes, formatNumber, durationColor, memoryColor, categorizeEvent } from "../utils";
+import { formatDuration, formatBytes, formatNumber, durationColor, memoryColor, categorizeEvent, queryStatus, isException } from "../utils";
 
 describe("formatDuration", () => {
   it("returns 0ms for zero", () => {
@@ -130,5 +130,39 @@ describe("categorizeEvent", () => {
 
   it("returns Other for unknown", () => {
     expect(categorizeEvent("SomethingElse")).toBe("Other");
+  });
+});
+
+describe("queryStatus", () => {
+  it("maps QueryStart to Running/warning", () => {
+    expect(queryStatus("QueryStart")).toEqual({ label: "Running", variant: "warning" });
+  });
+
+  it("maps QueryFinish to Complete/success", () => {
+    expect(queryStatus("QueryFinish")).toEqual({ label: "Complete", variant: "success" });
+  });
+
+  it("maps ExceptionBeforeStart to Exception/error", () => {
+    expect(queryStatus("ExceptionBeforeStart")).toEqual({ label: "Exception", variant: "error" });
+  });
+
+  it("maps ExceptionWhileProcessing to Exception/error", () => {
+    expect(queryStatus("ExceptionWhileProcessing")).toEqual({ label: "Exception", variant: "error" });
+  });
+
+  it("falls back to outline for unknown types", () => {
+    expect(queryStatus("QueryViewsStarted")).toEqual({ label: "QueryViewsStarted", variant: "outline" });
+  });
+});
+
+describe("isException", () => {
+  it("returns true for exception types", () => {
+    expect(isException("ExceptionBeforeStart")).toBe(true);
+    expect(isException("ExceptionWhileProcessing")).toBe(true);
+  });
+
+  it("returns false for non-exception types", () => {
+    expect(isException("QueryFinish")).toBe(false);
+    expect(isException("QueryStart")).toBe(false);
   });
 });

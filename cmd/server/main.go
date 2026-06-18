@@ -47,7 +47,7 @@ func main() {
 		slog.Info("default ClickHouse URL configured", "url", cfg.ClickHouseURL)
 	}
 
-	apiHandler := api.New(pool)
+	apiHandler := api.New(pool, cfg)
 	router := api.Router(cfg, apiHandler, getFrontendFS())
 
 	srv := &http.Server{

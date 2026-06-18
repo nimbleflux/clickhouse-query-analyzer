@@ -13,7 +13,7 @@ import (
 
 func TestExecuteQuery_NoServer(t *testing.T) {
 	cfg := &config.Config{}
-	api := New(clickhouse.NewPool())
+	api := New(clickhouse.NewPool(), nil)
 	router := Router(cfg, api, nil)
 
 	req := httptest.NewRequest("POST", "/api/execute", nil)
@@ -28,7 +28,7 @@ func TestExecuteQuery_NoServer(t *testing.T) {
 
 func TestConnectEndpoint_NoServer(t *testing.T) {
 	cfg := &config.Config{}
-	api := New(clickhouse.NewPool())
+	api := New(clickhouse.NewPool(), nil)
 	router := Router(cfg, api, nil)
 
 	req := httptest.NewRequest("POST", "/api/connect", nil)
@@ -129,7 +129,7 @@ func TestIsReadonly(t *testing.T) {
 }
 
 func TestClientFromRequest_MissingURL(t *testing.T) {
-	api := New(clickhouse.NewPool())
+	api := New(clickhouse.NewPool(), nil)
 	req := httptest.NewRequest("GET", "/", nil)
 	_, err := api.clientFromRequest(req)
 	if err == nil {
@@ -262,7 +262,7 @@ func TestClassifyHTTPError(t *testing.T) {
 
 func TestMetricsEndpoint(t *testing.T) {
 	cfg := &config.Config{}
-	api := New(clickhouse.NewPool())
+	api := New(clickhouse.NewPool(), nil)
 	router := Router(cfg, api, nil)
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
@@ -276,7 +276,7 @@ func TestMetricsEndpoint(t *testing.T) {
 
 func TestQueryRoutes_ReturnNon404(t *testing.T) {
 	cfg := &config.Config{}
-	api := New(clickhouse.NewPool())
+	api := New(clickhouse.NewPool(), nil)
 	router := Router(cfg, api, nil)
 
 	routes := []struct {

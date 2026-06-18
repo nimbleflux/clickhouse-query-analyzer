@@ -42,20 +42,63 @@ func extractHTTPCode(body string) ClickHouseErrorCode {
 }
 
 type QueryResult struct {
-	Columns  []ColumnInfo     `json:"columns"`
-	Rows     []map[string]any `json:"rows"`
-	RowCount int              `json:"row_count"`
-	TimingMs int64            `json:"timing_ms"`
-	QueryID  string           `json:"query_id"`
+	Columns   []ColumnInfo     `json:"columns"`
+	Rows      []map[string]any `json:"rows"`
+	RowCount  int              `json:"row_count"`
+	TotalRows int64            `json:"total_rows"`
+	TimingMs  int64            `json:"timing_ms"`
+	QueryID   string           `json:"query_id"`
 }
 
-func (c *Client) ExecuteQuery(ctx context.Context, query string, maxRows int, settings map[string]string) (*QueryResult, error) {
-	if maxRows <= 0 {
-		maxRows = 1000
+// isSelectLike returns true if the query looks like a SELECT (or WITH/EXPLAIN/VALUES)
+// that returns rows and can therefore be wrapped for pagination. Non-SELECT
+// statements (INSERT, CREATE, DROP, ALTER, SET, USE, …) are executed as-is.
+func isSelectLike(query string) bool {
+	trimmed := strings.TrimSpace(query)
+	// strip a leading SQL line comment
+	for strings.HasPrefix(trimmed, "--") {
+		nl := strings.IndexByte(trimmed, '\n')
+		if nl < 0 {
+			return false
+		}
+		trimmed = strings.TrimSpace(trimmed[nl+1:])
+	}
+	upper := strings.ToUpper(trimmed)
+	switch {
+	case strings.HasPrefix(upper, "SELECT"),
+		strings.HasPrefix(upper, "WITH"),
+		strings.HasPrefix(upper, "EXPLAIN"),
+		strings.HasPrefix(upper, "VALUES"),
+		strings.HasPrefix(upper, "SHOW"),
+		strings.HasPrefix(upper, "DESCRIBE"),
+		strings.HasPrefix(upper, "DESC"):
+		return true
+	}
+	return false
+}
+
+func (c *Client) ExecuteQuery(ctx context.Context, query string, limit, offset int, settings map[string]string) (*QueryResult, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+
+	selectLike := isSelectLike(query)
+
+	// For SELECT-like queries, wrap in a subquery to apply a deterministic
+	// LIMIT/OFFSET window. For everything else (DDL/DML), execute verbatim
+	// with a max_result_rows ceiling as defense-in-depth.
+	var executedQuery string
+	if selectLike {
+		executedQuery = fmt.Sprintf("SELECT * FROM (%s) LIMIT %d OFFSET %d", query, limit, offset)
+	} else {
+		executedQuery = query
+	}
 
 	httpURL, err := c.httpURL()
 	if err != nil {
@@ -66,14 +109,14 @@ func (c *Client) ExecuteQuery(ctx context.Context, query string, maxRows int, se
 
 	u, _ := url.Parse(httpURL)
 	q := u.Query()
-	q.Set("max_result_rows", fmt.Sprintf("%d", maxRows))
+	q.Set("max_result_rows", fmt.Sprintf("%d", limit))
 	q.Set("result_overflow_mode", "break")
 	for k, v := range settings {
 		q.Set(k, v)
 	}
 	u.RawQuery = q.Encode()
 
-	body := bytes.NewBufferString(query)
+	body := bytes.NewBufferString(executedQuery)
 	req, err := http.NewRequestWithContext(ctx, "POST", u.String(), body)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -99,11 +142,12 @@ func (c *Client) ExecuteQuery(ctx context.Context, query string, maxRows int, se
 	var names []string
 	if !dec.More() {
 		return &QueryResult{
-			Columns:  []ColumnInfo{},
-			Rows:     []map[string]any{},
-			RowCount: 0,
-			TimingMs: time.Since(start).Milliseconds(),
-			QueryID:  resp.Header.Get("X-ClickHouse-Query-Id"),
+			Columns:   []ColumnInfo{},
+			Rows:      []map[string]any{},
+			RowCount:  0,
+			TotalRows: -1,
+			TimingMs:  time.Since(start).Milliseconds(),
+			QueryID:   resp.Header.Get("X-ClickHouse-Query-Id"),
 		}, nil
 	}
 
@@ -120,11 +164,12 @@ func (c *Client) ExecuteQuery(ctx context.Context, query string, maxRows int, se
 	var types []string
 	if !dec.More() {
 		return &QueryResult{
-			Columns:  columnsFromNamesTypes(names, nil),
-			Rows:     []map[string]any{},
-			RowCount: 0,
-			TimingMs: time.Since(start).Milliseconds(),
-			QueryID:  resp.Header.Get("X-ClickHouse-Query-Id"),
+			Columns:   columnsFromNamesTypes(names, nil),
+			Rows:      []map[string]any{},
+			RowCount:  0,
+			TotalRows: -1,
+			TimingMs:  time.Since(start).Milliseconds(),
+			QueryID:   resp.Header.Get("X-ClickHouse-Query-Id"),
 		}, nil
 	}
 	var typesRaw []json.RawMessage
@@ -160,7 +205,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, query string, maxRows int, se
 		}
 		result = append(result, row)
 		rowIdx++
-		if rowIdx >= maxRows {
+		if rowIdx >= limit {
 			break
 		}
 	}
@@ -172,12 +217,25 @@ func (c *Client) ExecuteQuery(ctx context.Context, query string, maxRows int, se
 		result = []map[string]any{}
 	}
 
+	// Total row count: only compute for SELECT-like queries, and only on the
+	// first page (offset 0) to amortize the cost. Cached client-side thereafter.
+	// Returns -1 (unknown) if the count query fails or the query isn't SELECT-like.
+	totalRows := int64(-1)
+	if selectLike && offset == 0 {
+		countQuery := fmt.Sprintf("SELECT count() FROM (%s)", query)
+		var n uint64
+		if err := c.conn.QueryRow(ctx, countQuery).Scan(&n); err == nil {
+			totalRows = int64(n)
+		}
+	}
+
 	return &QueryResult{
-		Columns:  columns,
-		Rows:     result,
-		RowCount: len(result),
-		TimingMs: elapsed,
-		QueryID:  queryID,
+		Columns:   columns,
+		Rows:      result,
+		RowCount:  len(result),
+		TotalRows: totalRows,
+		TimingMs:  elapsed,
+		QueryID:   queryID,
 	}, nil
 }
 
