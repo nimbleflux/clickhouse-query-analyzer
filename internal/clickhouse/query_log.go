@@ -65,6 +65,15 @@ var defaultListParams = QueryListParams{
 	SortDir: "DESC",
 }
 
+// hideSystemQueriesClause returns the SQL fragment used to suppress non-user
+// queries when "Hide system queries" is enabled. It excludes noise query kinds
+// (DDL, EXPLAIN, etc.) as well as queries ClickLens issued itself, which are
+// tagged via the log_comment setting so the user only sees the queries they
+// consciously executed.
+func hideSystemQueriesClause() string {
+	return "NOT has(databases, 'system') AND lower(query_kind) NOT IN ('explain', 'system', 'show', 'create', 'drop', 'alter', 'set', 'use', 'kill', 'optimize', 'truncate', 'rename', 'check', 'detach', 'attach', 'none') AND log_comment != '" + managedLogComment + "'"
+}
+
 func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]QueryLogEntry, uint64, error) {
 	if params.Limit <= 0 {
 		params.Limit = defaultListParams.Limit
@@ -112,7 +121,7 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 	whereArgs := []interface{}{}
 
 	if params.HideSystemQueries {
-		whereParts = append(whereParts, "NOT has(databases, 'system') AND lower(query_kind) NOT IN ('explain', 'system', 'show', 'create', 'drop', 'alter', 'set', 'use', 'kill', 'optimize', 'truncate', 'rename', 'check', 'detach', 'attach', 'none')")
+		whereParts = append(whereParts, hideSystemQueriesClause())
 	}
 	if params.User != "" {
 		whereParts = append(whereParts, "user = ?")
@@ -266,7 +275,7 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 	args := []interface{}{}
 
 	if params.HideSystemQueries {
-		where += " AND NOT has(databases, 'system') AND lower(query_kind) NOT IN ('explain', 'system', 'show', 'create', 'drop', 'alter', 'set', 'use', 'kill', 'optimize', 'truncate', 'rename', 'check', 'detach', 'attach', 'none')"
+		where += " AND " + hideSystemQueriesClause()
 	}
 
 	if params.FromTime != "" {
