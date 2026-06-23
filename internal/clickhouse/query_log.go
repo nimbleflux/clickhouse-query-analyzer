@@ -65,6 +65,19 @@ var defaultListParams = QueryListParams{
 	SortDir: "DESC",
 }
 
+// hideSystemQueriesClause returns the SQL fragment used to suppress non-user
+// queries when "Hide system queries" is enabled. It does two things:
+//   - excludes DDL/session-control noise by query_kind (CREATE, DROP, ALTER,
+//     EXPLAIN, SET, USE, KILL, OPTIMIZE, etc.), and
+//   - excludes queries ClickLens issued itself, tagged via the log_comment
+//     setting.
+//
+// Notably it does NOT exclude queries merely for touching the system database,
+// so a user's own SELECT ... FROM system.* queries remain visible.
+func hideSystemQueriesClause() string {
+	return "lower(query_kind) NOT IN ('explain', 'system', 'show', 'create', 'drop', 'alter', 'set', 'use', 'kill', 'optimize', 'truncate', 'rename', 'check', 'detach', 'attach', 'none') AND log_comment != '" + managedLogComment + "'"
+}
+
 func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]QueryLogEntry, uint64, error) {
 	if params.Limit <= 0 {
 		params.Limit = defaultListParams.Limit
@@ -112,7 +125,7 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 	whereArgs := []interface{}{}
 
 	if params.HideSystemQueries {
-		whereParts = append(whereParts, "NOT has(databases, 'system') AND lower(query_kind) NOT IN ('explain', 'system', 'show', 'create', 'drop', 'alter', 'set', 'use', 'kill', 'optimize', 'truncate', 'rename', 'check', 'detach', 'attach', 'none')")
+		whereParts = append(whereParts, hideSystemQueriesClause())
 	}
 	if params.User != "" {
 		whereParts = append(whereParts, "user = ?")
@@ -266,7 +279,7 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 	args := []interface{}{}
 
 	if params.HideSystemQueries {
-		where += " AND NOT has(databases, 'system') AND lower(query_kind) NOT IN ('explain', 'system', 'show', 'create', 'drop', 'alter', 'set', 'use', 'kill', 'optimize', 'truncate', 'rename', 'check', 'detach', 'attach', 'none')"
+		where += " AND " + hideSystemQueriesClause()
 	}
 
 	if params.FromTime != "" {

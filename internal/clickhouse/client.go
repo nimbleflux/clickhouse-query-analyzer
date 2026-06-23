@@ -21,6 +21,13 @@ const (
 	maxPoolSize    = 50
 	connMaxAge     = 1 * time.Hour
 	healthCheckInt = 30 * time.Second
+
+	// managedLogComment is stamped into the log_comment setting of every query
+	// ClickLens issues itself (introspection, health checks, etc.). It lets the
+	// Queries and Fingerprints pages filter out ClickLens's own queries so the
+	// user only sees the queries they consciously executed. User-submitted SQL
+	// from the Query Editor bypasses the driver and is therefore not tagged.
+	managedLogComment = "clicklens"
 )
 
 type Client struct {
@@ -161,41 +168,22 @@ func (p *Pool) getDialMutex(key string) *sync.Mutex {
 	return m
 }
 
-func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Client, error) {
-	dialMu := p.getDialMutex(key)
-	dialMu.Lock()
-	defer dialMu.Unlock()
-
-	p.mu.RLock()
-	c, ok := p.clients[key]
-	p.mu.RUnlock()
-	if ok {
-		if time.Since(c.createdAt) < connMaxAge {
-			c.lastUsedAt = time.Now()
-			return c, nil
-		}
-		p.evict(key, c)
-	}
-
-	parsedURL, err := url.Parse(params.URL)
-	if err != nil {
-		return nil, fmt.Errorf("parsing clickhouse URL: %w", err)
-	}
-
+// buildOptions translates connection parameters into clickhouse-go driver
+// options. It is split out of connect() so the connection-level settings
+// (notably the log_comment tag that identifies ClickLens's own queries) can be
+// unit-tested without dialing a real server.
+func buildOptions(parsedURL *url.URL, params ConnParams) *ch.Options {
 	scheme := strings.ToLower(parsedURL.Scheme)
 	useTLS := isTLSScheme(scheme)
 
 	var opts *ch.Options
-
 	if isHTTPScheme(scheme) {
 		opts = &ch.Options{
 			Protocol:    ch.HTTP,
 			Addr:        []string{parsedURL.Host},
 			Auth:        ch.Auth{Username: params.User, Password: params.Password, Database: params.Database},
 			DialTimeout: time.Second * 10,
-		}
-		if useTLS {
-			opts.TLS = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: params.SkipTLS}
+			Settings:    ch.Settings{"log_comment": managedLogComment},
 		}
 	} else {
 		host := parsedURL.Hostname()
@@ -219,11 +207,39 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 			ConnMaxLifetime:  time.Hour,
 			ConnOpenStrategy: ch.ConnOpenInOrder,
 			BlockBufferSize:  10,
-		}
-		if useTLS {
-			opts.TLS = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: params.SkipTLS}
+			Settings:         ch.Settings{"log_comment": managedLogComment},
 		}
 	}
+
+	if useTLS {
+		opts.TLS = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: params.SkipTLS}
+	}
+	return opts
+}
+
+func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Client, error) {
+	dialMu := p.getDialMutex(key)
+	dialMu.Lock()
+	defer dialMu.Unlock()
+
+	p.mu.RLock()
+	c, ok := p.clients[key]
+	p.mu.RUnlock()
+	if ok {
+		if time.Since(c.createdAt) < connMaxAge {
+			c.lastUsedAt = time.Now()
+			return c, nil
+		}
+		p.evict(key, c)
+	}
+
+	parsedURL, err := url.Parse(params.URL)
+	if err != nil {
+		return nil, fmt.Errorf("parsing clickhouse URL: %w", err)
+	}
+
+	scheme := strings.ToLower(parsedURL.Scheme)
+	opts := buildOptions(parsedURL, params)
 
 	conn, err := ch.Open(opts)
 	if err != nil {

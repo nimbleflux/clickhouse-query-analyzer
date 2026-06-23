@@ -1,6 +1,9 @@
 package clickhouse
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDefaultListParams(t *testing.T) {
 	if defaultListParams.Limit != 50 {
@@ -24,5 +27,24 @@ func TestQueryListParams_Defaults(t *testing.T) {
 	}
 	if p.SortBy != "" {
 		t.Errorf("expected empty sort by, got %s", p.SortBy)
+	}
+}
+
+func TestHideSystemQueriesClause(t *testing.T) {
+	clause := hideSystemQueriesClause()
+
+	for _, want := range []string{
+		"lower(query_kind) NOT IN",
+		"log_comment != 'clicklens'",
+	} {
+		if !strings.Contains(clause, want) {
+			t.Errorf("hideSystemQueriesClause() = %q, expected to contain %q", clause, want)
+		}
+	}
+
+	// A user's own SELECT ... FROM system.* is real workload and must remain
+	// visible, so the clause must not blanket-exclude the system database.
+	if strings.Contains(clause, "has(databases, 'system')") {
+		t.Errorf("hideSystemQueriesClause() = %q, should not exclude by databases='system'", clause)
 	}
 }

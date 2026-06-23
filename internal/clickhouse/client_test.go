@@ -1,6 +1,11 @@
 package clickhouse
 
-import "testing"
+import (
+	"net/url"
+	"testing"
+
+	ch "github.com/ClickHouse/clickhouse-go/v2"
+)
 
 func TestIsHTTPScheme(t *testing.T) {
 	tests := []struct {
@@ -139,6 +144,53 @@ func TestClient_TableRef(t *testing.T) {
 			c := &Client{isCluster: tt.cluster, cluster: tt.clusterName}
 			if got := c.tableRef(tt.table); got != tt.expected {
 				t.Errorf("tableRef() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestManagedLogComment(t *testing.T) {
+	if managedLogComment != "clicklens" {
+		t.Errorf("managedLogComment = %q, want %q", managedLogComment, "clicklens")
+	}
+}
+
+func TestBuildOptions_TagsManagedQueries(t *testing.T) {
+	params := ConnParams{
+		URL:      "clickhouse://host:9000",
+		User:     "default",
+		Password: "secret",
+		Database: "system",
+	}
+
+	cases := []struct {
+		name     string
+		url      string
+		protocol ch.Protocol
+	}{
+		{"native", "clickhouse://host:9000", ch.Native},
+		{"native tls", "clickhouses://host:9440", ch.Native},
+		{"http", "http://host:8123", ch.HTTP},
+		{"https", "https://host:8443", ch.HTTP},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			params.URL = tc.url
+			u, err := url.Parse(tc.url)
+			if err != nil {
+				t.Fatalf("parsing url: %v", err)
+			}
+			opts := buildOptions(u, params)
+			if opts.Protocol != tc.protocol {
+				t.Errorf("protocol = %v, want %v", opts.Protocol, tc.protocol)
+			}
+			v, ok := opts.Settings["log_comment"]
+			if !ok {
+				t.Fatal("expected log_comment setting on connection options")
+			}
+			if v != managedLogComment {
+				t.Errorf("log_comment = %v, want %q", v, managedLogComment)
 			}
 		})
 	}
