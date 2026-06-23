@@ -66,12 +66,16 @@ var defaultListParams = QueryListParams{
 }
 
 // hideSystemQueriesClause returns the SQL fragment used to suppress non-user
-// queries when "Hide system queries" is enabled. It excludes noise query kinds
-// (DDL, EXPLAIN, etc.) as well as queries ClickLens issued itself, which are
-// tagged via the log_comment setting so the user only sees the queries they
-// consciously executed.
+// queries when "Hide system queries" is enabled. It does two things:
+//   - excludes DDL/session-control noise by query_kind (CREATE, DROP, ALTER,
+//     EXPLAIN, SET, USE, KILL, OPTIMIZE, etc.), and
+//   - excludes queries ClickLens issued itself, tagged via the log_comment
+//     setting.
+//
+// Notably it does NOT exclude queries merely for touching the system database,
+// so a user's own SELECT ... FROM system.* queries remain visible.
 func hideSystemQueriesClause() string {
-	return "NOT has(databases, 'system') AND lower(query_kind) NOT IN ('explain', 'system', 'show', 'create', 'drop', 'alter', 'set', 'use', 'kill', 'optimize', 'truncate', 'rename', 'check', 'detach', 'attach', 'none') AND log_comment != '" + managedLogComment + "'"
+	return "lower(query_kind) NOT IN ('explain', 'system', 'show', 'create', 'drop', 'alter', 'set', 'use', 'kill', 'optimize', 'truncate', 'rename', 'check', 'detach', 'attach', 'none') AND log_comment != '" + managedLogComment + "'"
 }
 
 func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]QueryLogEntry, uint64, error) {
