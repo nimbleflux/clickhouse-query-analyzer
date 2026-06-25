@@ -18,6 +18,7 @@ import type {
   DashboardData,
   TrendPoint,
   FingerprintQueriesResponse,
+  ReplicationStatus,
 } from "./types";
 import { getConnectionHeaders } from "./connection";
 import { ApiError } from "./errors";
@@ -248,6 +249,17 @@ export async function fetchFingerprints(params: Partial<QueryListParams>, signal
 
 export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardData> {
   return fetchJSON<DashboardData>(`${BASE}/dashboard`, { signal });
+}
+
+export async function fetchReplication(params?: { database?: string; errors_only?: boolean; executing_only?: boolean; limit?: number; offset?: number }, signal?: AbortSignal): Promise<ReplicationStatus> {
+  const sp = new URLSearchParams();
+  if (params?.database) sp.set("database", params.database);
+  if (params?.errors_only) sp.set("errors_only", "1");
+  if (params?.executing_only) sp.set("executing_only", "1");
+  if (params?.limit) sp.set("limit", String(params.limit));
+  if (params?.offset) sp.set("offset", String(params.offset));
+  const qs = sp.toString();
+  return fetchJSON<ReplicationStatus>(`${BASE}/replication${qs ? `?${qs}` : ""}`, { signal });
 }
 
 export async function fetchFingerprintTrend(hash: string, interval?: string, fromTime?: string, toTime?: string, signal?: AbortSignal): Promise<TrendPoint[]> {

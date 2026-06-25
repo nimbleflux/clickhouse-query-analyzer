@@ -274,6 +274,36 @@ func TestMetricsEndpoint(t *testing.T) {
 	}
 }
 
+func TestDefaultQueryLogWindow(t *testing.T) {
+	// Explicit from_time is preserved, never clamped.
+	req := httptest.NewRequest("GET", "/api/queries?from_time=2020-01-01%2000:00:00", nil)
+	got, clamped := defaultQueryLogWindow(req)
+	if got != "2020-01-01 00:00:00" || clamped {
+		t.Errorf("explicit from_time: got %q clamped=%v, want passthrough", got, clamped)
+	}
+
+	// Missing from_time + no_clamp=1 → empty window (caller wants all-time).
+	req = httptest.NewRequest("GET", "/api/queries?no_clamp=1", nil)
+	got, clamped = defaultQueryLogWindow(req)
+	if got != "" || clamped {
+		t.Errorf("no_clamp=1: got %q clamped=%v, want empty passthrough", got, clamped)
+	}
+
+	// The TS client emits no_clamp=true (String(true)); accept that too.
+	req = httptest.NewRequest("GET", "/api/queries?no_clamp=true", nil)
+	got, clamped = defaultQueryLogWindow(req)
+	if got != "" || clamped {
+		t.Errorf("no_clamp=true: got %q clamped=%v, want empty passthrough", got, clamped)
+	}
+
+	// Missing from_time, no escape → synthesized 24h window, flagged.
+	req = httptest.NewRequest("GET", "/api/queries", nil)
+	got, clamped = defaultQueryLogWindow(req)
+	if got == "" || !clamped {
+		t.Errorf("default: got %q clamped=%v, want synthesized ~24h ago", got, clamped)
+	}
+}
+
 func TestQueryRoutes_ReturnNon404(t *testing.T) {
 	cfg := &config.Config{}
 	api := New(clickhouse.NewPool(), nil)
@@ -290,6 +320,7 @@ func TestQueryRoutes_ReturnNon404(t *testing.T) {
 		{"GET", "/api/queries/test-id/flamegraph"},
 		{"GET", "/api/queries/test-id/views"},
 		{"POST", "/api/queries/test-id/explain"},
+		{"GET", "/api/replication"},
 	}
 
 	for _, route := range routes {

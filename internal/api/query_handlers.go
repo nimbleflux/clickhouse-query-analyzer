@@ -6,11 +6,28 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/nimbleflux/clickhouse-query-analyzer/internal/clickhouse"
 )
+
+// defaultQueryLogWindow enforces a sane from_time when the caller omits one, so
+// query_log scans hit partition pruning instead of walking the full TTL.
+// On a busy server an unbounded window means aggregating the entire retention
+// (often 7-30 days, billions of rows) on every page load. The clamp defaults
+// to the last 24h; callers that genuinely want all-time pass no_clamp=1.
+// Returns the effective from_time and whether it was synthesized.
+func defaultQueryLogWindow(r *http.Request) (string, bool) {
+	if v := r.URL.Query().Get("from_time"); v != "" {
+		return v, false
+	}
+	if v := r.URL.Query().Get("no_clamp"); v == "1" || v == "true" {
+		return "", false
+	}
+	return time.Now().Add(-24 * time.Hour).Format("2006-01-02 15:04:05"), true
+}
 
 func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
@@ -20,7 +37,6 @@ func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := clickhouse.QueryListParams{
-		FromTime:          r.URL.Query().Get("from_time"),
 		ToTime:            r.URL.Query().Get("to_time"),
 		User:              r.URL.Query().Get("user"),
 		QueryKind:         r.URL.Query().Get("query_kind"),
@@ -30,6 +46,7 @@ func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 		HideSystemQueries: r.URL.Query().Get("hide_system_queries") != "false",
 		IncludeCount:      r.URL.Query().Get("include_count") != "false",
 	}
+	params.FromTime, _ = defaultQueryLogWindow(r)
 
 	if v := r.URL.Query().Get("min_duration"); v != "" {
 		params.MinDuration, _ = strconv.ParseUint(v, 10, 64)
@@ -468,14 +485,15 @@ func (a *API) ListFingerprints(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := clickhouse.QueryListParams{
-		FromTime:          r.URL.Query().Get("from_time"),
 		ToTime:            r.URL.Query().Get("to_time"),
 		User:              r.URL.Query().Get("user"),
 		Search:            r.URL.Query().Get("search"),
 		SortBy:            r.URL.Query().Get("sort_by"),
 		SortDir:           strings.ToUpper(r.URL.Query().Get("sort_dir")),
 		HideSystemQueries: r.URL.Query().Get("hide_system_queries") != "false",
+		IncludeCount:      r.URL.Query().Get("include_count") != "false",
 	}
+	params.FromTime, _ = defaultQueryLogWindow(r)
 
 	if v := r.URL.Query().Get("limit"); v != "" {
 		params.Limit, _ = strconv.Atoi(v)

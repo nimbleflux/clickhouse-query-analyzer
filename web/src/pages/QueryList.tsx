@@ -73,7 +73,7 @@ export function QueryList({ connected }: { connected: boolean }) {
     setLoading(true);
     setError(null);
     fetchQueries(
-      { ...params, search: debouncedSearch || undefined, hide_system_queries: !showSystem, include_count: wantsCount },
+      { ...params, search: debouncedSearch || undefined, hide_system_queries: !showSystem, include_count: wantsCount, no_clamp: !params.from_time ? true : undefined },
       controller.signal,
     )
       .then((data) => {

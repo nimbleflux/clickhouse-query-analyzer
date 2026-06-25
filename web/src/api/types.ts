@@ -176,6 +176,7 @@ export interface QueryListParams {
   offset?: number;
   hide_system_queries?: boolean;
   include_count?: boolean;
+  no_clamp?: boolean;
 }
 
 export interface QueryResult {
@@ -370,6 +371,87 @@ export interface TrendPoint {
   avg_peak_threads: number;
   max_peak_threads: number;
   error_count: number;
+}
+
+export interface ReplicaStatus {
+  database: string;
+  table: string;
+  replica_name: string;
+  is_leader: number;
+  is_readonly: number;
+  absolute_delay: number;
+  queue_size: number;
+  inserts_in_queue: number;
+  merges_in_queue: number;
+  log_max_index: number;
+  log_pointer: number;
+  total_replicas: number;
+  active_replicas: number;
+  queue_oldest_time: string;
+  is_session_expired: number;
+}
+
+export interface ReplicationQueueEntry {
+  database: string;
+  table: string;
+  replica_name: string;
+  position: number;
+  type: string;
+  create_time: string;
+  is_currently_executing: number;
+  num_tries: number;
+  last_exception: string;
+  num_postponed: number;
+  postpone_reason: string;
+  source_replica: string;
+}
+
+export interface MutationEntry {
+  database: string;
+  table: string;
+  mutation_id: string;
+  command: string;
+  create_time: string;
+  parts_to_do: number;
+  is_done: number;
+  latest_failed_part: string;
+  latest_fail_reason: string;
+}
+
+export interface KeeperStatus {
+  port: number;
+  session_uptime_seconds: number;
+  is_expired: number;
+  connected_time: string;
+}
+
+export interface ReplicationMetricPoint {
+  event_time: string;
+  readonly_replica: number;
+  replicated_fetch: number;
+  replicated_send: number;
+  replicated_checks: number;
+  zk_session: number;
+  zk_session_expired: number;
+}
+
+export interface ReplicationSummary {
+  total_queue_depth: number;
+  max_absolute_delay: number;
+  readonly_replicas: number;
+  stuck_tasks: number;
+  pending_mutations: number;
+  replica_count: number;
+}
+
+export interface ReplicationStatus {
+  replica_statuses: ReplicaStatus[];
+  replication_queue: ReplicationQueueEntry[];
+  mutations: MutationEntry[];
+  keeper: KeeperStatus[];
+  metric_history: ReplicationMetricPoint[];
+  summary: ReplicationSummary;
+  partial_errors: string[];
 }
 
 

@@ -44,22 +44,27 @@ type ReplicationQueueEntry struct {
 	IsCurrentlyExecuting uint8  `json:"is_currently_executing"`
 	NumTries             uint32 `json:"num_tries"`
 	LastException        string `json:"last_exception"`
+	NumPostponed         uint32 `json:"num_postponed"`
+	PostponeReason       string `json:"postpone_reason"`
+	SourceReplica        string `json:"source_replica"`
 }
 
 type ReplicaStatus struct {
-	Database       string  `json:"database"`
-	Table          string  `json:"table"`
-	ReplicaName    string  `json:"replica_name"`
-	IsLeader       uint8   `json:"is_leader"`
-	IsReadOnly     uint8   `json:"is_readonly"`
-	AbsoluteDelay  float64 `json:"absolute_delay"`
-	QueueSize      uint64  `json:"queue_size"`
-	InsertsInQueue uint64  `json:"inserts_in_queue"`
-	MergesInQueue  uint64  `json:"merges_in_queue"`
-	LogMaxIndex    uint64  `json:"log_max_index"`
-	LogPointer     uint64  `json:"log_pointer"`
-	TotalReplicas  uint8   `json:"total_replicas"`
-	ActiveReplicas uint8   `json:"active_replicas"`
+	Database         string `json:"database"`
+	Table            string `json:"table"`
+	ReplicaName      string `json:"replica_name"`
+	IsLeader         uint8  `json:"is_leader"`
+	IsReadOnly       uint8  `json:"is_readonly"`
+	AbsoluteDelay    uint64 `json:"absolute_delay"`
+	QueueSize        uint32 `json:"queue_size"`
+	InsertsInQueue   uint32 `json:"inserts_in_queue"`
+	MergesInQueue    uint32 `json:"merges_in_queue"`
+	LogMaxIndex      uint64 `json:"log_max_index"`
+	LogPointer       uint64 `json:"log_pointer"`
+	TotalReplicas    uint32 `json:"total_replicas"`
+	ActiveReplicas   uint32 `json:"active_replicas"`
+	QueueOldestTime  string `json:"queue_oldest_time"`
+	IsSessionExpired uint8  `json:"is_session_expired"`
 }
 
 type NodeInfo struct {
