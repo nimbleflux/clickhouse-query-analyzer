@@ -12,6 +12,7 @@ import { Select } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ErrorState, NotConnectedState } from "@/components/ui/state";
+import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
 
 interface StatCardProps {
   label: string;
@@ -183,6 +184,8 @@ export function Dashboard({ connected }: { connected: boolean }) {
           </span>
         </div>
       )}
+
+      <ClusterNoteBanner note={data.cluster_note} />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard

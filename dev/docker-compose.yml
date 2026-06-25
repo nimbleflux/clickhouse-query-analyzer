@@ -32,9 +32,22 @@ services:
       echo 'Bucket created successfully'
       "
 
+  clickhouse-keeper:
+    image: clickhouse/clickhouse-keeper:latest
+    ports:
+      - "19181:9181"
+    volumes:
+      - keeper-data:/var/lib/clickhouse-keeper
+      - ./keeper_config.xml:/etc/clickhouse-keeper/keeper_config.xml
+    networks:
+      - ch-net
+
   clickhouse:
     image: clickhouse/clickhouse-server:latest
+    hostname: clickhouse
     depends_on:
+      clickhouse-keeper:
+        condition: service_started
       minio-init:
         condition: service_completed_successfully
     ports:
@@ -56,9 +69,35 @@ services:
     networks:
       - ch-net
 
+  clickhouse-2:
+    image: clickhouse/clickhouse-server:latest
+    hostname: clickhouse-2
+    depends_on:
+      clickhouse-keeper:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      CLICKHOUSE_DB: system
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+    volumes:
+      - clickhouse-2-data:/var/lib/clickhouse
+      - ./config.xml:/etc/clickhouse-server/config.d/analyzer.xml
+      - ./users.xml:/etc/clickhouse-server/users.d/analyzer.xml
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - ch-net
+
 networks:
   ch-net:
 
 volumes:
   clickhouse-data:
+  clickhouse-2-data:
   minio-data:
+  keeper-data:

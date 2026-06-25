@@ -5,6 +5,8 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 ## Features
 
 - **System Dashboard** — Overview of uptime, active queries/merges/parts, database sizes, top tables by size and part count, system metrics and events. Replica status and replication queue for clusters.
+- **Replication** — Dedicated monitoring of `system.replicas`, `system.replication_queue`, and pending `system.mutations` with summary stat cards, action-item badges, filters (database / errors-only / executing), and live auto-refresh.
+- **DDL** — Distributed DDL queue (`system.distributed_ddl_queue`) and recent schema operations from `system.query_log`, surfacing stuck/failed `ON CLUSTER` DDL at a glance.
 - **Query List** — Browse, filter, sort, and paginate through `system.query_log` including failed queries
 - **Query Detail** — Overview with RAM/CPU/IO time-series charts, top ProfileEvents, thread breakdown with role inference, memory analysis, storage I/O stats, and settings
 - **Flame Graphs** — Canvas-based flame graphs from `system.trace_log` (Memory/MemorySample/MemoryPeak/CPU/Real) with auto-detection of available trace types

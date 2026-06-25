@@ -16,6 +16,7 @@ const DATE_PRESETS: { label: string; hours: number }[] = [
   { label: "Last 24h", hours: 24 },
   { label: "Last 7d", hours: 168 },
   { label: "Last 30d", hours: 720 },
+  { label: "All time", hours: 0 },
 ];
 
 function toCHDateTime(d: Date): string {
@@ -60,10 +61,15 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
   const [sortDir, setSortDir] = useState<"DESC" | "ASC">("DESC");
   const [currentPage, setCurrentPage] = useState(1);
   const [showSystem, setShowSystem] = useState(false);
-  const [fromTime, setFromTime] = useState<string>("");
+  const [fromTime, setFromTime] = useState<string>(toCHDateTime(new Date(Date.now() - 24 * 3600 * 1000)));
   const [toTime, setToTime] = useState<string>("");
+  const [cachedTotal, setCachedTotal] = useState<number | null>(null);
   const pageSize = 50;
   const debouncedSearch = useDebouncedValue(search, 300);
+
+  const isFirstPage = currentPage === 1;
+  const hasDateFilter = !!(fromTime || toTime);
+  const wantsCount = isFirstPage && hasDateFilter;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,18 +85,22 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
         hide_system_queries: showSystem ? false : true,
         from_time: fromTime || undefined,
         to_time: toTime || undefined,
+        include_count: wantsCount,
+        no_clamp: !fromTime ? true : undefined,
       });
       setData(result);
+      if (wantsCount) setCachedTotal(result.total);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load fingerprints");
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, user, sortBy, sortDir, currentPage, showSystem, fromTime, toTime]);
+  }, [debouncedSearch, user, sortBy, sortDir, currentPage, showSystem, fromTime, toTime, wantsCount]);
 
   useEffect(() => { if (connected) load(); }, [load, connected]);
 
-  const totalPages = data ? Math.ceil(data.total / pageSize) : 0;
+  const displayTotal = cachedTotal ?? (data?.total ?? 0);
+  const totalPages = displayTotal > 0 ? Math.ceil(displayTotal / pageSize) : 0;
 
   const toggleSort = (field: SortField) => {
     if (sortBy === field) {
@@ -103,6 +113,13 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
   };
 
   const applyDatePreset = (hours: number) => {
+    setCachedTotal(null);
+    if (hours === 0) {
+      setFromTime("");
+      setToTime("");
+      setCurrentPage(1);
+      return;
+    }
     setFromTime(toCHDateTime(new Date(Date.now() - hours * 3600 * 1000)));
     setToTime("");
     setCurrentPage(1);
@@ -115,7 +132,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
       <PageHeader
         heading="h2"
         title="Query Fingerprints"
-        description={data ? `${data.total} unique queries` : undefined}
+        description={displayTotal > 0 ? `${formatNumber(displayTotal)} unique queries` : undefined}
       />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -288,7 +305,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
           {totalPages > 1 && (
             <div className="flex items-center justify-between">
               <span className="text-sm text-[var(--color-text-secondary)]">
-                Page {currentPage} of {totalPages} ({data.total} fingerprints)
+                Page {currentPage} of {totalPages} ({formatNumber(displayTotal)} fingerprints)
               </span>
               <div className="flex gap-2">
                 <Button

@@ -18,6 +18,8 @@ import type {
   DashboardData,
   TrendPoint,
   FingerprintQueriesResponse,
+  ReplicationStatus,
+  DDLStatus,
 } from "./types";
 import { getConnectionHeaders } from "./connection";
 import { ApiError } from "./errors";
@@ -47,6 +49,7 @@ export type ConnectResponse = {
   status: string;
   cluster?: string;
   is_cluster?: boolean;
+  cluster_note?: string;
 };
 
 export type ServerConfig = {
@@ -248,6 +251,27 @@ export async function fetchFingerprints(params: Partial<QueryListParams>, signal
 
 export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardData> {
   return fetchJSON<DashboardData>(`${BASE}/dashboard`, { signal });
+}
+
+export async function fetchReplication(params?: { database?: string; errors_only?: boolean; executing_only?: boolean; include_history?: boolean; limit?: number; offset?: number }, signal?: AbortSignal): Promise<ReplicationStatus> {
+  const sp = new URLSearchParams();
+  if (params?.database) sp.set("database", params.database);
+  if (params?.errors_only) sp.set("errors_only", "1");
+  if (params?.executing_only) sp.set("executing_only", "1");
+  if (params?.include_history === false) sp.set("include_history", "false");
+  if (params?.limit) sp.set("limit", String(params.limit));
+  if (params?.offset) sp.set("offset", String(params.offset));
+  const qs = sp.toString();
+  return fetchJSON<ReplicationStatus>(`${BASE}/replication${qs ? `?${qs}` : ""}`, { signal });
+}
+
+export async function fetchDDL(params?: { database?: string; hours?: number; limit?: number }, signal?: AbortSignal): Promise<DDLStatus> {
+  const sp = new URLSearchParams();
+  if (params?.database) sp.set("database", params.database);
+  if (params?.hours !== undefined) sp.set("hours", String(params.hours));
+  if (params?.limit) sp.set("limit", String(params.limit));
+  const qs = sp.toString();
+  return fetchJSON<DDLStatus>(`${BASE}/ddl${qs ? `?${qs}` : ""}`, { signal });
 }
 
 export async function fetchFingerprintTrend(hash: string, interval?: string, fromTime?: string, toTime?: string, signal?: AbortSignal): Promise<TrendPoint[]> {

@@ -275,28 +275,39 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 
 	table := c.tableRef("query_log")
 
-	where := "WHERE query != 'SELECT 1' AND type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')"
-	args := []interface{}{}
-
-	if params.HideSystemQueries {
-		where += " AND " + hideSystemQueriesClause()
-	}
+	// PREWHERE: selective filters on cheap columns (date range + search).
+	// Mirrors ListQueries: pruning on event_time (the partition key) before
+	// the aggregates read query_duration_ms / memory_usage / etc. for every
+	// surviving row. Without this, a missing time window walks the full TTL.
+	prewhereParts := []string{}
+	prewhereArgs := []interface{}{}
 
 	if params.FromTime != "" {
-		where += " AND event_time >= ?"
-		args = append(args, params.FromTime)
+		prewhereParts = append(prewhereParts, "event_time >= ?")
+		prewhereArgs = append(prewhereArgs, params.FromTime)
 	}
 	if params.ToTime != "" {
-		where += " AND event_time <= ?"
-		args = append(args, params.ToTime)
-	}
-	if params.User != "" {
-		where += " AND user = ?"
-		args = append(args, params.User)
+		prewhereParts = append(prewhereParts, "event_time <= ?")
+		prewhereArgs = append(prewhereArgs, params.ToTime)
 	}
 	if params.Search != "" {
-		where += " AND query ILIKE ?"
-		args = append(args, "%"+params.Search+"%")
+		prewhereParts = append(prewhereParts, "query ILIKE ?")
+		prewhereArgs = append(prewhereArgs, "%"+params.Search+"%")
+	}
+
+	// WHERE: remaining filters applied after PREWHERE.
+	whereParts := []string{
+		"query != 'SELECT 1'",
+		"type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')",
+	}
+	whereArgs := []interface{}{}
+
+	if params.HideSystemQueries {
+		whereParts = append(whereParts, hideSystemQueriesClause())
+	}
+	if params.User != "" {
+		whereParts = append(whereParts, "user = ?")
+		whereArgs = append(whereArgs, params.User)
 	}
 
 	sortBy := "last_seen"
@@ -309,11 +320,27 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 		sortDir = "ASC"
 	}
 
-	countQuery := fmt.Sprintf(`SELECT count() FROM (SELECT normalized_query_hash FROM %s %s GROUP BY normalized_query_hash)`, table, where)
+	// Combined WHERE clause (all conditions) for count().
+	allParts := append(append([]string{}, prewhereParts...), whereParts...)
+	allArgs := append(append([]interface{}{}, prewhereArgs...), whereArgs...)
+	countWhere := "WHERE " + strings.Join(allParts, " AND ")
+
 	var total uint64
-	if err := c.conn.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("counting fingerprints: %w", err)
+	if params.IncludeCount {
+		countQuery := fmt.Sprintf(`SELECT count() FROM (SELECT normalized_query_hash FROM %s %s GROUP BY normalized_query_hash)`, table, countWhere)
+		if err := c.conn.QueryRow(ctx, countQuery, allArgs...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("counting fingerprints: %w", err)
+		}
 	}
+
+	// Data query: PREWHERE (selective) + WHERE (rest) for column-read efficiency.
+	prewhereClause := ""
+	if len(prewhereParts) > 0 {
+		prewhereClause = "PREWHERE " + strings.Join(prewhereParts, " AND ")
+	}
+	whereClause := "WHERE " + strings.Join(whereParts, " AND ")
+	dataArgs := append(prewhereArgs, whereArgs...)
+	dataArgs = append(dataArgs, params.Limit, params.Offset)
 
 	query := fmt.Sprintf(`SELECT
 		normalized_query_hash,
@@ -334,13 +361,12 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 		anyLastIf(exception, type IN ('ExceptionWhileProcessing', 'ExceptionBeforeStart')) AS last_error,
 		max(event_time) AS last_seen,
 		groupUniqArray(10)(user) AS users
-	FROM %s %s
+	FROM %s %s %s
 	GROUP BY normalized_query_hash
 	ORDER BY %s %s
-	LIMIT ? OFFSET ?`, table, where, sortBy, sortDir)
-	args = append(args, params.Limit, params.Offset)
+	LIMIT ? OFFSET ?`, table, prewhereClause, whereClause, sortBy, sortDir)
 
-	rows, err := c.conn.Query(ctx, query, args...)
+	rows, err := c.conn.Query(ctx, query, dataArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("querying fingerprints: %w", err)
 	}

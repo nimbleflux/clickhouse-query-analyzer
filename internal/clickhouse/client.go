@@ -31,18 +31,19 @@ const (
 )
 
 type Client struct {
-	conn       driver.Conn
-	httpClient *http.Client
-	connURL    string
-	connUser   string
-	connPass   string
-	connDB     string
-	skipTLS    bool
-	isHTTP     bool
-	isCluster  bool
-	cluster    string
-	createdAt  time.Time
-	lastUsedAt time.Time
+	conn             driver.Conn
+	httpClient       *http.Client
+	connURL          string
+	connUser         string
+	connPass         string
+	connDB           string
+	skipTLS          bool
+	isHTTP           bool
+	isCluster        bool
+	cluster          string
+	clusterDetectErr error
+	createdAt        time.Time
+	lastUsedAt       time.Time
 }
 
 type ConnParams struct {
@@ -251,7 +252,7 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 		return nil, fmt.Errorf("pinging clickhouse: %w", err)
 	}
 
-	isCluster, cluster := detectCluster(ctx, conn)
+	isCluster, cluster, clusterErr := detectCluster(ctx, conn)
 
 	var httpCl *http.Client
 	if params.SkipTLS {
@@ -265,18 +266,19 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 	}
 
 	c = &Client{
-		conn:       conn,
-		httpClient: httpCl,
-		connURL:    params.URL,
-		connUser:   params.User,
-		connPass:   params.Password,
-		connDB:     params.Database,
-		skipTLS:    params.SkipTLS,
-		isHTTP:     isHTTPScheme(scheme),
-		isCluster:  isCluster,
-		cluster:    cluster,
-		createdAt:  time.Now(),
-		lastUsedAt: time.Now(),
+		conn:             conn,
+		httpClient:       httpCl,
+		connURL:          params.URL,
+		connUser:         params.User,
+		connPass:         params.Password,
+		connDB:           params.Database,
+		skipTLS:          params.SkipTLS,
+		isHTTP:           isHTTPScheme(scheme),
+		isCluster:        isCluster,
+		cluster:          cluster,
+		clusterDetectErr: clusterErr,
+		createdAt:        time.Now(),
+		lastUsedAt:       time.Now(),
 	}
 
 	p.mu.Lock()
@@ -334,6 +336,23 @@ func (c *Client) Cluster() string {
 	return c.cluster
 }
 
+// ClusterDetectErr returns the error from cluster detection, if any. Non-nil
+// only when the system.clusters query itself failed (access denied / table
+// absent) — NOT when the cluster simply has no entries.
+func (c *Client) ClusterDetectErr() error {
+	return c.clusterDetectErr
+}
+
+// ClusterNote returns a human explanation when cluster-wide queries couldn't
+// be set up, or "" otherwise. Centralized so every page reports the same
+// message instead of each re-deriving it.
+func (c *Client) ClusterNote() string {
+	if c.clusterDetectErr == nil {
+		return ""
+	}
+	return "Showing the local node only — cluster-wide queries are unavailable. Your ClickHouse user may lack SELECT access to system.clusters."
+}
+
 func (c *Client) TableRef(table string) string {
 	return c.tableRef(table)
 }
@@ -345,21 +364,23 @@ func (c *Client) tableRef(table string) string {
 	return fmt.Sprintf("system.%s", table)
 }
 
-func detectCluster(ctx context.Context, conn driver.Conn) (bool, string) {
+func detectCluster(ctx context.Context, conn driver.Conn) (bool, string, error) {
 	rows, err := conn.Query(ctx, "SELECT cluster FROM system.clusters LIMIT 1")
 	if err != nil {
-		return false, ""
+		// Query failed (access denied / table absent) — distinct from a
+		// cluster that simply has no entries, which returns no error below.
+		return false, "", err
 	}
 	defer rows.Close()
 
 	if rows.Next() {
 		var cluster string
 		if err := rows.Scan(&cluster); err != nil {
-			return false, ""
+			return false, "", err
 		}
-		return true, cluster
+		return true, cluster, nil
 	}
-	return false, ""
+	return false, "", nil
 }
 
 func mustPort(port string) int {

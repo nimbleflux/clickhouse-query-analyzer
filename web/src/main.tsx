@@ -13,6 +13,8 @@ import { RunningQueries } from "./pages/RunningQueries";
 import { QueryFingerprints } from "./pages/QueryFingerprints";
 import { FingerprintDetail } from "./pages/FingerprintDetail";
 import { Dashboard } from "./pages/Dashboard";
+import { Replication } from "./pages/Replication";
+import { DDL } from "./pages/DDL";
 import { loadConnection, saveConnection, setConnectionHeaders, clearConnectionHeaders, DEFAULT_CONNECTION } from "./api/connection";
 import type { ConnectionParams } from "./api/connection";
 import { testConnection, fetchServerConfig } from "./api/client";
@@ -115,6 +117,8 @@ function App() {
             <Route path="/running" element={<RunningQueries connected={connected} />} />
             <Route path="/fingerprints" element={<QueryFingerprints connected={connected} />} />
             <Route path="/fingerprints/:hash" element={<FingerprintDetail connected={connected} />} />
+            <Route path="/replication" element={<Replication connected={connected} />} />
+            <Route path="/ddl" element={<DDL connected={connected} />} />
           </Route>
         </Routes>
       </BrowserRouter>

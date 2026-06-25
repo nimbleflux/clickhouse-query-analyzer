@@ -58,4 +58,37 @@
         <flush_interval_milliseconds>1000</flush_interval_milliseconds>
         <ttl>event_date + INTERVAL 3 DAY</ttl>
     </part_log>
+
+    <!-- Replication dev setup: standalone Keeper + a 2-replica "dev_cluster".
+         Shared by both clickhouse nodes via HOSTNAME substitution so each
+         advertises its service name (DNS-resolvable on the docker network)
+         as its replica identity and interserver host. -->
+    <zookeeper>
+        <node>
+            <host>clickhouse-keeper</host>
+            <port>9181</port>
+        </node>
+    </zookeeper>
+
+    <macros>
+        <shard>shard1</shard>
+        <replica from_env="HOSTNAME"/>
+    </macros>
+
+    <interserver_http_host from_env="HOSTNAME"/>
+
+    <remote_servers>
+        <dev_cluster>
+            <shard>
+                <replica>
+                    <host>clickhouse</host>
+                    <port>9000</port>
+                </replica>
+                <replica>
+                    <host>clickhouse-2</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+        </dev_cluster>
+    </remote_servers>
 </clickhouse>

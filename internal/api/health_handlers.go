@@ -12,9 +12,10 @@ func (a *API) ConnectWithInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":     "ok",
-		"cluster":    ch.Cluster(),
-		"is_cluster": ch.IsCluster(),
+		"status":       "ok",
+		"cluster":      ch.Cluster(),
+		"is_cluster":   ch.IsCluster(),
+		"cluster_note": ch.ClusterNote(),
 	})
 }
 

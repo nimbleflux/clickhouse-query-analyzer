@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend build clean docker dev-clickhouse seed test test-unit test-integration lint vulncheck fmt-check tidy-check
+.PHONY: dev dev-backend dev-frontend build clean docker dev-clickhouse seed seed-replication test test-unit test-integration lint vulncheck fmt-check tidy-check
 
 BINARY := clickhouse-query-analyzer
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -56,6 +56,21 @@ seed:
 		sleep 1; \
 	done
 	docker exec -i dev-clickhouse-1 clickhouse-client < dev/seed.sql
+
+seed-replication:
+	@for i in $$(seq 1 30); do \
+		if docker exec dev-clickhouse-1 clickhouse-client --query "SELECT 1" >/dev/null 2>&1 && \
+		   docker exec dev-clickhouse-2-1 clickhouse-client --query "SELECT 1" >/dev/null 2>&1; then \
+			break; \
+		fi; \
+		sleep 1; \
+	done
+	@echo "Creating ReplicatedMergeTree table on both nodes..."
+	docker exec -i dev-clickhouse-1 clickhouse-client < dev/seed-replication.sql
+	docker exec -i dev-clickhouse-2-1 clickhouse-client < dev/seed-replication.sql
+	@echo "Inserting on node 1 (replicates to node 2)..."
+	docker exec -i dev-clickhouse-1 clickhouse-client < dev/seed-replication-data.sql
+	@echo "Done. Open the Replication page to watch node 2 pull the parts."
 
 test: test-unit
 
