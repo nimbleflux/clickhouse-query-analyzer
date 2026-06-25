@@ -217,6 +217,11 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 
 func (c *Client) GetQuery(ctx context.Context, queryID string) (*QueryLogEntry, error) {
 	table := c.tableRef("query_log")
+	// Filter to terminal types: ProfileEvents/Settings are only populated on
+	// QueryFinish / Exception* rows, not QueryStart. QueryStart and QueryFinish
+	// share the same event_time, so ORDER BY event_time DESC LIMIT 1 alone can
+	// non-deterministically return the empty QueryStart row (the cause of "all
+	// compared metrics are 0" on the compare page).
 	query := fmt.Sprintf(`SELECT
 		type, event_time, query_start_time, query_duration_ms, query_id, query,
 		normalized_query_hash, query_kind, user,
@@ -225,7 +230,9 @@ func (c *Client) GetQuery(ctx context.Context, queryID string) (*QueryLogEntry, 
 		databases, tables, is_initial_query, initial_query_id,
 		COALESCE(Settings, map('','')), COALESCE(ProfileEvents, map('','')),
 		used_functions, used_storages, used_aggregate_functions
-	FROM %s WHERE query_id = ? ORDER BY event_time DESC LIMIT 1`, table)
+	FROM %s
+	WHERE query_id = ? AND type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')
+	ORDER BY event_time DESC LIMIT 1`, table)
 
 	var e QueryLogEntry
 	var hash uint64
