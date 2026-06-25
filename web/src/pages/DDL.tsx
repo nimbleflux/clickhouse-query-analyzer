@@ -13,6 +13,7 @@ import { ApiError } from "../api/errors";
 import { formatDuration, formatNumber } from "../utils";
 import { useTheme } from "../api/theme";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
+import { CardSkeleton, TableSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -159,7 +160,15 @@ export function DDL({ connected }: { connected: boolean }) {
 
       <ClusterNoteBanner note={data?.cluster_note} />
 
-      {data && (
+      {loading && !data ? (
+        <>
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <CardSkeleton /><CardSkeleton /><CardSkeleton /><CardSkeleton />
+          </div>
+          <Card className="p-4"><TableSkeleton rows={6} cols={7} /></Card>
+          <Card className="p-4"><TableSkeleton rows={6} cols={6} /></Card>
+        </>
+      ) : data ? (
         <>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             <Card className="p-4">
@@ -233,7 +242,7 @@ export function DDL({ connected }: { connected: boolean }) {
             </>
           )}
         </>
-      )}
+      ) : null}
     </PageContainer>
   );
 }
@@ -342,8 +351,7 @@ function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"]
       <div className="overflow-auto px-4 pb-4">
         <table className="w-full table-fixed text-sm">
           <colgroup>
-            <col className="w-[45%]" />
-            <col /><col /><col /><col /><col /><col />
+            <col className="w-[37%]" /><col className="w-[9%]" /><col className="w-[8%]" /><col className="w-[9%]" /><col className="w-[8%]" /><col className="w-[15%]" /><col className="w-[14%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-[var(--color-border)]">

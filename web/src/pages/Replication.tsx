@@ -6,7 +6,7 @@ import type { ReplicationStatus, ReplicationMetricPoint } from "../api/types";
 import { ApiError } from "../api/errors";
 import { formatNumber } from "../utils";
 import { useTheme } from "../api/theme";
-import { CardSkeleton } from "../components/Skeleton";
+import { CardSkeleton, TableSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/input";
@@ -173,9 +173,13 @@ export function Replication({ connected }: { connected: boolean }) {
       <ClusterNoteBanner note={data?.cluster_note} />
 
       {loading && !data ? (
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
-          <CardSkeleton /><CardSkeleton /><CardSkeleton /><CardSkeleton /><CardSkeleton /><CardSkeleton />
-        </div>
+        <>
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+            <CardSkeleton /><CardSkeleton /><CardSkeleton /><CardSkeleton /><CardSkeleton /><CardSkeleton />
+          </div>
+          <Card className="p-4"><TableSkeleton rows={6} cols={7} /></Card>
+          <Card className="p-4"><TableSkeleton rows={4} cols={8} /></Card>
+        </>
       ) : data ? (
         <>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
