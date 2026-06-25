@@ -270,8 +270,9 @@ const DDLTrendChart = memo(function DDLTrendChart({ trend, hours }: { trend: DDL
 // expanded row pays for a CodeMirror instance, so large tables stay cheap.
 function ExpandedQuery({ query, theme }: { query: string; theme: string }) {
   const copy = useCopyToClipboard();
-  // Pretty-print the DDL on expand; ClickHouse SQL is closest to the
-  // PostgreSQL dialect in sql-formatter. Fall back to raw on parse failure.
+  const [view, setView] = useState<"formatted" | "raw">("formatted");
+  // Pretty-print the DDL; ClickHouse SQL is closest to the PostgreSQL dialect
+  // in sql-formatter. Fall back to raw on parse failure.
   const formatted = useMemo(() => {
     try {
       return formatSQL(query, { language: "postgresql", keywordCase: "upper" });
@@ -279,15 +280,20 @@ function ExpandedQuery({ query, theme }: { query: string; theme: string }) {
       return query;
     }
   }, [query]);
+  const value = view === "formatted" ? formatted : query;
   return (
     <div className="bg-[var(--surface-base)] p-2">
-      <div className="mb-1 flex justify-end">
-        <Button variant="ghost" size="icon-sm" onClick={() => copy(query, "Query copied!")} title="Copy original query">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1">
+          <Button variant={view === "formatted" ? "secondary" : "ghost"} size="sm" onClick={() => setView("formatted")}>Formatted</Button>
+          <Button variant={view === "raw" ? "secondary" : "ghost"} size="sm" onClick={() => setView("raw")}>Raw</Button>
+        </div>
+        <Button variant="ghost" size="icon-sm" onClick={() => copy(value, "Query copied!")} title="Copy shown query">
           <Copy className="h-3 w-3" />
         </Button>
       </div>
       <CodeMirror
-        value={formatted}
+        value={value}
         extensions={[sql()]}
         theme={theme === "dark" ? oneDark : undefined}
         editable={false}
@@ -352,18 +358,18 @@ function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"]
                         <span className="min-w-0 truncate font-mono" title={e.query}>{highlightSQL(e.query)}</span>
                       </div>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-[var(--color-text-secondary)]">{e.initiator_host || "-"}</td>
-                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-[var(--color-text-secondary)]">{e.cluster || "-"}</td>
+                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-[var(--color-text-primary)]">{e.initiator_host || "-"}</td>
+                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-[var(--color-text-primary)]">{e.cluster || "-"}</td>
                     <td className={`whitespace-nowrap px-3 py-1.5 font-mono text-xs ${tone.color}`}>
                       <span className="inline-flex items-center gap-1">
                         {tone.label === "Finished" ? <CheckCircle2 className="h-3 w-3" /> : null}
                         {tone.label}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-xs text-[var(--color-text-secondary)]">
+                    <td className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-xs text-[var(--color-text-primary)]">
                       {e.query_duration_ms ? formatDuration(e.query_duration_ms) : "-"}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-secondary)]">{e.query_create_time}</td>
+                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-primary)]">{e.query_create_time}</td>
                     <td className="px-3 py-1.5 text-xs text-[var(--color-error)]" title={e.exception_text}>
                       <span className="block truncate">{e.exception_text || "-"}</span>
                     </td>
@@ -401,7 +407,7 @@ function RecentDDLCard({ entries }: { entries: DDLStatus["recent_ddl"] }) {
       <div className="overflow-auto px-4 pb-4">
         <table className="w-full table-fixed text-sm">
           <colgroup>
-            <col /><col /><col className="w-[55%]" /><col /><col /><col />
+            <col className="w-[15%]" /><col className="w-[8%]" /><col className="w-[47%]" /><col className="w-[10%]" /><col className="w-[10%]" /><col className="w-[10%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-[var(--color-border)]">
@@ -422,7 +428,7 @@ function RecentDDLCard({ entries }: { entries: DDLStatus["recent_ddl"] }) {
                     className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)]"
                     onClick={() => toggle(i)}
                   >
-                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-secondary)]">{e.event_time}</td>
+                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-primary)]">{e.event_time}</td>
                     <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{e.query_kind}</td>
                     <td className="px-3 py-1.5 text-xs">
                       <div className="flex items-center gap-1.5">
@@ -433,7 +439,7 @@ function RecentDDLCard({ entries }: { entries: DDLStatus["recent_ddl"] }) {
                     <td className={`whitespace-nowrap px-3 py-1.5 text-right font-mono text-xs ${e.query_duration_ms > 60000 ? "text-[var(--color-warning)]" : ""}`}>
                       {formatDuration(e.query_duration_ms)}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-secondary)]">{e.user}</td>
+                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-primary)]">{e.user}</td>
                     <td className="whitespace-nowrap px-3 py-1.5 text-xs">
                       {e.exception ? (
                         <Badge variant="error">failed</Badge>

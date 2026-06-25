@@ -74,23 +74,30 @@ func (c *Client) GetDDL(ctx context.Context, params DDLParams) (*DDLStatus, erro
 		params.Hours = 0
 	}
 
-	// Recent DDL + the trend chart are bounded by the lookback window; the
-	// distributed queue is current-state and ignores it. Pick a bucket size
-	// that yields a readable point count for the window.
+	// Recent DDL is bounded by the lookback window; the distributed queue is
+	// current-state and ignores it. Pick a bucket size that yields a readable
+	// point count for the window.
 	fromTime := ""
 	if params.Hours > 0 {
 		fromTime = time.Now().Add(-time.Duration(params.Hours) * time.Hour).Format("2006-01-02 15:04:05")
 	}
 	bucketMinutes := 30
 	switch {
-	case params.Hours == 0:
-		bucketMinutes = 720 // all time → 12h buckets
 	case params.Hours <= 1:
 		bucketMinutes = 5
 	case params.Hours <= 24:
 		bucketMinutes = 30
 	case params.Hours <= 168:
 		bucketMinutes = 360
+	}
+	// The trend chart always has a window so "All" still renders bars: cap it
+	// at the last 30 days with 1-day buckets. recent_ddl stays genuinely
+	// unbounded in All mode (fromTime == "").
+	trendFromTime := fromTime
+	trendBucket := bucketMinutes
+	if params.Hours == 0 {
+		trendFromTime = time.Now().Add(-30 * 24 * time.Hour).Format("2006-01-02 15:04:05")
+		trendBucket = 1440
 	}
 
 	out := &DDLStatus{
@@ -103,7 +110,7 @@ func (c *Client) GetDDL(ctx context.Context, params DDLParams) (*DDLStatus, erro
 
 	c.queryDistributedDDL(ctx, params, out)
 	c.queryRecentDDL(ctx, params, fromTime, out)
-	c.queryDDLTrend(ctx, fromTime, bucketMinutes, out)
+	c.queryDDLTrend(ctx, trendFromTime, trendBucket, out)
 	c.queryPendingMutationCount(ctx, out)
 
 	// "Stuck" = a distributed entry that isn't Finished (Active/Inactive/
@@ -217,9 +224,6 @@ func (c *Client) queryRecentDDL(ctx context.Context, params DDLParams, fromTime 
 // for the ops-over-time chart. Empty result (no DDL in the window) is fine —
 // the frontend hides the chart.
 func (c *Client) queryDDLTrend(ctx context.Context, fromTime string, bucketMinutes int, out *DDLStatus) {
-	if fromTime == "" {
-		return // unbounded "all time" trend isn't useful — skip it
-	}
 	table := c.tableRef("query_log")
 	kinds := make([]string, len(ddlKinds))
 	for i, k := range ddlKinds {
