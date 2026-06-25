@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, memo } from "react";
+import { useState, useEffect, useCallback, memo, useMemo } from "react";
 import { Fragment } from "react";
 import { useNavigate } from "react-router-dom";
 import { Layers, AlertTriangle, RefreshCw, CheckCircle2, ArrowRight, FlaskConical, Timer, ChevronRight, ChevronDown, Copy } from "lucide-react";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { format as formatSQL } from "sql-formatter";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { fetchDDL } from "../api/client";
 import type { DDLStatus } from "../api/types";
@@ -24,6 +25,42 @@ const TIMEFRAMES: { label: string; hours: number }[] = [
   { label: "7d", hours: 168 },
   { label: "All", hours: 0 },
 ];
+
+// Minimal SQL keyword set for the inline (pre-expand) preview highlighter.
+// CodeMirror is too heavy to mount on every row; this regex tokenizer is
+// cheap enough for tables with hundreds of rows and gives the same look.
+const SQL_KEYWORDS = new Set([
+  "SELECT", "FROM", "WHERE", "CREATE", "TABLE", "ALTER", "DROP", "INSERT", "INTO",
+  "VALUES", "UPDATE", "SET", "DELETE", "AND", "OR", "NOT", "NULL", "ON", "CLUSTER",
+  "ENGINE", "ORDER", "BY", "GROUP", "PARTITION", "PRIMARY", "KEY", "INDEX", "JOIN",
+  "LEFT", "RIGHT", "INNER", "OUTER", "AS", "DISTINCT", "LIMIT", "OFFSET", "UNION",
+  "ALL", "HAVING", "ASC", "DESC", "SETTINGS", "IF", "EXISTS", "RENAME", "TO", "ADD",
+  "COLUMN", "MODIFY", "ATTACH", "DETACH", "TRUNCATE", "WITH", "MATERIALIZED",
+  "DEFAULT", "MERGETREE", "REPLICATEDMERGETREE", "REPLACE", "GRANT", "REVOKE",
+]);
+
+const TOKEN_RE = /(\/\*[\s\S]*?\*\/|--[^\n]*)|('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")|(\b\d+(?:\.\d+)?\b)|([A-Za-z_][A-Za-z0-9_]*)|(\s+)|([^\sA-Za-z0-9_])/g;
+
+function highlightSQL(text: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let m: RegExpExecArray | null;
+  let i = 0;
+  TOKEN_RE.lastIndex = 0;
+  while ((m = TOKEN_RE.exec(text)) !== null) {
+    if (m[1]) out.push(<span key={i++} className="italic text-[var(--color-text-secondary)]">{m[1]}</span>);
+    else if (m[2]) out.push(<span key={i++} className="text-emerald-500">{m[2]}</span>);
+    else if (m[3]) out.push(<span key={i++} className="text-purple-500">{m[3]}</span>);
+    else if (m[4]) {
+      const upper = m[4].toUpperCase();
+      out.push(SQL_KEYWORDS.has(upper)
+        ? <span key={i++} className="font-medium text-[var(--color-accent)]">{m[4]}</span>
+        : <span key={i++}>{m[4]}</span>);
+    } else {
+      out.push(<span key={i++}>{m[0]}</span>);
+    }
+  }
+  return out;
+}
 
 function statusTone(status: string, exception: string): { color: string; label: string } {
   if (exception) return { color: "text-[var(--color-error)]", label: "Failed" };
@@ -145,7 +182,7 @@ export function DDL({ connected }: { connected: boolean }) {
             </Card>
             <button
               onClick={() => navigate("/replication")}
-              className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)] p-4 text-left transition-colors hover:bg-[var(--surface-hover)]"
+              className="cursor-pointer rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)] p-4 text-left transition-colors hover:bg-[var(--surface-hover)]"
               title="View pending mutations on the Replication page"
             >
               <div className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
@@ -233,15 +270,24 @@ const DDLTrendChart = memo(function DDLTrendChart({ trend, hours }: { trend: DDL
 // expanded row pays for a CodeMirror instance, so large tables stay cheap.
 function ExpandedQuery({ query, theme }: { query: string; theme: string }) {
   const copy = useCopyToClipboard();
+  // Pretty-print the DDL on expand; ClickHouse SQL is closest to the
+  // PostgreSQL dialect in sql-formatter. Fall back to raw on parse failure.
+  const formatted = useMemo(() => {
+    try {
+      return formatSQL(query, { language: "postgresql", keywordCase: "upper" });
+    } catch {
+      return query;
+    }
+  }, [query]);
   return (
     <div className="bg-[var(--surface-base)] p-2">
       <div className="mb-1 flex justify-end">
-        <Button variant="ghost" size="icon-sm" onClick={() => copy(query, "Query copied!")} title="Copy query">
+        <Button variant="ghost" size="icon-sm" onClick={() => copy(query, "Query copied!")} title="Copy original query">
           <Copy className="h-3 w-3" />
         </Button>
       </div>
       <CodeMirror
-        value={query}
+        value={formatted}
         extensions={[sql()]}
         theme={theme === "dark" ? oneDark : undefined}
         editable={false}
@@ -274,16 +320,20 @@ function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"]
         Distributed DDL Queue ({entries.length})
       </div>
       <div className="overflow-auto px-4 pb-4">
-        <table className="w-full text-sm">
+        <table className="w-full table-fixed text-sm">
+          <colgroup>
+            <col className="w-[45%]" />
+            <col /><col /><col /><col /><col /><col />
+          </colgroup>
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Query</th>
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Host</th>
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Cluster</th>
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Status</th>
-              <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Duration</th>
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Created</th>
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Exception</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Query</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Host</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Cluster</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Status</th>
+              <th className="px-3 pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Duration</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Created</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Exception</th>
             </tr>
           </thead>
           <tbody>
@@ -296,26 +346,26 @@ function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"]
                     className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)]"
                     onClick={() => toggle(i)}
                   >
-                    <td className="py-1.5 text-xs">
+                    <td className="px-3 py-1.5 text-xs">
                       <div className="flex items-center gap-1.5">
                         <ExpandToggle open={isOpen} />
-                        <span className="max-w-sm truncate font-mono" title={e.query}>{e.query}</span>
+                        <span className="min-w-0 truncate font-mono" title={e.query}>{highlightSQL(e.query)}</span>
                       </div>
                     </td>
-                    <td className="py-1.5 font-mono text-xs text-[var(--color-text-secondary)]">{e.initiator_host || "-"}</td>
-                    <td className="py-1.5 font-mono text-xs text-[var(--color-text-secondary)]">{e.cluster || "-"}</td>
-                    <td className={`py-1.5 font-mono text-xs ${tone.color}`}>
+                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-[var(--color-text-secondary)]">{e.initiator_host || "-"}</td>
+                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-[var(--color-text-secondary)]">{e.cluster || "-"}</td>
+                    <td className={`whitespace-nowrap px-3 py-1.5 font-mono text-xs ${tone.color}`}>
                       <span className="inline-flex items-center gap-1">
                         {tone.label === "Finished" ? <CheckCircle2 className="h-3 w-3" /> : null}
                         {tone.label}
                       </span>
                     </td>
-                    <td className="py-1.5 text-right font-mono text-xs text-[var(--color-text-secondary)]">
+                    <td className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-xs text-[var(--color-text-secondary)]">
                       {e.query_duration_ms ? formatDuration(e.query_duration_ms) : "-"}
                     </td>
-                    <td className="whitespace-nowrap py-1.5 text-xs text-[var(--color-text-secondary)]">{e.query_create_time}</td>
-                    <td className="max-w-xs truncate py-1.5 text-xs text-[var(--color-error)]" title={e.exception_text}>
-                      {e.exception_text || "-"}
+                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-secondary)]">{e.query_create_time}</td>
+                    <td className="px-3 py-1.5 text-xs text-[var(--color-error)]" title={e.exception_text}>
+                      <span className="block truncate">{e.exception_text || "-"}</span>
                     </td>
                   </tr>
                   {isOpen && (
@@ -349,15 +399,18 @@ function RecentDDLCard({ entries }: { entries: DDLStatus["recent_ddl"] }) {
         Recent DDL Operations ({entries.length})
       </div>
       <div className="overflow-auto px-4 pb-4">
-        <table className="w-full text-sm">
+        <table className="w-full table-fixed text-sm">
+          <colgroup>
+            <col /><col /><col className="w-[55%]" /><col /><col /><col />
+          </colgroup>
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Time</th>
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Kind</th>
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Query</th>
-              <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Duration</th>
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">User</th>
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Status</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Time</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Kind</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Query</th>
+              <th className="px-3 pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Duration</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">User</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Status</th>
             </tr>
           </thead>
           <tbody>
@@ -369,19 +422,19 @@ function RecentDDLCard({ entries }: { entries: DDLStatus["recent_ddl"] }) {
                     className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)]"
                     onClick={() => toggle(i)}
                   >
-                    <td className="whitespace-nowrap py-1.5 text-xs text-[var(--color-text-secondary)]">{e.event_time}</td>
-                    <td className="py-1.5 font-mono text-xs">{e.query_kind}</td>
-                    <td className="py-1.5 text-xs">
+                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-secondary)]">{e.event_time}</td>
+                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{e.query_kind}</td>
+                    <td className="px-3 py-1.5 text-xs">
                       <div className="flex items-center gap-1.5">
                         <ExpandToggle open={isOpen} />
-                        <span className="max-w-md truncate font-mono text-[var(--color-text-secondary)]" title={e.query}>{e.query}</span>
+                        <span className="min-w-0 truncate font-mono" title={e.query}>{highlightSQL(e.query)}</span>
                       </div>
                     </td>
-                    <td className={`py-1.5 text-right font-mono text-xs ${e.query_duration_ms > 60000 ? "text-[var(--color-warning)]" : ""}`}>
+                    <td className={`whitespace-nowrap px-3 py-1.5 text-right font-mono text-xs ${e.query_duration_ms > 60000 ? "text-[var(--color-warning)]" : ""}`}>
                       {formatDuration(e.query_duration_ms)}
                     </td>
-                    <td className="py-1.5 text-xs text-[var(--color-text-secondary)]">{e.user}</td>
-                    <td className="py-1.5 text-xs">
+                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-secondary)]">{e.user}</td>
+                    <td className="whitespace-nowrap px-3 py-1.5 text-xs">
                       {e.exception ? (
                         <Badge variant="error">failed</Badge>
                       ) : (
