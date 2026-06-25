@@ -251,11 +251,12 @@ export async function fetchDashboard(signal?: AbortSignal): Promise<DashboardDat
   return fetchJSON<DashboardData>(`${BASE}/dashboard`, { signal });
 }
 
-export async function fetchReplication(params?: { database?: string; errors_only?: boolean; executing_only?: boolean; limit?: number; offset?: number }, signal?: AbortSignal): Promise<ReplicationStatus> {
+export async function fetchReplication(params?: { database?: string; errors_only?: boolean; executing_only?: boolean; include_history?: boolean; limit?: number; offset?: number }, signal?: AbortSignal): Promise<ReplicationStatus> {
   const sp = new URLSearchParams();
   if (params?.database) sp.set("database", params.database);
   if (params?.errors_only) sp.set("errors_only", "1");
   if (params?.executing_only) sp.set("executing_only", "1");
+  if (params?.include_history === false) sp.set("include_history", "false");
   if (params?.limit) sp.set("limit", String(params.limit));
   if (params?.offset) sp.set("offset", String(params.offset));
   const qs = sp.toString();

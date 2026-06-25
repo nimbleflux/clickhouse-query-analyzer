@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, memo } from "react";
 import { Server, AlertTriangle, RefreshCw, Network, Clock, ListChecks, FlaskConical, Pause, Play, KeyRound } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { fetchReplication } from "../api/client";
@@ -59,9 +59,13 @@ function ChartCard({ title, children }: { title: string; children: React.ReactNo
 
 export function Replication({ connected }: { connected: boolean }) {
   const [data, setData] = useState<ReplicationStatus | null>(null);
+  const [history, setHistory] = useState<ReplicationMetricPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  // Live refresh is opt-in: the page is heavy enough (charts + multi-table)
+  // that silently polling every few seconds is a poor default. The user
+  // clicks "Live" when they're actively watching a replication incident.
+  const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(10);
   const intervalRef = useRef<ReturnType<typeof setInterval>>(null);
 
@@ -69,15 +73,19 @@ export function Replication({ connected }: { connected: boolean }) {
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [executingOnly, setExecutingOnly] = useState(false);
 
-  const load = useCallback(async (signal?: AbortSignal) => {
+  // includeHistory defaults to true: the initial load and manual refreshes
+  // pull the 24h chart data. The auto-refresh tick passes false so live
+  // polling only re-fetches the cheap live tables, not the (large) history.
+  const load = useCallback(async (signal?: AbortSignal, includeHistory = true) => {
     setLoading(true);
     setError(null);
     try {
       const result = await fetchReplication(
-        { database: database || undefined, errors_only: errorsOnly, executing_only: executingOnly },
+        { database: database || undefined, errors_only: errorsOnly, executing_only: executingOnly, include_history: includeHistory },
         signal,
       );
       setData(result);
+      if (includeHistory && result.metric_history?.length > 0) setHistory(result.metric_history);
     } catch (e) {
       if (e instanceof ApiError && e.isAbort()) return;
       if (e instanceof DOMException && e.name === "AbortError") return;
@@ -97,7 +105,7 @@ export function Replication({ connected }: { connected: boolean }) {
   useEffect(() => {
     if (!connected || !autoRefresh) return;
     const controller = new AbortController();
-    intervalRef.current = setInterval(() => load(controller.signal), refreshInterval * 1000);
+    intervalRef.current = setInterval(() => load(controller.signal, false), refreshInterval * 1000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); controller.abort(); };
   }, [autoRefresh, refreshInterval, load, connected]);
 
@@ -211,7 +219,7 @@ export function Replication({ connected }: { connected: boolean }) {
             </Card>
           )}
 
-          <MetricCharts history={data.metric_history} />
+          <MetricCharts history={history} />
 
           <div className="flex flex-wrap items-center gap-2">
             <Select value={database} onChange={(e) => setDatabase(e.target.value)} className="min-w-[180px]">
@@ -439,7 +447,10 @@ function KeeperCard({ keeper }: { keeper: ReplicationStatus["keeper"] }) {
   );
 }
 
-function MetricCharts({ history }: { history: ReplicationMetricPoint[] }) {
+// Memoized: history only changes on initial load / manual refresh (the
+// auto-refresh tick skips it), so the charts don't re-render every few seconds
+// while the live tables update around them.
+const MetricCharts = memo(function MetricCharts({ history }: { history: ReplicationMetricPoint[] }) {
   const theme = useTheme();
   const isDark = theme === "dark";
   const gridColor = isDark ? "#334155" : "#e2e8f0";
@@ -504,4 +515,4 @@ function MetricCharts({ history }: { history: ReplicationMetricPoint[] }) {
       </ChartCard>
     </div>
   );
-}
+});

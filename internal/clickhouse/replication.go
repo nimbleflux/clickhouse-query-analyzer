@@ -59,11 +59,12 @@ type ReplicationMetricPoint struct {
 }
 
 type ReplicationParams struct {
-	Database      string
-	ErrorsOnly    bool
-	ExecutingOnly bool
-	Limit         int
-	Offset        int
+	Database       string
+	ErrorsOnly     bool
+	ExecutingOnly  bool
+	IncludeHistory bool
+	Limit          int
+	Offset         int
 }
 
 type ReplicationStatus struct {
@@ -104,7 +105,12 @@ func (c *Client) GetReplication(ctx context.Context, params ReplicationParams) (
 	c.queryReplicationQueue(ctx, params, out)
 	c.queryMutations(ctx, params.Database, out)
 	c.queryKeeper(ctx, out)
-	c.queryMetricHistory(ctx, out)
+	// The 24h metric history is the heavy part of the payload and barely moves
+	// between refreshes, so the caller opts in (initial load / manual refresh)
+	// rather than pulling it on every live tick.
+	if params.IncludeHistory {
+		c.queryMetricHistory(ctx, out)
+	}
 
 	out.Summary = c.deriveReplicationSummary(out)
 	return out, nil
@@ -261,20 +267,24 @@ func (c *Client) queryKeeper(ctx context.Context, out *ReplicationStatus) {
 }
 
 // queryMetricHistory pulls the last 24h of replication/Keeper gauges from
-// system.metric_log. Optional: not every deployment enables metric_log, so a
-// failure (or empty result) is surfaced as an empty slice, not an error — the
-// frontend hides the charts when there's no data.
+// system.metric_log. Bucketed to 5-minute maxes so the payload is bounded
+// (~288 points) regardless of the cluster's metric_log collect interval —
+// some installs collect every second, which would otherwise yield tens of
+// thousands of points and swamp the chart render. Optional: not every
+// deployment enables metric_log, so a failure (or empty result) is surfaced
+// as an empty slice, not an error — the frontend hides the charts then.
 func (c *Client) queryMetricHistory(ctx context.Context, out *ReplicationStatus) {
-	query := `SELECT toString(event_time),
-		CurrentMetric_ReadonlyReplica,
-		CurrentMetric_ReplicatedFetch,
-		CurrentMetric_ReplicatedSend,
-		CurrentMetric_ReplicatedChecks,
-		CurrentMetric_ZooKeeperSession,
-		CurrentMetric_ZooKeeperSessionExpired
+	query := `SELECT toString(toStartOfInterval(event_time, INTERVAL 5 MINUTE)),
+		max(CurrentMetric_ReadonlyReplica),
+		max(CurrentMetric_ReplicatedFetch),
+		max(CurrentMetric_ReplicatedSend),
+		max(CurrentMetric_ReplicatedChecks),
+		max(CurrentMetric_ZooKeeperSession),
+		max(CurrentMetric_ZooKeeperSessionExpired)
 	FROM system.metric_log
 	WHERE event_time > now() - INTERVAL 24 HOUR
-	ORDER BY event_time`
+	GROUP BY 1
+	ORDER BY 1`
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
 		// metric_log disabled/absent — non-fatal; charts simply stay hidden.
