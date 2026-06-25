@@ -357,11 +357,14 @@ export function Dashboard({ connected }: { connected: boolean }) {
 
         {data.replica_statuses.length > 0 && (
           <TableCard title="Replica Status" icon={<Server className="h-3.5 w-3.5" />} scrollable>
-            <table className="w-full text-sm">
+            <table className="w-full table-fixed text-sm">
+              <colgroup>
+                <col className="w-[32%]" /><col className="w-[20%]" /><col className="w-[8%]" /><col className="w-[14%]" /><col className="w-[13%]" /><col className="w-[13%]" />
+              </colgroup>
               <thead>
                 <tr className="border-b border-[var(--color-border)]">
                   <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Table</th>
-                  <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Replica</th>
+                  <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Replica</th>
                   <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Leader</th>
                   <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Delay</th>
                   <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Queue</th>
@@ -372,15 +375,19 @@ export function Dashboard({ connected }: { connected: boolean }) {
                 {data.replica_statuses.map((r, i) => (
                   <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
                     <td className="py-1.5 text-xs">
-                      <span className="text-[var(--color-text-secondary)]">{r.database}.</span>{r.table}
+                      <span className="block truncate" title={`${r.database}.${r.table}`}>
+                        <span className="text-[var(--color-text-secondary)]">{r.database}.</span>{r.table}
+                      </span>
                     </td>
-                    <td className="py-1.5 text-right font-mono text-xs text-[var(--color-text-secondary)]">{r.replica_name}</td>
-                    <td className="py-1.5 text-right font-mono text-xs">{r.is_leader ? "Yes" : "-"}</td>
-                    <td className={`py-1.5 text-right font-mono text-xs ${r.absolute_delay > 60 ? "text-[var(--color-error)]" : r.absolute_delay > 0 ? "text-[var(--color-warning)]" : ""}`}>
+                    <td className="py-1.5 text-xs">
+                      <span className="block truncate font-mono text-[var(--color-text-secondary)]" title={r.replica_name}>{r.replica_name}</span>
+                    </td>
+                    <td className="whitespace-nowrap py-1.5 text-right font-mono text-xs">{r.is_leader ? "Yes" : "-"}</td>
+                    <td className={`whitespace-nowrap py-1.5 text-right font-mono text-xs ${r.absolute_delay > 60 ? "text-[var(--color-error)]" : r.absolute_delay > 0 ? "text-[var(--color-warning)]" : ""}`}>
                       {r.absolute_delay > 0 ? `${r.absolute_delay.toFixed(0)}s` : "-"}
                     </td>
-                    <td className="py-1.5 text-right font-mono text-xs">{r.queue_size || "-"}</td>
-                    <td className="py-1.5 text-right font-mono text-xs">{r.active_replicas}/{r.total_replicas}</td>
+                    <td className="whitespace-nowrap py-1.5 text-right font-mono text-xs">{r.queue_size || "-"}</td>
+                    <td className="whitespace-nowrap py-1.5 text-right font-mono text-xs">{r.active_replicas}/{r.total_replicas}</td>
                   </tr>
                 ))}
               </tbody>
