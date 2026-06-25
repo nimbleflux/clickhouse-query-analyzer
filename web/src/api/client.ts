@@ -264,9 +264,10 @@ export async function fetchReplication(params?: { database?: string; errors_only
   return fetchJSON<ReplicationStatus>(`${BASE}/replication${qs ? `?${qs}` : ""}`, { signal });
 }
 
-export async function fetchDDL(params?: { database?: string; limit?: number }, signal?: AbortSignal): Promise<DDLStatus> {
+export async function fetchDDL(params?: { database?: string; hours?: number; limit?: number }, signal?: AbortSignal): Promise<DDLStatus> {
   const sp = new URLSearchParams();
   if (params?.database) sp.set("database", params.database);
+  if (params?.hours !== undefined) sp.set("hours", String(params.hours));
   if (params?.limit) sp.set("limit", String(params.limit));
   const qs = sp.toString();
   return fetchJSON<DDLStatus>(`${BASE}/ddl${qs ? `?${qs}` : ""}`, { signal });

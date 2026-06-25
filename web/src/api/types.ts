@@ -476,9 +476,17 @@ export interface RecentDDLEntry {
   exception: string;
 }
 
+export interface DDLOpsPoint {
+  bucket: string;
+  total: number;
+  failed: number;
+}
+
 export interface DDLStatus {
   distributed_ddl: DistributedDDLEntry[];
   recent_ddl: RecentDDLEntry[];
+  trend: DDLOpsPoint[];
+  hours: number;
   pending_mutations: number;
   stuck_ddl: number;
   failed_ddl: number;

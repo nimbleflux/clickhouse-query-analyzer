@@ -15,6 +15,11 @@ func (a *API) GetDDL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := clickhouse.DDLParams{Database: r.URL.Query().Get("database")}
+	if v := r.URL.Query().Get("hours"); v != "" {
+		if h, err := strconv.Atoi(v); err == nil {
+			params.Hours = h
+		}
+	}
 	if v := r.URL.Query().Get("limit"); v != "" {
 		params.Limit, _ = strconv.Atoi(v)
 	}

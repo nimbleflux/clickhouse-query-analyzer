@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // DistributedDDLEntry is one row of system.distributed_ddl_queue — the per-host
@@ -34,9 +35,19 @@ type RecentDDLEntry struct {
 	Exception       string `json:"exception"`
 }
 
+// DDLOpsPoint is one time bucket of DDL activity (ok + failed counts) for the
+// ops-over-time chart.
+type DDLOpsPoint struct {
+	Bucket string `json:"bucket"`
+	Total  uint64 `json:"total"`
+	Failed uint64 `json:"failed"`
+}
+
 type DDLStatus struct {
 	DistributedDDL   []DistributedDDLEntry `json:"distributed_ddl"`
 	RecentDDL        []RecentDDLEntry      `json:"recent_ddl"`
+	Trend            []DDLOpsPoint         `json:"trend"`
+	Hours            int                   `json:"hours"`
 	PendingMutations uint64                `json:"pending_mutations"`
 	StuckDDL         int                   `json:"stuck_ddl"`
 	FailedDDL        int                   `json:"failed_ddl"`
@@ -45,6 +56,7 @@ type DDLStatus struct {
 
 type DDLParams struct {
 	Database string
+	Hours    int // lookback window; 0 = all time
 	Limit    int
 }
 
@@ -58,15 +70,40 @@ func (c *Client) GetDDL(ctx context.Context, params DDLParams) (*DDLStatus, erro
 	if params.Limit > 1000 {
 		params.Limit = 1000
 	}
+	if params.Hours < 0 {
+		params.Hours = 0
+	}
+
+	// Recent DDL + the trend chart are bounded by the lookback window; the
+	// distributed queue is current-state and ignores it. Pick a bucket size
+	// that yields a readable point count for the window.
+	fromTime := ""
+	if params.Hours > 0 {
+		fromTime = time.Now().Add(-time.Duration(params.Hours) * time.Hour).Format("2006-01-02 15:04:05")
+	}
+	bucketMinutes := 30
+	switch {
+	case params.Hours == 0:
+		bucketMinutes = 720 // all time → 12h buckets
+	case params.Hours <= 1:
+		bucketMinutes = 5
+	case params.Hours <= 24:
+		bucketMinutes = 30
+	case params.Hours <= 168:
+		bucketMinutes = 360
+	}
 
 	out := &DDLStatus{
 		DistributedDDL: []DistributedDDLEntry{},
 		RecentDDL:      []RecentDDLEntry{},
+		Trend:          []DDLOpsPoint{},
+		Hours:          params.Hours,
 		PartialErrors:  []string{},
 	}
 
 	c.queryDistributedDDL(ctx, params, out)
-	c.queryRecentDDL(ctx, params, out)
+	c.queryRecentDDL(ctx, params, fromTime, out)
+	c.queryDDLTrend(ctx, fromTime, bucketMinutes, out)
 	c.queryPendingMutationCount(ctx, out)
 
 	// "Stuck" = a distributed entry that isn't Finished (Active/Inactive/
@@ -132,7 +169,7 @@ func (c *Client) queryDistributedDDL(ctx context.Context, params DDLParams, out 
 	}
 }
 
-func (c *Client) queryRecentDDL(ctx context.Context, params DDLParams, out *DDLStatus) {
+func (c *Client) queryRecentDDL(ctx context.Context, params DDLParams, fromTime string, out *DDLStatus) {
 	table := c.tableRef("query_log")
 	kinds := make([]string, len(ddlKinds))
 	for i, k := range ddlKinds {
@@ -143,6 +180,10 @@ func (c *Client) queryRecentDDL(ctx context.Context, params DDLParams, out *DDLS
 		"query_kind IN (" + strings.Join(kinds, ",") + ")",
 	}
 	args := []interface{}{}
+	if fromTime != "" {
+		whereParts = append(whereParts, "event_time >= ?")
+		args = append(args, fromTime)
+	}
 	if params.Database != "" {
 		whereParts = append(whereParts, "has(databases, ?)")
 		args = append(args, params.Database)
@@ -169,6 +210,44 @@ func (c *Client) queryRecentDDL(ctx context.Context, params DDLParams, out *DDLS
 			return
 		}
 		out.RecentDDL = append(out.RecentDDL, r)
+	}
+}
+
+// queryDDLTrend buckets DDL operations (ok vs failed) over the lookback window
+// for the ops-over-time chart. Empty result (no DDL in the window) is fine —
+// the frontend hides the chart.
+func (c *Client) queryDDLTrend(ctx context.Context, fromTime string, bucketMinutes int, out *DDLStatus) {
+	if fromTime == "" {
+		return // unbounded "all time" trend isn't useful — skip it
+	}
+	table := c.tableRef("query_log")
+	kinds := make([]string, len(ddlKinds))
+	for i, k := range ddlKinds {
+		kinds[i] = "'" + k + "'"
+	}
+	query := fmt.Sprintf(`SELECT
+		toString(toStartOfInterval(event_time, INTERVAL %d MINUTE)),
+		count(),
+		countIf(exception != '')
+	FROM %s
+	WHERE event_time >= ?
+		AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing')
+		AND query_kind IN (%s)
+	GROUP BY 1
+	ORDER BY 1`, bucketMinutes, table, strings.Join(kinds, ","))
+
+	rows, err := c.conn.Query(ctx, query, fromTime)
+	if err != nil {
+		out.PartialErrors = append(out.PartialErrors, "system.query_log (ddl trend): "+err.Error())
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p DDLOpsPoint
+		if err := rows.Scan(&p.Bucket, &p.Total, &p.Failed); err != nil {
+			return
+		}
+		out.Trend = append(out.Trend, p)
 	}
 }
 
