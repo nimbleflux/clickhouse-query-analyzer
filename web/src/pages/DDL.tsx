@@ -147,9 +147,12 @@ export function DDL({ connected }: { connected: boolean }) {
       </div>
 
       {data?.partial_errors && data.partial_errors.length > 0 && (
-        <div className="flex items-center gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)] px-4 py-2 text-xs text-[var(--color-text-secondary)]">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
-          <span>Some sections unavailable: {data.partial_errors.join(", ")}.</span>
+        <div
+          className="flex items-start gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)] px-4 py-2 text-xs text-[var(--color-text-secondary)]"
+          title={data.partial_errors.map((t) => `${t}: ${data.partial_error_details?.[t] ?? ""}`).join("\n")}
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
+          <span>Some sections are unavailable — your ClickHouse user may lack access to: {data.partial_errors.join(", ")}. Hover for details.</span>
         </div>
       )}
 
@@ -207,11 +210,19 @@ export function DDL({ connected }: { connected: boolean }) {
           <DDLTrendChart trend={data.trend} hours={hours} />
 
           {data.distributed_ddl.length === 0 && data.recent_ddl.length === 0 ? (
-            <EmptyState
-              icon={Layers}
-              title="No DDL activity"
-              description={`No ON CLUSTER DDL in the distributed queue and no recent schema operations (${windowLabel}).`}
-            />
+            data.partial_errors.length > 0 ? (
+              <EmptyState
+                icon={AlertTriangle}
+                title="Couldn't load DDL data"
+                description="Your ClickHouse user may lack SELECT access to the required system tables (listed above). Contact your ClickHouse admin to grant access, or reconnect with an authorized user."
+              />
+            ) : (
+              <EmptyState
+                icon={Layers}
+                title="No DDL activity"
+                description={`No ON CLUSTER DDL in the distributed queue and no recent schema operations (${windowLabel}).`}
+              />
+            )
           ) : (
             <>
               {data.distributed_ddl.length > 0 && <DistributedDDLCard entries={data.distributed_ddl} />}

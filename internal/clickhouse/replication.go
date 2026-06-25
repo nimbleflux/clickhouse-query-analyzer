@@ -68,13 +68,32 @@ type ReplicationParams struct {
 }
 
 type ReplicationStatus struct {
-	ReplicaStatuses  []ReplicaStatus          `json:"replica_statuses"`
-	ReplicationQueue []ReplicationQueueEntry  `json:"replication_queue"`
-	Mutations        []MutationEntry          `json:"mutations"`
-	Keeper           []KeeperStatus           `json:"keeper"`
-	MetricHistory    []ReplicationMetricPoint `json:"metric_history"`
-	Summary          ReplicationSummary       `json:"summary"`
-	PartialErrors    []string                 `json:"partial_errors"`
+	ReplicaStatuses     []ReplicaStatus          `json:"replica_statuses"`
+	ReplicationQueue    []ReplicationQueueEntry  `json:"replication_queue"`
+	Mutations           []MutationEntry          `json:"mutations"`
+	Keeper              []KeeperStatus           `json:"keeper"`
+	MetricHistory       []ReplicationMetricPoint `json:"metric_history"`
+	Summary             ReplicationSummary       `json:"summary"`
+	PartialErrors       []string                 `json:"partial_errors"`
+	PartialErrorDetails map[string]string        `json:"partial_error_details,omitempty"`
+}
+
+// addPartial records a per-section failure: the table name (deduped) goes in
+// PartialErrors for the banner, and the raw message goes in
+// PartialErrorDetails for a hover tooltip. Lets restricted users see *why* a
+// section is empty (usually missing SELECT privileges) instead of a misleading
+// "no data" state.
+func (s *ReplicationStatus) addPartial(table string, err error) {
+	if err == nil {
+		return
+	}
+	if s.PartialErrorDetails == nil {
+		s.PartialErrorDetails = map[string]string{}
+	}
+	if _, ok := s.PartialErrorDetails[table]; !ok {
+		s.PartialErrors = append(s.PartialErrors, table)
+	}
+	s.PartialErrorDetails[table] = err.Error()
 }
 
 // GetReplication assembles the full replication view. Unlike the dashboard's
@@ -138,7 +157,7 @@ func (c *Client) queryReplicaStatuses(ctx context.Context, database string, out 
 
 	rows, err := c.conn.Query(ctx, query, args...)
 	if err != nil {
-		out.PartialErrors = append(out.PartialErrors, "system.replicas: "+err.Error())
+		out.addPartial("system.replicas", err)
 		return
 	}
 	defer rows.Close()
@@ -150,13 +169,13 @@ func (c *Client) queryReplicaStatuses(ctx context.Context, database string, out 
 			&r.LogMaxIndex, &r.LogPointer,
 			&r.TotalReplicas, &r.ActiveReplicas,
 			&r.QueueOldestTime, &r.IsSessionExpired); err != nil {
-			out.PartialErrors = append(out.PartialErrors, "system.replicas scan: "+err.Error())
+			out.addPartial("system.replicas", err)
 			return
 		}
 		out.ReplicaStatuses = append(out.ReplicaStatuses, r)
 	}
 	if err := rows.Err(); err != nil {
-		out.PartialErrors = append(out.PartialErrors, "system.replicas iter: "+err.Error())
+		out.addPartial("system.replicas", err)
 	}
 }
 
@@ -194,7 +213,7 @@ func (c *Client) queryReplicationQueue(ctx context.Context, params ReplicationPa
 
 	rows, err := c.conn.Query(ctx, query, args...)
 	if err != nil {
-		out.PartialErrors = append(out.PartialErrors, "system.replication_queue: "+err.Error())
+		out.addPartial("system.replication_queue", err)
 		return
 	}
 	defer rows.Close()
@@ -203,7 +222,7 @@ func (c *Client) queryReplicationQueue(ctx context.Context, params ReplicationPa
 		if err := rows.Scan(&r.Database, &r.Table, &r.ReplicaName, &r.Position, &r.Type,
 			&r.CreateTime, &r.IsCurrentlyExecuting, &r.NumTries, &r.LastException,
 			&r.NumPostponed, &r.PostponeReason, &r.SourceReplica); err != nil {
-			out.PartialErrors = append(out.PartialErrors, "system.replication_queue scan: "+err.Error())
+			out.addPartial("system.replication_queue", err)
 			return
 		}
 		out.ReplicationQueue = append(out.ReplicationQueue, r)
@@ -229,7 +248,7 @@ func (c *Client) queryMutations(ctx context.Context, database string, out *Repli
 
 	rows, err := c.conn.Query(ctx, query, args...)
 	if err != nil {
-		out.PartialErrors = append(out.PartialErrors, "system.mutations: "+err.Error())
+		out.addPartial("system.mutations", err)
 		return
 	}
 	defer rows.Close()
@@ -238,7 +257,7 @@ func (c *Client) queryMutations(ctx context.Context, database string, out *Repli
 		if err := rows.Scan(&m.Database, &m.Table, &m.MutationID, &m.Command,
 			&m.CreateTime, &m.PartsToDo, &m.IsDone,
 			&m.LatestFailedPart, &m.LatestFailReason); err != nil {
-			out.PartialErrors = append(out.PartialErrors, "system.mutations scan: "+err.Error())
+			out.addPartial("system.mutations", err)
 			return
 		}
 		out.Mutations = append(out.Mutations, m)
@@ -252,14 +271,14 @@ func (c *Client) queryKeeper(ctx context.Context, out *ReplicationStatus) {
 		FROM system.zookeeper_connection`
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
-		out.PartialErrors = append(out.PartialErrors, "system.zookeeper_connection: "+err.Error())
+		out.addPartial("system.zookeeper_connection", err)
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var k KeeperStatus
 		if err := rows.Scan(&k.Port, &k.SessionUptimeSeconds, &k.IsExpired, &k.ConnectedTime); err != nil {
-			out.PartialErrors = append(out.PartialErrors, "system.zookeeper_connection scan: "+err.Error())
+			out.addPartial("system.zookeeper_connection", err)
 			return
 		}
 		out.Keeper = append(out.Keeper, k)
@@ -287,7 +306,9 @@ func (c *Client) queryMetricHistory(ctx context.Context, out *ReplicationStatus)
 	ORDER BY 1`
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
-		// metric_log disabled/absent — non-fatal; charts simply stay hidden.
+		// metric_log disabled/absent/inaccessible — non-fatal; the charts
+		// stay hidden, but record the failure so the banner can explain why.
+		out.addPartial("system.metric_log", err)
 		return
 	}
 	defer rows.Close()
@@ -296,6 +317,7 @@ func (c *Client) queryMetricHistory(ctx context.Context, out *ReplicationStatus)
 		if err := rows.Scan(&p.EventTime, &p.ReadonlyReplica, &p.ReplicatedFetch,
 			&p.ReplicatedSend, &p.ReplicatedChecks, &p.ZooKeeperSession,
 			&p.ZooKeeperSessionExpired); err != nil {
+			out.addPartial("system.metric_log", err)
 			return
 		}
 		out.MetricHistory = append(out.MetricHistory, p)

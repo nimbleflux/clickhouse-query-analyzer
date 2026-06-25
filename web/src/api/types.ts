@@ -452,6 +452,7 @@ export interface ReplicationStatus {
   metric_history: ReplicationMetricPoint[];
   summary: ReplicationSummary;
   partial_errors: string[];
+  partial_error_details?: Record<string, string>;
 }
 
 export interface DistributedDDLEntry {
@@ -491,6 +492,7 @@ export interface DDLStatus {
   stuck_ddl: number;
   failed_ddl: number;
   partial_errors: string[];
+  partial_error_details?: Record<string, string>;
 }
 
 

@@ -160,9 +160,12 @@ export function Replication({ connected }: { connected: boolean }) {
       />
 
       {data?.partial_errors && data.partial_errors.length > 0 && (
-        <div className="flex items-center gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)] px-4 py-2 text-xs text-[var(--color-text-secondary)]">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
-          <span>Some sections unavailable: {data.partial_errors.join(", ")}.</span>
+        <div
+          className="flex items-start gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)] px-4 py-2 text-xs text-[var(--color-text-secondary)]"
+          title={data.partial_errors.map((t) => `${t}: ${data.partial_error_details?.[t] ?? ""}`).join("\n")}
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
+          <span>Some sections are unavailable — your ClickHouse user may lack access to: {data.partial_errors.join(", ")}. Hover for details.</span>
         </div>
       )}
 
@@ -246,11 +249,19 @@ export function Replication({ connected }: { connected: boolean }) {
           {data.replica_statuses.length === 0 &&
            data.replication_queue.length === 0 &&
            data.mutations.length === 0 ? (
-            <EmptyState
-              icon={Network}
-              title="No replicated tables found"
-              description="This ClickHouse instance has no ReplicatedMergeTree tables registered in system.replicas."
-            />
+            data.partial_errors.length > 0 ? (
+              <EmptyState
+                icon={AlertTriangle}
+                title="Couldn't load replication data"
+                description="Your ClickHouse user may lack SELECT access to the required system tables (listed above). Contact your ClickHouse admin to grant access, or reconnect with an authorized user."
+              />
+            ) : (
+              <EmptyState
+                icon={Network}
+                title="No replicated tables found"
+                description="This ClickHouse instance has no ReplicatedMergeTree tables registered in system.replicas."
+              />
+            )
           ) : (
             <>
               {data.replica_statuses.length > 0 && (

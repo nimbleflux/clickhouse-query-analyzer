@@ -44,14 +44,30 @@ type DDLOpsPoint struct {
 }
 
 type DDLStatus struct {
-	DistributedDDL   []DistributedDDLEntry `json:"distributed_ddl"`
-	RecentDDL        []RecentDDLEntry      `json:"recent_ddl"`
-	Trend            []DDLOpsPoint         `json:"trend"`
-	Hours            int                   `json:"hours"`
-	PendingMutations uint64                `json:"pending_mutations"`
-	StuckDDL         int                   `json:"stuck_ddl"`
-	FailedDDL        int                   `json:"failed_ddl"`
-	PartialErrors    []string              `json:"partial_errors"`
+	DistributedDDL      []DistributedDDLEntry `json:"distributed_ddl"`
+	RecentDDL           []RecentDDLEntry      `json:"recent_ddl"`
+	Trend               []DDLOpsPoint         `json:"trend"`
+	Hours               int                   `json:"hours"`
+	PendingMutations    uint64                `json:"pending_mutations"`
+	StuckDDL            int                   `json:"stuck_ddl"`
+	FailedDDL           int                   `json:"failed_ddl"`
+	PartialErrors       []string              `json:"partial_errors"`
+	PartialErrorDetails map[string]string     `json:"partial_error_details,omitempty"`
+}
+
+// addPartial mirrors ReplicationStatus.addPartial: clean table name for the
+// banner, raw message for the hover tooltip.
+func (s *DDLStatus) addPartial(table string, err error) {
+	if err == nil {
+		return
+	}
+	if s.PartialErrorDetails == nil {
+		s.PartialErrorDetails = map[string]string{}
+	}
+	if _, ok := s.PartialErrorDetails[table]; !ok {
+		s.PartialErrors = append(s.PartialErrors, table)
+	}
+	s.PartialErrorDetails[table] = err.Error()
 }
 
 type DDLParams struct {
@@ -160,7 +176,7 @@ func (c *Client) queryDistributedDDL(ctx context.Context, params DDLParams, out 
 
 	rows, err := c.conn.Query(ctx, query, args...)
 	if err != nil {
-		out.PartialErrors = append(out.PartialErrors, "system.distributed_ddl_queue: "+err.Error())
+		out.addPartial("system.distributed_ddl_queue", err)
 		return
 	}
 	defer rows.Close()
@@ -169,7 +185,7 @@ func (c *Client) queryDistributedDDL(ctx context.Context, params DDLParams, out 
 		if err := rows.Scan(&e.Query, &e.InitiatorHost, &e.Cluster, &e.Status,
 			&e.ExceptionCode, &e.ExceptionText, &e.QueryCreateTime,
 			&e.QueryFinishTime, &e.QueryDurationMs); err != nil {
-			out.PartialErrors = append(out.PartialErrors, "system.distributed_ddl_queue scan: "+err.Error())
+			out.addPartial("system.distributed_ddl_queue", err)
 			return
 		}
 		out.DistributedDDL = append(out.DistributedDDL, e)
@@ -205,7 +221,7 @@ func (c *Client) queryRecentDDL(ctx context.Context, params DDLParams, fromTime 
 
 	rows, err := c.conn.Query(ctx, query, args...)
 	if err != nil {
-		out.PartialErrors = append(out.PartialErrors, "system.query_log (ddl): "+err.Error())
+		out.addPartial("system.query_log", err)
 		return
 	}
 	defer rows.Close()
@@ -213,7 +229,7 @@ func (c *Client) queryRecentDDL(ctx context.Context, params DDLParams, fromTime 
 		var r RecentDDLEntry
 		if err := rows.Scan(&r.EventTime, &r.QueryID, &r.QueryKind, &r.Query,
 			&r.QueryDurationMs, &r.User, &r.Exception); err != nil {
-			out.PartialErrors = append(out.PartialErrors, "system.query_log (ddl) scan: "+err.Error())
+			out.addPartial("system.query_log", err)
 			return
 		}
 		out.RecentDDL = append(out.RecentDDL, r)
@@ -242,7 +258,7 @@ func (c *Client) queryDDLTrend(ctx context.Context, fromTime string, bucketMinut
 
 	rows, err := c.conn.Query(ctx, query, fromTime)
 	if err != nil {
-		out.PartialErrors = append(out.PartialErrors, "system.query_log (ddl trend): "+err.Error())
+		out.addPartial("system.query_log", err)
 		return
 	}
 	defer rows.Close()
@@ -258,7 +274,9 @@ func (c *Client) queryDDLTrend(ctx context.Context, fromTime string, bucketMinut
 func (c *Client) queryPendingMutationCount(ctx context.Context, out *DDLStatus) {
 	table := c.tableRef("mutations")
 	if err := c.conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM %s WHERE is_done = 0", table)).Scan(&out.PendingMutations); err != nil {
-		// Non-fatal: the link just reads zero.
+		// Non-fatal: the link reads zero, but surface the failure so the
+		// banner can explain it (usually a missing SELECT grant).
 		out.PendingMutations = 0
+		out.addPartial("system.mutations", err)
 	}
 }
