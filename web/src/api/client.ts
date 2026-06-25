@@ -49,6 +49,7 @@ export type ConnectResponse = {
   status: string;
   cluster?: string;
   is_cluster?: boolean;
+  cluster_note?: string;
 };
 
 export type ServerConfig = {

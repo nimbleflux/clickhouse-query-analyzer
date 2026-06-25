@@ -328,6 +328,7 @@ export interface DashboardData {
   warnings: string[];
   cluster: string;
   is_cluster: boolean;
+  cluster_note?: string;
   database: string;
   user: string;
   host_name: string;
@@ -451,6 +452,7 @@ export interface ReplicationStatus {
   keeper: KeeperStatus[];
   metric_history: ReplicationMetricPoint[];
   summary: ReplicationSummary;
+  cluster_note?: string;
   partial_errors: string[];
   partial_error_details?: Record<string, string>;
 }
@@ -491,6 +493,7 @@ export interface DDLStatus {
   pending_mutations: number;
   stuck_ddl: number;
   failed_ddl: number;
+  cluster_note?: string;
   partial_errors: string[];
   partial_error_details?: Record<string, string>;
 }

@@ -74,6 +74,7 @@ type ReplicationStatus struct {
 	Keeper              []KeeperStatus           `json:"keeper"`
 	MetricHistory       []ReplicationMetricPoint `json:"metric_history"`
 	Summary             ReplicationSummary       `json:"summary"`
+	ClusterNote         string                   `json:"cluster_note,omitempty"`
 	PartialErrors       []string                 `json:"partial_errors"`
 	PartialErrorDetails map[string]string        `json:"partial_error_details,omitempty"`
 }
@@ -132,6 +133,7 @@ func (c *Client) GetReplication(ctx context.Context, params ReplicationParams) (
 	}
 
 	out.Summary = c.deriveReplicationSummary(out)
+	out.ClusterNote = c.ClusterNote()
 	return out, nil
 }
 

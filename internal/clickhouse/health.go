@@ -12,6 +12,7 @@ type HealthReport struct {
 	Uptime        uint32         `json:"uptime"`
 	Cluster       string         `json:"cluster"`
 	IsCluster     bool           `json:"is_cluster"`
+	ClusterNote   string         `json:"cluster_note,omitempty"`
 	Database      string         `json:"database"`
 	User          string         `json:"user"`
 	HostName      string         `json:"host_name"`
@@ -37,15 +38,16 @@ type SettingValue struct {
 
 func (c *Client) HealthCheck(ctx context.Context) (*HealthReport, error) {
 	report := &HealthReport{
-		Connected: true,
-		Cluster:   c.cluster,
-		IsCluster: c.isCluster,
-		Database:  c.connDB,
-		User:      c.connUser,
-		LogTables: []LogTableSize{},
-		Settings:  []SettingValue{},
-		Nodes:     []NodeInfo{},
-		Warnings:  []string{},
+		Connected:   true,
+		Cluster:     c.cluster,
+		IsCluster:   c.isCluster,
+		ClusterNote: c.ClusterNote(),
+		Database:    c.connDB,
+		User:        c.connUser,
+		LogTables:   []LogTableSize{},
+		Settings:    []SettingValue{},
+		Nodes:       []NodeInfo{},
+		Warnings:    []string{},
 	}
 
 	if err := c.queryBasicInfo(ctx, report); err != nil {

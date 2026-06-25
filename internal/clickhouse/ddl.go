@@ -51,6 +51,7 @@ type DDLStatus struct {
 	PendingMutations    uint64                `json:"pending_mutations"`
 	StuckDDL            int                   `json:"stuck_ddl"`
 	FailedDDL           int                   `json:"failed_ddl"`
+	ClusterNote         string                `json:"cluster_note,omitempty"`
 	PartialErrors       []string              `json:"partial_errors"`
 	PartialErrorDetails map[string]string     `json:"partial_error_details,omitempty"`
 }
@@ -146,6 +147,7 @@ func (c *Client) GetDDL(ctx context.Context, params DDLParams) (*DDLStatus, erro
 		}
 	}
 
+	out.ClusterNote = c.ClusterNote()
 	return out, nil
 }
 

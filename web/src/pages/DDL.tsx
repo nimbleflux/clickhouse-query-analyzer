@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
+import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
 
 const TIMEFRAMES: { label: string; hours: number }[] = [
   { label: "1h", hours: 1 },
@@ -155,6 +156,8 @@ export function DDL({ connected }: { connected: boolean }) {
           <span>Some sections are unavailable — your ClickHouse user may lack access to: {data.partial_errors.join(", ")}. Hover for details.</span>
         </div>
       )}
+
+      <ClusterNoteBanner note={data?.cluster_note} />
 
       {data && (
         <>

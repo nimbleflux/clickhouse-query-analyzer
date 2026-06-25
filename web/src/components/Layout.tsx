@@ -39,6 +39,7 @@ export function Layout({
   const [error, setError] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [cluster, setCluster] = useState<string>("");
+  const [clusterNote, setClusterNote] = useState<string>("");
   const location = useLocation();
 
   // Sync the form when the parent updates the connection params (e.g. after
@@ -93,6 +94,7 @@ export function Layout({
       const res = await testConnection();
       onConnect(params);
       setCluster(res.cluster || "");
+      setClusterNote(res.cluster_note || "");
       setEditing(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Connection failed");
@@ -174,7 +176,7 @@ export function Layout({
                 </a>
                 {connected && !editing && (
                   <button
-                    onClick={() => { onDisconnect(); setEditing(true); setCluster(""); }}
+                    onClick={() => { onDisconnect(); setEditing(true); setCluster(""); setClusterNote(""); }}
                     className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-text-primary)]"
                     title="Connected — click to disconnect"
                   >
@@ -184,6 +186,14 @@ export function Layout({
                     {cluster && (
                       <span className="hidden rounded bg-[var(--state-accent)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-accent)] sm:inline">
                         {cluster}
+                      </span>
+                    )}
+                    {clusterNote && (
+                      <span
+                        className="hidden rounded bg-[var(--state-warning)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-warning)] sm:inline"
+                        title={clusterNote}
+                      >
+                        local mode
                       </span>
                     )}
                   </button>

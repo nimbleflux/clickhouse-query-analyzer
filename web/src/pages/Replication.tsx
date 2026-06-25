@@ -13,6 +13,7 @@ import { Select } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
+import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
 
 interface StatCardProps {
   label: string;
@@ -168,6 +169,8 @@ export function Replication({ connected }: { connected: boolean }) {
           <span>Some sections are unavailable — your ClickHouse user may lack access to: {data.partial_errors.join(", ")}. Hover for details.</span>
         </div>
       )}
+
+      <ClusterNoteBanner note={data?.cluster_note} />
 
       {loading && !data ? (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
