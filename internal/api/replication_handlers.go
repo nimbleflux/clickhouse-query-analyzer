@@ -16,8 +16,6 @@ func (a *API) GetReplication(w http.ResponseWriter, r *http.Request) {
 
 	params := clickhouse.ReplicationParams{
 		Database:       r.URL.Query().Get("database"),
-		ErrorsOnly:     r.URL.Query().Get("errors_only") == "1",
-		ExecutingOnly:  r.URL.Query().Get("executing_only") == "1",
 		IncludeHistory: r.URL.Query().Get("include_history") != "false",
 	}
 	if v := r.URL.Query().Get("limit"); v != "" {

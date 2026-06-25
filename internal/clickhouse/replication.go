@@ -60,8 +60,6 @@ type ReplicationMetricPoint struct {
 
 type ReplicationParams struct {
 	Database       string
-	ErrorsOnly     bool
-	ExecutingOnly  bool
 	IncludeHistory bool
 	Limit          int
 	Offset         int
@@ -189,14 +187,6 @@ func (c *Client) queryReplicationQueue(ctx context.Context, params ReplicationPa
 	if params.Database != "" {
 		whereParts = append(whereParts, "database = ?")
 		args = append(args, params.Database)
-	}
-	if params.ErrorsOnly {
-		// num_tries > 0 catches retries; a non-empty last_exception catches
-		// the window before the first retry is attempted.
-		whereParts = append(whereParts, "(num_tries > 0 OR last_exception != '')")
-	}
-	if params.ExecutingOnly {
-		whereParts = append(whereParts, "is_currently_executing = 1")
 	}
 	where := ""
 	if len(whereParts) > 0 {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, memo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, memo } from "react";
 import { Server, AlertTriangle, RefreshCw, Network, Clock, ListChecks, FlaskConical, Pause, Play, KeyRound } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { fetchReplication } from "../api/client";
@@ -13,6 +13,7 @@ import { Select } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
+import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
 
 interface StatCardProps {
@@ -71,8 +72,6 @@ export function Replication({ connected }: { connected: boolean }) {
   const intervalRef = useRef<ReturnType<typeof setInterval>>(null);
 
   const [database, setDatabase] = useState("");
-  const [errorsOnly, setErrorsOnly] = useState(false);
-  const [executingOnly, setExecutingOnly] = useState(false);
 
   // includeHistory defaults to true: the initial load and manual refreshes
   // pull the 24h chart data. The auto-refresh tick passes false so live
@@ -82,7 +81,7 @@ export function Replication({ connected }: { connected: boolean }) {
     setError(null);
     try {
       const result = await fetchReplication(
-        { database: database || undefined, errors_only: errorsOnly, executing_only: executingOnly, include_history: includeHistory },
+        { database: database || undefined, include_history: includeHistory },
         signal,
       );
       setData(result);
@@ -94,7 +93,7 @@ export function Replication({ connected }: { connected: boolean }) {
     } finally {
       setLoading(false);
     }
-  }, [database, errorsOnly, executingOnly]);
+  }, [database]);
 
   useEffect(() => {
     if (!connected) return;
@@ -236,21 +235,6 @@ export function Replication({ connected }: { connected: boolean }) {
               <option value="">All databases</option>
               {databases.map((d) => <option key={d} value={d}>{d}</option>)}
             </Select>
-            <Button
-              variant={errorsOnly ? "primary" : "secondary"}
-              size="md"
-              onClick={() => setErrorsOnly((v) => !v)}
-            >
-              <AlertTriangle className="h-3.5 w-3.5" />
-              Errors only
-            </Button>
-            <Button
-              variant={executingOnly ? "primary" : "secondary"}
-              size="md"
-              onClick={() => setExecutingOnly((v) => !v)}
-            >
-              Executing
-            </Button>
           </div>
 
           {data.replica_statuses.length === 0 &&
@@ -288,7 +272,34 @@ export function Replication({ connected }: { connected: boolean }) {
   );
 }
 
+type ReplicaSortField = "table" | "delay" | "loglag" | "queue" | "age" | "active";
+
+// Elapsed seconds since the oldest queued entry, for replica "Age". 0 when the
+// queue is empty or the timestamp is missing/garbage.
+function queueAge(queueOldestTime: string): number {
+  if (!queueOldestTime) return 0;
+  const t = new Date(queueOldestTime.replace(" ", "T")).getTime();
+  return Number.isFinite(t) ? Math.max(0, Math.round((Date.now() - t) / 1000)) : 0;
+}
+
 function ReplicaStatusCard({ replicas }: { replicas: ReplicationStatus["replica_statuses"] }) {
+  const sort = useTableSort<ReplicaSortField>("table", "asc");
+  const sorted = useMemo(() => {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return [...replicas].sort((a, b) => {
+      let r = 0;
+      switch (sort.field) {
+        case "table": r = `${a.database}.${a.table}`.localeCompare(`${b.database}.${b.table}`); break;
+        case "delay": r = a.absolute_delay - b.absolute_delay; break;
+        case "loglag": r = (a.log_max_index - a.log_pointer) - (b.log_max_index - b.log_pointer); break;
+        case "queue": r = a.queue_size - b.queue_size; break;
+        case "age": r = queueAge(a.queue_oldest_time) - queueAge(b.queue_oldest_time); break;
+        case "active": r = a.active_replicas - b.active_replicas; break;
+      }
+      return r * dir;
+    });
+  }, [replicas, sort.field, sort.dir]);
+
   return (
     <Card className="flex max-h-[28rem] flex-col">
       <div className="flex items-center gap-2 px-4 py-3 text-xs font-medium text-[var(--color-text-secondary)]">
@@ -299,20 +310,20 @@ function ReplicaStatusCard({ replicas }: { replicas: ReplicationStatus["replica_
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Table</th>
+              <SortableHeader className="pb-1.5 text-xs" field="table" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Table" />
               <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Replica</th>
               <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Leader</th>
-              <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Delay</th>
-              <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Log Lag</th>
-              <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Queue</th>
-              <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Age</th>
-              <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Active</th>
+              <SortableHeader className="pb-1.5 text-xs" align="right" field="delay" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Delay" />
+              <SortableHeader className="pb-1.5 text-xs" align="right" field="loglag" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Log Lag" />
+              <SortableHeader className="pb-1.5 text-xs" align="right" field="queue" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Queue" />
+              <SortableHeader className="pb-1.5 text-xs" align="right" field="age" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Age" />
+              <SortableHeader className="pb-1.5 text-xs" align="right" field="active" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Active" />
             </tr>
           </thead>
           <tbody>
-            {replicas.map((r, i) => {
+            {sorted.map((r, i) => {
               const logLag = Math.max(0, r.log_max_index - r.log_pointer);
-              const queueAge = r.queue_oldest_time ? Math.max(0, Math.round((Date.now() - new Date(r.queue_oldest_time.replace(" ", "T")).getTime()) / 1000)) : 0;
+              const age = queueAge(r.queue_oldest_time);
               return (
                 <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
                   <td className="py-1.5 text-xs">
@@ -334,8 +345,8 @@ function ReplicaStatusCard({ replicas }: { replicas: ReplicationStatus["replica_
                   <td className={`py-1.5 text-right font-mono text-xs ${r.queue_size > 1000 ? "text-[var(--color-warning)]" : ""}`}>
                     {r.queue_size || "-"}
                   </td>
-                  <td className={`py-1.5 text-right font-mono text-xs ${queueAge > 300 ? "text-[var(--color-warning)]" : ""}`}>
-                    {queueAge > 0 ? formatDelay(queueAge) : "-"}
+                  <td className={`py-1.5 text-right font-mono text-xs ${age > 300 ? "text-[var(--color-warning)]" : ""}`}>
+                    {age > 0 ? formatDelay(age) : "-"}
                   </td>
                   <td className={`py-1.5 text-right font-mono text-xs ${r.total_replicas > 0 && r.active_replicas < r.total_replicas ? "text-[var(--color-warning)]" : ""}`}>
                     {r.active_replicas}/{r.total_replicas}
@@ -350,7 +361,24 @@ function ReplicaStatusCard({ replicas }: { replicas: ReplicationStatus["replica_
   );
 }
 
+type QueueSortField = "table" | "tries" | "created";
+
 function ReplicationQueueCard({ queue }: { queue: ReplicationStatus["replication_queue"] }) {
+  const sort = useTableSort<QueueSortField>("table", "asc");
+  const sorted = useMemo(() => {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return [...queue].sort((a, b) => {
+      let r = 0;
+      switch (sort.field) {
+        case "table": r = `${a.database}.${a.table}`.localeCompare(`${b.database}.${b.table}`); break;
+        case "tries": r = a.num_tries - b.num_tries; break;
+        // create_time is "YYYY-MM-DD HH:MM:SS" — lexical order == chronological.
+        case "created": r = (a.create_time || "").localeCompare(b.create_time || ""); break;
+      }
+      return r * dir;
+    });
+  }, [queue, sort.field, sort.dir]);
+
   return (
     <Card className="flex max-h-[28rem] flex-col">
       <div className="flex items-center gap-2 px-4 py-3 text-xs font-medium text-[var(--color-text-secondary)]">
@@ -361,19 +389,19 @@ function ReplicationQueueCard({ queue }: { queue: ReplicationStatus["replication
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Table</th>
+              <SortableHeader className="pb-1.5 text-xs" field="table" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Table" />
               <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Replica</th>
               <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Type</th>
               <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Run</th>
-              <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Tries</th>
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Created</th>
+              <SortableHeader className="pb-1.5 text-xs" align="right" field="tries" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Tries" />
+              <SortableHeader className="pb-1.5 text-xs" field="created" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Created" />
               <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Source</th>
               <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Postponed</th>
               <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Last error</th>
             </tr>
           </thead>
           <tbody>
-            {queue.map((q, i) => (
+            {sorted.map((q, i) => (
               <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
                 <td className="py-1.5 text-xs">
                   <span className="text-[var(--color-text-secondary)]">{q.database}.</span>{q.table}
@@ -403,7 +431,23 @@ function ReplicationQueueCard({ queue }: { queue: ReplicationStatus["replication
   );
 }
 
+type MutationSortField = "table" | "parts" | "created";
+
 function MutationsCard({ mutations }: { mutations: ReplicationStatus["mutations"] }) {
+  const sort = useTableSort<MutationSortField>("table", "asc");
+  const sorted = useMemo(() => {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return [...mutations].sort((a, b) => {
+      let r = 0;
+      switch (sort.field) {
+        case "table": r = `${a.database}.${a.table}`.localeCompare(`${b.database}.${b.table}`); break;
+        case "parts": r = a.parts_to_do - b.parts_to_do; break;
+        case "created": r = (a.create_time || "").localeCompare(b.create_time || ""); break;
+      }
+      return r * dir;
+    });
+  }, [mutations, sort.field, sort.dir]);
+
   return (
     <Card className="flex max-h-[28rem] flex-col">
       <div className="flex items-center gap-2 px-4 py-3 text-xs font-medium text-[var(--color-text-secondary)]">
@@ -414,15 +458,15 @@ function MutationsCard({ mutations }: { mutations: ReplicationStatus["mutations"
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Table</th>
+              <SortableHeader className="pb-1.5 text-xs" field="table" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Table" />
               <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Mutation</th>
-              <th className="pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Parts to do</th>
-              <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Created</th>
+              <SortableHeader className="pb-1.5 text-xs" align="right" field="parts" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Parts to do" />
+              <SortableHeader className="pb-1.5 text-xs" field="created" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Created" />
               <th className="pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Latest failure</th>
             </tr>
           </thead>
           <tbody>
-            {mutations.map((m, i) => (
+            {sorted.map((m, i) => (
               <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
                 <td className="py-1.5 text-xs">
                   <span className="text-[var(--color-text-secondary)]">{m.database}.</span>{m.table}
