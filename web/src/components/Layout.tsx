@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { Plug, Unplug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge, Menu, X, Network } from "lucide-react";
+import { Plug, Unplug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge, Menu, X, Network, Layers } from "lucide-react";
 import type { ConnectionParams } from "../api/connection";
 import { setConnectionHeaders } from "../api/connection";
 import { testConnection } from "../api/client";
@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { to: "/running", icon: Activity, label: "Running", end: false },
   { to: "/fingerprints", icon: Fingerprint, label: "Fingerprints", end: false },
   { to: "/replication", icon: Network, label: "Replication", end: false },
+  { to: "/ddl", icon: Layers, label: "DDL", end: false },
   { to: "/editor", icon: Code, label: "Editor", end: false },
   { to: "/compare", icon: GitCompare, label: "Compare", end: false },
   { to: "/optimizer", icon: Wrench, label: "Optimizer", end: false },

@@ -321,6 +321,7 @@ func TestQueryRoutes_ReturnNon404(t *testing.T) {
 		{"GET", "/api/queries/test-id/views"},
 		{"POST", "/api/queries/test-id/explain"},
 		{"GET", "/api/replication"},
+		{"GET", "/api/ddl"},
 	}
 
 	for _, route := range routes {

@@ -454,4 +454,35 @@ export interface ReplicationStatus {
   partial_errors: string[];
 }
 
+export interface DistributedDDLEntry {
+  query: string;
+  initiator_host: string;
+  cluster: string;
+  status: string;
+  exception_code: number;
+  exception_text: string;
+  query_create_time: string;
+  query_finish_time: string;
+  query_duration_ms: number;
+}
+
+export interface RecentDDLEntry {
+  event_time: string;
+  query_id: string;
+  query_kind: string;
+  query: string;
+  query_duration_ms: number;
+  user: string;
+  exception: string;
+}
+
+export interface DDLStatus {
+  distributed_ddl: DistributedDDLEntry[];
+  recent_ddl: RecentDDLEntry[];
+  pending_mutations: number;
+  stuck_ddl: number;
+  failed_ddl: number;
+  partial_errors: string[];
+}
+
 

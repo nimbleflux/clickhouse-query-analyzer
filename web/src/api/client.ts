@@ -19,6 +19,7 @@ import type {
   TrendPoint,
   FingerprintQueriesResponse,
   ReplicationStatus,
+  DDLStatus,
 } from "./types";
 import { getConnectionHeaders } from "./connection";
 import { ApiError } from "./errors";
@@ -261,6 +262,14 @@ export async function fetchReplication(params?: { database?: string; errors_only
   if (params?.offset) sp.set("offset", String(params.offset));
   const qs = sp.toString();
   return fetchJSON<ReplicationStatus>(`${BASE}/replication${qs ? `?${qs}` : ""}`, { signal });
+}
+
+export async function fetchDDL(params?: { database?: string; limit?: number }, signal?: AbortSignal): Promise<DDLStatus> {
+  const sp = new URLSearchParams();
+  if (params?.database) sp.set("database", params.database);
+  if (params?.limit) sp.set("limit", String(params.limit));
+  const qs = sp.toString();
+  return fetchJSON<DDLStatus>(`${BASE}/ddl${qs ? `?${qs}` : ""}`, { signal });
 }
 
 export async function fetchFingerprintTrend(hash: string, interval?: string, fromTime?: string, toTime?: string, signal?: AbortSignal): Promise<TrendPoint[]> {

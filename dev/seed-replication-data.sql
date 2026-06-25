@@ -25,3 +25,12 @@ FROM numbers(10000);
 OPTIMIZE TABLE analytics.events_replicated FINAL;
 
 SYSTEM FLUSH LOGS;
+
+-- Run an ON CLUSTER DDL so the DDL page's distributed_ddl_queue has an entry
+-- to render on a fresh seed (DDL page lives off system.distributed_ddl_queue).
+CREATE TABLE IF NOT EXISTS analytics.ddl_test ON CLUSTER dev_cluster
+(
+    id UInt64,
+    created DateTime DEFAULT now()
+)
+ENGINE = MergeTree ORDER BY id;

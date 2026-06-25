@@ -106,6 +106,7 @@ func apiRoutes(api *API) http.Handler {
 	r.Post("/processes/{queryID}/kill", api.KillProcess)
 	r.Get("/dashboard", api.GetDashboard)
 	r.Get("/replication", api.GetReplication)
+	r.Get("/ddl", api.GetDDL)
 
 	return r
 }
