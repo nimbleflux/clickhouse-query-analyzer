@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
+import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
 
 const TIMEFRAMES: { label: string; hours: number }[] = [
@@ -75,6 +76,19 @@ function statusTone(status: string, exception: string): { color: string; label: 
   }
 }
 
+// Age of the oldest non-Finished distributed entry, for the stuck warning. The
+// stuck count itself is backend-authoritative (age + exception rule in ddl.go);
+// this just surfaces how long the oldest one has been sitting.
+function oldestUnfinishedAgeSec(entries: DDLStatus["distributed_ddl"]): number {
+  let max = 0;
+  for (const e of entries) {
+    if (e.status === "Finished") continue;
+    const t = new Date(e.query_create_time.replace(" ", "T")).getTime();
+    if (Number.isFinite(t)) max = Math.max(max, (Date.now() - t) / 1000);
+  }
+  return max;
+}
+
 export function DDL({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
   const [data, setData] = useState<DDLStatus | null>(null);
@@ -115,6 +129,7 @@ export function DDL({ connected }: { connected: boolean }) {
   }
 
   const windowLabel = hours === 0 ? "all time" : `last ${hours < 24 ? `${hours}h` : hours < 168 ? `${hours / 24}d` : "7d"}`;
+  const stuckOldestAgeSec = data && data.stuck_ddl > 0 ? oldestUnfinishedAgeSec(data.distributed_ddl) : 0;
 
   return (
     <PageContainer>
@@ -214,7 +229,9 @@ export function DDL({ connected }: { connected: boolean }) {
             <Card className="border-[var(--color-warning)]/30 p-4">
               <div className="flex items-center gap-2 text-xs text-[var(--color-warning)]">
                 <AlertTriangle className="h-3.5 w-3.5" />
-                {data.stuck_ddl} distributed DDL operation(s) are not finished — ON CLUSTER DDL may be stuck.
+                {data.stuck_ddl} distributed DDL operation(s) unfinished for &gt;10 min (or failed)
+                {stuckOldestAgeSec > 0 ? <>; oldest pending {formatDuration(stuckOldestAgeSec * 1000)}</> : null}
+                — ON CLUSTER DDL may be stuck.
               </div>
             </Card>
           )}
@@ -279,7 +296,7 @@ const DDLTrendChart = memo(function DDLTrendChart({ trend, hours }: { trend: DDL
           <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
           <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" minTickGap={40} />
           <YAxis allowDecimals={false} tick={{ fill: textColor, fontSize: 10 }} width={28} />
-          <Tooltip contentStyle={tooltipStyle} labelFormatter={(l) => fmtBucket(String(l))} />
+          <Tooltip contentStyle={tooltipStyle} cursor={false} labelFormatter={(l) => fmtBucket(String(l))} />
           <Bar dataKey="ok" stackId="a" fill="#10b98180" name="ok" radius={[0, 0, 0, 0]} />
           <Bar dataKey="failed" stackId="a" fill="#ef4444" name="failed" radius={[2, 2, 0, 0]} />
         </BarChart>
@@ -333,12 +350,37 @@ function ExpandToggle({ open }: { open: boolean }) {
     : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)]" />;
 }
 
+type DistDDLSortField = "created" | "duration" | "status" | "host" | "cluster";
+
 function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"] }) {
   const theme = useTheme();
+  const sort = useTableSort<DistDDLSortField>("created", "desc");
+  // Tag each row with its original array index: a stable, always-unique id. The
+  // same ON CLUSTER DDL can appear on multiple replicas with identical selected
+  // columns, so any data-derived key collides and makes React duplicate rows
+  // when a sort reorders them. The index survives re-sorts and stays tied to
+  // the right row, so expand-state is preserved correctly.
+  const sorted = useMemo(() => {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return entries
+      .map((entry, id) => ({ entry, id }))
+      .sort((a, b) => {
+        let r = 0;
+        switch (sort.field) {
+          case "created": r = (a.entry.query_create_time || "").localeCompare(b.entry.query_create_time || ""); break;
+          case "duration": r = a.entry.query_duration_ms - b.entry.query_duration_ms; break;
+          case "status": r = (a.entry.status || "").localeCompare(b.entry.status || ""); break;
+          case "host": r = (a.entry.initiator_host || "").localeCompare(b.entry.initiator_host || ""); break;
+          case "cluster": r = (a.entry.cluster || "").localeCompare(b.entry.cluster || ""); break;
+        }
+        return r * dir;
+      });
+  }, [entries, sort.field, sort.dir]);
+
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  const toggle = (i: number) => setExpanded((prev) => {
+  const toggle = (id: number) => setExpanded((prev) => {
     const next = new Set(prev);
-    if (next.has(i)) next.delete(i); else next.add(i);
+    if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
 
@@ -356,28 +398,28 @@ function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"]
       <div className="overflow-auto px-4 pb-4">
         <table className="w-full table-fixed text-sm">
           <colgroup>
-            <col className="w-[15%]" /><col className="w-[34%]" /><col className="w-[9%]" /><col className="w-[8%]" /><col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[16%]" />
+            <col className="w-[15%]" /><col className="w-[31%]" /><col className="w-[9%]" /><col className="w-[8%]" /><col className="w-[12%]" /><col className="w-[10%]" /><col className="w-[15%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Created</th>
+              <SortableHeader className="px-3 pb-1.5 text-xs" field="created" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Created" />
               <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Query</th>
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Status</th>
-              <th className="px-3 pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Duration</th>
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Host</th>
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Cluster</th>
+              <SortableHeader className="px-3 pb-1.5 text-xs" field="status" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Status" />
+              <SortableHeader className="px-3 pb-1.5 text-xs" align="right" field="duration" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Duration" />
+              <SortableHeader className="px-3 pb-1.5 text-xs" field="host" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Host" />
+              <SortableHeader className="px-3 pb-1.5 text-xs" field="cluster" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Cluster" />
               <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Exception</th>
             </tr>
           </thead>
           <tbody>
-            {entries.map((e, i) => {
+            {sorted.map(({ entry: e, id }) => {
               const tone = statusTone(e.status, e.exception_text);
-              const isOpen = expanded.has(i);
+              const isOpen = expanded.has(id);
               return (
-                <Fragment key={i}>
+                <Fragment key={id}>
                   <tr
                     className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)]"
-                    onClick={() => toggle(i)}
+                    onClick={() => toggle(id)}
                   >
                     <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-primary)]">{e.query_create_time}</td>
                     <td className="px-3 py-1.5 text-xs">
@@ -395,8 +437,12 @@ function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"]
                     <td className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-xs text-[var(--color-text-primary)]">
                       {e.query_duration_ms ? formatDuration(e.query_duration_ms) : "-"}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-[var(--color-text-primary)]">{e.initiator_host || "-"}</td>
-                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-[var(--color-text-primary)]">{e.cluster || "-"}</td>
+                    <td className="px-3 py-1.5 text-xs text-[var(--color-text-primary)]">
+                      <span className="block truncate font-mono" title={e.initiator_host}>{e.initiator_host || "-"}</span>
+                    </td>
+                    <td className="px-3 py-1.5 text-xs text-[var(--color-text-primary)]">
+                      <span className="block truncate font-mono" title={e.cluster}>{e.cluster || "-"}</span>
+                    </td>
                     <td className="px-3 py-1.5 text-xs text-[var(--color-error)]" title={e.exception_text}>
                       <span className="block truncate">{e.exception_text || "-"}</span>
                     </td>
@@ -416,12 +462,35 @@ function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"]
   );
 }
 
+type RecentDDLSortField = "time" | "duration" | "status" | "kind" | "user";
+
 function RecentDDLCard({ entries }: { entries: DDLStatus["recent_ddl"] }) {
   const theme = useTheme();
+  const sort = useTableSort<RecentDDLSortField>("time", "desc");
+  // Index-tagged rows (see DistributedDDLCard): query_log is read cluster-wide,
+  // so query_id isn't guaranteed unique across replicas and a data-derived key
+  // can collide on sort.
+  const sorted = useMemo(() => {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return entries
+      .map((entry, id) => ({ entry, id }))
+      .sort((a, b) => {
+        let r = 0;
+        switch (sort.field) {
+          case "time": r = (a.entry.event_time || "").localeCompare(b.entry.event_time || ""); break;
+          case "duration": r = a.entry.query_duration_ms - b.entry.query_duration_ms; break;
+          case "status": r = (a.entry.exception ? 1 : 0) - (b.entry.exception ? 1 : 0); break;
+          case "kind": r = (a.entry.query_kind || "").localeCompare(b.entry.query_kind || ""); break;
+          case "user": r = (a.entry.user || "").localeCompare(b.entry.user || ""); break;
+        }
+        return r * dir;
+      });
+  }, [entries, sort.field, sort.dir]);
+
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  const toggle = (i: number) => setExpanded((prev) => {
+  const toggle = (id: number) => setExpanded((prev) => {
     const next = new Set(prev);
-    if (next.has(i)) next.delete(i); else next.add(i);
+    if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
 
@@ -443,22 +512,22 @@ function RecentDDLCard({ entries }: { entries: DDLStatus["recent_ddl"] }) {
           </colgroup>
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Time</th>
+              <SortableHeader className="px-3 pb-1.5 text-xs" field="time" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Time" />
               <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Query</th>
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Status</th>
-              <th className="px-3 pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Duration</th>
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Kind</th>
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">User</th>
+              <SortableHeader className="px-3 pb-1.5 text-xs" field="status" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Status" />
+              <SortableHeader className="px-3 pb-1.5 text-xs" align="right" field="duration" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Duration" />
+              <SortableHeader className="px-3 pb-1.5 text-xs" field="kind" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Kind" />
+              <SortableHeader className="px-3 pb-1.5 text-xs" field="user" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="User" />
             </tr>
           </thead>
           <tbody>
-            {entries.map((e, i) => {
-              const isOpen = expanded.has(i);
+            {sorted.map(({ entry: e, id }) => {
+              const isOpen = expanded.has(id);
               return (
-                <Fragment key={i}>
+                <Fragment key={id}>
                   <tr
                     className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)]"
-                    onClick={() => toggle(i)}
+                    onClick={() => toggle(id)}
                   >
                     <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-primary)]">{e.event_time}</td>
                     <td className="px-3 py-1.5 text-xs">

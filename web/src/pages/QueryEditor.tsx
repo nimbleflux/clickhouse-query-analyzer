@@ -67,6 +67,9 @@ export function QueryEditor({ connected }: { connected: boolean }) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try { return Number(localStorage.getItem("ch-editor-sidebar-width")) || 256; } catch { return 256; }
   });
+  const [editorHeight, setEditorHeight] = useState(() => {
+    try { return Math.max(120, Number(localStorage.getItem("ch-editor-editor-height")) || 192); } catch { return 192; }
+  });
   const [sidebarSections, setSidebarSections] = useState<SidebarSections>(loadSidebarSections);
   const [sectionHeights, setSectionHeights] = useState(() => {
     try {
@@ -200,6 +203,10 @@ export function QueryEditor({ connected }: { connected: boolean }) {
   useEffect(() => {
     try { localStorage.setItem("ch-editor-sidebar-width", String(sidebarWidth)); } catch {}
   }, [sidebarWidth]);
+
+  useEffect(() => {
+    try { localStorage.setItem("ch-editor-editor-height", String(editorHeight)); } catch {}
+  }, [editorHeight]);
 
   useEffect(() => {
     try { localStorage.setItem("ch-editor-section-heights", JSON.stringify(sectionHeights)); } catch {}
@@ -922,7 +929,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
               onPageSizeChange={setPageSize}
             />
           )}
-          <div className="h-48">
+          <div style={{ height: editorHeight }}>
             <CodeMirror
               ref={editorRef as React.Ref<never>}
               value={sqlText}
@@ -934,6 +941,31 @@ export function QueryEditor({ connected }: { connected: boolean }) {
             />
           </div>
         </div>
+
+        <div
+          className="h-1 shrink-0 cursor-row-resize hover:bg-[var(--color-accent)]"
+          title="Drag to resize"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const startY = e.clientY;
+            const startH = editorHeight;
+            const onMove = (ev: MouseEvent) => {
+              // Leave room for the tabs/toolbar above and a usable results panel below.
+              const next = Math.max(120, Math.min(window.innerHeight - 280, startH + ev.clientY - startY));
+              setEditorHeight(next);
+            };
+            const onUp = () => {
+              document.body.style.cursor = "";
+              document.body.style.userSelect = "";
+              document.removeEventListener("mousemove", onMove);
+              document.removeEventListener("mouseup", onUp);
+            };
+            document.body.style.cursor = "row-resize";
+            document.body.style.userSelect = "none";
+            document.addEventListener("mousemove", onMove);
+            document.addEventListener("mouseup", onUp);
+          }}
+        />
 
         <div className="flex-1 overflow-auto bg-[var(--surface-base)]">
           {activeTab && activeTab.results.length === 0 && activeTab.errors.length === 0 && (

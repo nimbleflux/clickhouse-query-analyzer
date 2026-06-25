@@ -80,6 +80,11 @@ type DDLParams struct {
 // ddlKinds are the query_log query_kind values that count as DDL.
 var ddlKinds = []string{"Create", "Alter", "Drop", "Rename", "Attach", "Detach", "Truncate"}
 
+// stuckDDLAge is how long a non-Finished, exception-free distributed DDL entry
+// must remain unfinished before it counts as "stuck". Below this it is
+// considered in-flight/queued rather than stuck.
+const stuckDDLAge = 10 * time.Minute
+
 func (c *Client) GetDDL(ctx context.Context, params DDLParams) (*DDLStatus, error) {
 	if params.Limit <= 0 {
 		params.Limit = 200
@@ -130,15 +135,23 @@ func (c *Client) GetDDL(ctx context.Context, params DDLParams) (*DDLStatus, erro
 	c.queryDDLTrend(ctx, trendFromTime, trendBucket, out)
 	c.queryPendingMutationCount(ctx, out)
 
-	// "Stuck" = a distributed entry that isn't Finished (Active/Inactive/
-	// Removing/Unknown) — i.e. queued or in-flight. A non-empty exception
-	// escalates it to "failed" for the summary badge.
+	// "Stuck" = a distributed entry that isn't Finished AND either has been
+	// unfinished past stuckDDLAge or already errored. A freshly-active or
+	// freshly-queued op is in-flight, not stuck — the age cutoff keeps the
+	// counter from crying wolf on every live ON CLUSTER statement. An entry
+	// with an exception is both stuck and failed regardless of age.
+	stuckCutoff := time.Now().Add(-stuckDDLAge)
 	for _, e := range out.DistributedDDL {
-		if e.Status != "Finished" {
+		if e.Status == "Finished" {
+			continue
+		}
+		if e.ExceptionText != "" {
 			out.StuckDDL++
-			if e.ExceptionText != "" {
-				out.FailedDDL++
-			}
+			out.FailedDDL++
+			continue
+		}
+		if t, ok := parseDDLTime(e.QueryCreateTime); !ok || t.Before(stuckCutoff) {
+			out.StuckDDL++
 		}
 	}
 	for _, r := range out.RecentDDL {
@@ -281,4 +294,18 @@ func (c *Client) queryPendingMutationCount(ctx context.Context, out *DDLStatus) 
 		out.PendingMutations = 0
 		out.addPartial("system.mutations", err)
 	}
+}
+
+// parseDDLTime parses a ClickHouse toString(datetime) value (as selected for
+// query_create_time). ok=false for empty/unparseable strings lets the caller
+// fall back to a conservative default rather than dropping the entry.
+func parseDDLTime(s string) (time.Time, bool) {
+	if s == "" {
+		return time.Time{}, false
+	}
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", s, time.Local)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
