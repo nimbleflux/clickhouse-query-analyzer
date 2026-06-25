@@ -352,34 +352,35 @@ function ExpandToggle({ open }: { open: boolean }) {
 
 type DistDDLSortField = "created" | "duration" | "status" | "host" | "cluster";
 
-function distDDLKey(e: DDLStatus["distributed_ddl"][number]): string {
-  // No stable id in system.distributed_ddl_queue; this composite is unique in
-  // practice and keeps expand-state stable across re-sorts.
-  return `${e.query_create_time}\u0000${e.initiator_host}\u0000${e.cluster}\u0000${e.query}`;
-}
-
 function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"] }) {
   const theme = useTheme();
   const sort = useTableSort<DistDDLSortField>("created", "desc");
+  // Tag each row with its original array index: a stable, always-unique id. The
+  // same ON CLUSTER DDL can appear on multiple replicas with identical selected
+  // columns, so any data-derived key collides and makes React duplicate rows
+  // when a sort reorders them. The index survives re-sorts and stays tied to
+  // the right row, so expand-state is preserved correctly.
   const sorted = useMemo(() => {
     const dir = sort.dir === "asc" ? 1 : -1;
-    return [...entries].sort((a, b) => {
-      let r = 0;
-      switch (sort.field) {
-        case "created": r = (a.query_create_time || "").localeCompare(b.query_create_time || ""); break;
-        case "duration": r = a.query_duration_ms - b.query_duration_ms; break;
-        case "status": r = (a.status || "").localeCompare(b.status || ""); break;
-        case "host": r = (a.initiator_host || "").localeCompare(b.initiator_host || ""); break;
-        case "cluster": r = (a.cluster || "").localeCompare(b.cluster || ""); break;
-      }
-      return r * dir;
-    });
+    return entries
+      .map((entry, id) => ({ entry, id }))
+      .sort((a, b) => {
+        let r = 0;
+        switch (sort.field) {
+          case "created": r = (a.entry.query_create_time || "").localeCompare(b.entry.query_create_time || ""); break;
+          case "duration": r = a.entry.query_duration_ms - b.entry.query_duration_ms; break;
+          case "status": r = (a.entry.status || "").localeCompare(b.entry.status || ""); break;
+          case "host": r = (a.entry.initiator_host || "").localeCompare(b.entry.initiator_host || ""); break;
+          case "cluster": r = (a.entry.cluster || "").localeCompare(b.entry.cluster || ""); break;
+        }
+        return r * dir;
+      });
   }, [entries, sort.field, sort.dir]);
 
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const toggle = (key: string) => setExpanded((prev) => {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const toggle = (id: number) => setExpanded((prev) => {
     const next = new Set(prev);
-    if (next.has(key)) next.delete(key); else next.add(key);
+    if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
 
@@ -411,15 +412,14 @@ function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"]
             </tr>
           </thead>
           <tbody>
-            {sorted.map((e) => {
+            {sorted.map(({ entry: e, id }) => {
               const tone = statusTone(e.status, e.exception_text);
-              const key = distDDLKey(e);
-              const isOpen = expanded.has(key);
+              const isOpen = expanded.has(id);
               return (
-                <Fragment key={key}>
+                <Fragment key={id}>
                   <tr
                     className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)]"
-                    onClick={() => toggle(key)}
+                    onClick={() => toggle(id)}
                   >
                     <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-primary)]">{e.query_create_time}</td>
                     <td className="px-3 py-1.5 text-xs">
@@ -467,26 +467,30 @@ type RecentDDLSortField = "time" | "duration" | "status" | "kind" | "user";
 function RecentDDLCard({ entries }: { entries: DDLStatus["recent_ddl"] }) {
   const theme = useTheme();
   const sort = useTableSort<RecentDDLSortField>("time", "desc");
+  // Index-tagged rows (see DistributedDDLCard): query_log is read cluster-wide,
+  // so query_id isn't guaranteed unique across replicas and a data-derived key
+  // can collide on sort.
   const sorted = useMemo(() => {
     const dir = sort.dir === "asc" ? 1 : -1;
-    return [...entries].sort((a, b) => {
-      let r = 0;
-      switch (sort.field) {
-        case "time": r = (a.event_time || "").localeCompare(b.event_time || ""); break;
-        case "duration": r = a.query_duration_ms - b.query_duration_ms; break;
-        // Status sorts by failure (exception present) so failed rows group together.
-        case "status": r = (a.exception ? 1 : 0) - (b.exception ? 1 : 0); break;
-        case "kind": r = (a.query_kind || "").localeCompare(b.query_kind || ""); break;
-        case "user": r = (a.user || "").localeCompare(b.user || ""); break;
-      }
-      return r * dir;
-    });
+    return entries
+      .map((entry, id) => ({ entry, id }))
+      .sort((a, b) => {
+        let r = 0;
+        switch (sort.field) {
+          case "time": r = (a.entry.event_time || "").localeCompare(b.entry.event_time || ""); break;
+          case "duration": r = a.entry.query_duration_ms - b.entry.query_duration_ms; break;
+          case "status": r = (a.entry.exception ? 1 : 0) - (b.entry.exception ? 1 : 0); break;
+          case "kind": r = (a.entry.query_kind || "").localeCompare(b.entry.query_kind || ""); break;
+          case "user": r = (a.entry.user || "").localeCompare(b.entry.user || ""); break;
+        }
+        return r * dir;
+      });
   }, [entries, sort.field, sort.dir]);
 
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const toggle = (key: string) => setExpanded((prev) => {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const toggle = (id: number) => setExpanded((prev) => {
     const next = new Set(prev);
-    if (next.has(key)) next.delete(key); else next.add(key);
+    if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
 
@@ -517,13 +521,13 @@ function RecentDDLCard({ entries }: { entries: DDLStatus["recent_ddl"] }) {
             </tr>
           </thead>
           <tbody>
-            {sorted.map((e) => {
-              const isOpen = expanded.has(e.query_id);
+            {sorted.map(({ entry: e, id }) => {
+              const isOpen = expanded.has(id);
               return (
-                <Fragment key={e.query_id}>
+                <Fragment key={id}>
                   <tr
                     className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)]"
-                    onClick={() => toggle(e.query_id)}
+                    onClick={() => toggle(id)}
                   >
                     <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-primary)]">{e.event_time}</td>
                     <td className="px-3 py-1.5 text-xs">
