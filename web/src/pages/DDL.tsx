@@ -344,23 +344,28 @@ function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"]
 
   return (
     <Card className="flex max-h-[32rem] flex-col">
-      <div className="flex items-center gap-2 px-4 py-3 text-xs font-medium text-[var(--color-text-secondary)]">
-        <Layers className="h-3.5 w-3.5" />
-        Distributed DDL Queue ({entries.length})
+      <div className="px-4 py-3">
+        <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-text-secondary)]">
+          <Layers className="h-3.5 w-3.5" />
+          Distributed DDL Queue ({entries.length})
+        </div>
+        <div className="mt-0.5 text-[11px] text-[var(--color-text-secondary)]">
+          ON CLUSTER statements dispatched across the cluster. Anything not “Finished” is stuck or in-flight.
+        </div>
       </div>
       <div className="overflow-auto px-4 pb-4">
         <table className="w-full table-fixed text-sm">
           <colgroup>
-            <col className="w-[37%]" /><col className="w-[9%]" /><col className="w-[8%]" /><col className="w-[9%]" /><col className="w-[8%]" /><col className="w-[15%]" /><col className="w-[14%]" />
+            <col className="w-[15%]" /><col className="w-[34%]" /><col className="w-[9%]" /><col className="w-[8%]" /><col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[16%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-[var(--color-border)]">
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Created</th>
               <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Query</th>
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Host</th>
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Cluster</th>
               <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Status</th>
               <th className="px-3 pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Duration</th>
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Created</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Host</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Cluster</th>
               <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Exception</th>
             </tr>
           </thead>
@@ -374,14 +379,13 @@ function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"]
                     className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)]"
                     onClick={() => toggle(i)}
                   >
+                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-primary)]">{e.query_create_time}</td>
                     <td className="px-3 py-1.5 text-xs">
                       <div className="flex items-center gap-1.5">
                         <ExpandToggle open={isOpen} />
                         <span className="min-w-0 truncate font-mono" title={e.query}>{highlightSQL(e.query)}</span>
                       </div>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-[var(--color-text-primary)]">{e.initiator_host || "-"}</td>
-                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-[var(--color-text-primary)]">{e.cluster || "-"}</td>
                     <td className={`whitespace-nowrap px-3 py-1.5 font-mono text-xs ${tone.color}`}>
                       <span className="inline-flex items-center gap-1">
                         {tone.label === "Finished" ? <CheckCircle2 className="h-3 w-3" /> : null}
@@ -391,7 +395,8 @@ function DistributedDDLCard({ entries }: { entries: DDLStatus["distributed_ddl"]
                     <td className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-xs text-[var(--color-text-primary)]">
                       {e.query_duration_ms ? formatDuration(e.query_duration_ms) : "-"}
                     </td>
-                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-primary)]">{e.query_create_time}</td>
+                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-[var(--color-text-primary)]">{e.initiator_host || "-"}</td>
+                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs text-[var(--color-text-primary)]">{e.cluster || "-"}</td>
                     <td className="px-3 py-1.5 text-xs text-[var(--color-error)]" title={e.exception_text}>
                       <span className="block truncate">{e.exception_text || "-"}</span>
                     </td>
@@ -422,23 +427,28 @@ function RecentDDLCard({ entries }: { entries: DDLStatus["recent_ddl"] }) {
 
   return (
     <Card className="flex max-h-[32rem] flex-col">
-      <div className="flex items-center gap-2 px-4 py-3 text-xs font-medium text-[var(--color-text-secondary)]">
-        <Timer className="h-3.5 w-3.5" />
-        Recent DDL Operations ({entries.length})
+      <div className="px-4 py-3">
+        <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-text-secondary)]">
+          <Timer className="h-3.5 w-3.5" />
+          Recent DDL Operations ({entries.length})
+        </div>
+        <div className="mt-0.5 text-[11px] text-[var(--color-text-secondary)]">
+          Recent CREATE / ALTER / DROP (and similar) statements from query_log on this node.
+        </div>
       </div>
       <div className="overflow-auto px-4 pb-4">
         <table className="w-full table-fixed text-sm">
           <colgroup>
-            <col className="w-[15%]" /><col className="w-[8%]" /><col className="w-[47%]" /><col className="w-[10%]" /><col className="w-[10%]" /><col className="w-[10%]" />
+            <col className="w-[15%]" /><col className="w-[47%]" /><col className="w-[10%]" /><col className="w-[10%]" /><col className="w-[8%]" /><col className="w-[10%]" />
           </colgroup>
           <thead>
             <tr className="border-b border-[var(--color-border)]">
               <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Time</th>
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Kind</th>
               <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Query</th>
-              <th className="px-3 pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Duration</th>
-              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">User</th>
               <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Status</th>
+              <th className="px-3 pb-1.5 text-right text-xs font-medium text-[var(--color-text-secondary)]">Duration</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">Kind</th>
+              <th className="px-3 pb-1.5 text-left text-xs font-medium text-[var(--color-text-secondary)]">User</th>
             </tr>
           </thead>
           <tbody>
@@ -451,17 +461,12 @@ function RecentDDLCard({ entries }: { entries: DDLStatus["recent_ddl"] }) {
                     onClick={() => toggle(i)}
                   >
                     <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-primary)]">{e.event_time}</td>
-                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{e.query_kind}</td>
                     <td className="px-3 py-1.5 text-xs">
                       <div className="flex items-center gap-1.5">
                         <ExpandToggle open={isOpen} />
                         <span className="min-w-0 truncate font-mono" title={e.query}>{highlightSQL(e.query)}</span>
                       </div>
                     </td>
-                    <td className={`whitespace-nowrap px-3 py-1.5 text-right font-mono text-xs ${e.query_duration_ms > 60000 ? "text-[var(--color-warning)]" : ""}`}>
-                      {formatDuration(e.query_duration_ms)}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-primary)]">{e.user}</td>
                     <td className="whitespace-nowrap px-3 py-1.5 text-xs">
                       {e.exception ? (
                         <Badge variant="error">failed</Badge>
@@ -469,6 +474,11 @@ function RecentDDLCard({ entries }: { entries: DDLStatus["recent_ddl"] }) {
                         <Badge variant="success">ok</Badge>
                       )}
                     </td>
+                    <td className={`whitespace-nowrap px-3 py-1.5 text-right font-mono text-xs ${e.query_duration_ms > 60000 ? "text-[var(--color-warning)]" : ""}`}>
+                      {formatDuration(e.query_duration_ms)}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{e.query_kind}</td>
+                    <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-primary)]">{e.user}</td>
                   </tr>
                   {isOpen && (
                     <tr className="border-b border-[var(--color-border)]">
