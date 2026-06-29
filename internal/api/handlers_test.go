@@ -137,6 +137,25 @@ func TestClientFromRequest_MissingURL(t *testing.T) {
 	}
 }
 
+func TestKillProcessesByUser_MissingUser(t *testing.T) {
+	api := New(clickhouse.NewPool(), nil)
+	// No ?user= and no connection headers — the handler must reject for the
+	// missing param before touching ClickHouse, so no real pool is needed.
+	req := httptest.NewRequest("POST", "/api/processes/kill-by-user", nil)
+	w := httptest.NewRecorder()
+	api.KillProcessesByUser(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing user, got %d", w.Code)
+	}
+	var e ApiError
+	if err := json.NewDecoder(w.Body).Decode(&e); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if e.Code != CodeMissingParam {
+		t.Errorf("expected CodeMissingParam, got %q", e.Code)
+	}
+}
+
 func TestApiErrorShapes(t *testing.T) {
 	t.Run("MissingParam", func(t *testing.T) {
 		w := httptest.NewRecorder()

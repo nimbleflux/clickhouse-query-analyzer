@@ -2,6 +2,8 @@ package clickhouse
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -245,10 +247,67 @@ func (c *Client) GetQuery(ctx context.Context, queryID string) (*QueryLogEntry, 
 		&e.IsInitialQuery, &e.InitialQueryID, &e.Settings, &e.ProfileEvents,
 		&e.UsedFunctions, &e.UsedStorages, &e.UsedAggregateFunctions,
 	); err != nil {
-		return nil, fmt.Errorf("querying query_log for %s: %w", queryID, err)
+		// No terminal query_log row: query_log rows are written on completion,
+		// so a still-running query has none yet. Fall back to system.processes
+		// (the live view) so opening a running query from the Running page does
+		// not 404. ProfileEvents/Settings/result-counts are unavailable live
+		// and stay empty — those tabs populate once the query finishes.
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("querying query_log for %s: %w", queryID, err)
+		}
+		proc, perr := c.GetProcess(ctx, queryID)
+		if perr != nil {
+			if errors.Is(perr, ErrNotFound) {
+				return nil, NotFoundErrorf("query %s", queryID)
+			}
+			return nil, perr
+		}
+		return processToEntry(proc), nil
 	}
 	e.NormalizedQueryHash = strconv.FormatUint(hash, 10)
 	return &e, nil
+}
+
+// processToEntry synthesizes a QueryLogEntry from a live system.processes row,
+// used when a query is still running and has no terminal query_log row. Type is
+// set to "QueryStart" so the frontend renders its "Running" status; fields not
+// available live (ProfileEvents, Settings, result counts, exception) are left
+// empty and populate from query_log once the query finishes. MemoryUsage maps
+// from the process peak (query_log.memory_usage is peak, and the UI labels this
+// column "Peak Memory").
+func processToEntry(p *ProcessEntry) *QueryLogEntry {
+	var peak uint64
+	if p.PeakMemory > 0 {
+		peak = uint64(p.PeakMemory)
+	}
+	return &QueryLogEntry{
+		Type:                "QueryStart",
+		EventTime:           p.QueryStartTime,
+		QueryStartTime:      p.QueryStartTime,
+		QueryDurationMs:     uint64(p.DurationMs),
+		QueryID:             p.QueryID,
+		Query:               p.Query,
+		NormalizedQueryHash: p.NormalizedQueryHash,
+		QueryKind:           p.QueryKind,
+		User:                p.User,
+		ReadRows:            p.ReadRows,
+		ReadBytes:           p.ReadBytes,
+		WrittenRows:         p.WrittenRows,
+		WrittenBytes:        p.WrittenBytes,
+		MemoryUsage:         peak,
+		PeakThreadsUsage:    p.ThreadCount,
+		IsInitialQuery:      p.IsInitialQuery,
+		InitialQueryID:      p.InitialQueryID,
+		// Live processes expose no terminal-only aggregates; mirror the empty
+		// shape of a finished row so the frontend never sees null slices/maps.
+		Databases:              []string{},
+		Tables:                 []string{},
+		Settings:               map[string]string{},
+		ProfileEvents:          map[string]uint64{},
+		UsedFunctions:          []string{},
+		UsedStorages:           []string{},
+		UsedAggregateFunctions: []string{},
+	}
 }
 
 type QueryFingerprint struct {

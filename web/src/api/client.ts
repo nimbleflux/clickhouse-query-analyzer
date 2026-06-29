@@ -241,6 +241,10 @@ export async function killProcess(queryId: string, signal?: AbortSignal): Promis
   return fetchJSON<{ status: string }>(`${BASE}/processes/${encodeURIComponent(queryId)}/kill`, { method: "POST", signal });
 }
 
+export async function killProcessesByUser(user: string, signal?: AbortSignal): Promise<{ status: string; killed: number; user: string }> {
+  return fetchJSON<{ status: string; killed: number; user: string }>(`${BASE}/processes/kill-by-user?user=${encodeURIComponent(user)}`, { method: "POST", signal });
+}
+
 export async function fetchFingerprints(params: Partial<QueryListParams>, signal?: AbortSignal): Promise<FingerprintListResponse> {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {

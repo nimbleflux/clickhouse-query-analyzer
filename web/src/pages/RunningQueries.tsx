@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Activity, Skull, MemoryStick, Database, RefreshCw, Pause, Copy, Search, Filter, Send } from "lucide-react";
-import { fetchProcesses, killProcess } from "../api/client";
+import { Activity, Skull, MemoryStick, Database, RefreshCw, Pause, Copy, Search, Filter, Send, ChevronDown } from "lucide-react";
+import { fetchProcesses, killProcess, killProcessesByUser } from "../api/client";
 import type { ProcessEntry } from "../api/types";
-import { formatDuration, formatBytes, formatNumber, durationColor, memoryColor } from "../utils";
+import { formatDuration, formatBytes, formatNumber, durationColor, memoryColor, formatTime } from "../utils";
 import { TableSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toast";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -14,9 +14,10 @@ import { Select, Checkbox } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/dialog";
-import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { sendToEditor } from "@/lib/send-to-editor";
 import { ApiError } from "@/api/errors";
+import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 
 const QUERY_KINDS = ["Select", "Insert", "Create", "Alter", "Drop", "Explain", "System", "Other"] as const;
 const INTERNAL_PREFIXES = ["SYSTEM", "KILL", "SET", "SHOW", "EXISTS", "USE"];
@@ -34,8 +35,9 @@ export function RunningQueries({ connected }: { connected: boolean }) {
   const { toast } = useToast();
   const copy = useCopyToClipboard();
   const [processes, setProcesses] = useState<ProcessEntry[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [canceled, setCanceled] = useState(false);
   const [killing, setKilling] = useState<Set<string>>(new Set());
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [killTarget, setKillTarget] = useState<ProcessEntry | null>(null);
@@ -45,12 +47,20 @@ export function RunningQueries({ connected }: { connected: boolean }) {
   const [filterUser, setFilterUser] = useState("");
   const [filterKind, setFilterKind] = useState("");
   const [showSystem, setShowSystem] = useState(false);
+  const [groupByUser, setGroupByUser] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [killUserTarget, setKillUserTarget] = useState<string | null>(null);
+  const [killingUser, setKillingUser] = useState(false);
   const debouncedSearch = useDebouncedValue(search, 300);
+  const controllerRef = useRef<AbortController | null>(null);
+  const elapsed = useElapsedTimer(loading);
 
   const load = useCallback(async () => {
+    setCanceled(false);
     setLoading(true);
     setError("");
     const controller = new AbortController();
+    controllerRef.current = controller;
     try {
       const result = await fetchProcesses(controller.signal);
       setProcesses(result);
@@ -61,6 +71,11 @@ export function RunningQueries({ connected }: { connected: boolean }) {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const cancel = useCallback(() => {
+    setCanceled(true);
+    controllerRef.current?.abort();
   }, []);
 
   useEffect(() => {
@@ -92,6 +107,30 @@ export function RunningQueries({ connected }: { connected: boolean }) {
     setKillTarget(null);
   };
 
+  const handleKillByUser = async (user: string) => {
+    setKillingUser(true);
+    try {
+      const res = await killProcessesByUser(user);
+      toast(`${res.killed} ${res.killed === 1 ? "query" : "queries"} killed`, "success");
+      setTimeout(load, 500);
+    } catch (e) {
+      if (e instanceof ApiError && e.isAbort()) return;
+      toast(e instanceof Error ? e.message : "Failed to kill queries", "error");
+    } finally {
+      setKillingUser(false);
+      setKillUserTarget(null);
+    }
+  };
+
+  const toggleGroup = (user: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(user)) next.delete(user);
+      else next.add(user);
+      return next;
+    });
+  };
+
   const filtered = useMemo(() => {
     return processes.filter((p) => {
       const q = p.query.toLowerCase();
@@ -114,7 +153,110 @@ export function RunningQueries({ connected }: { connected: boolean }) {
 
   const users = useMemo(() => [...new Set(processes.map((p) => p.user))].sort(), [processes]);
 
+  const isGrouped = groupByUser;
+
+  const grouped = useMemo(() => {
+    if (!isGrouped) return null;
+    const map = new Map<string, ProcessEntry[]>();
+    for (const p of filtered) {
+      let arr = map.get(p.user);
+      if (!arr) { arr = []; map.set(p.user, arr); }
+      arr.push(p);
+    }
+    return [...map.entries()].map(([user, rows]) => ({
+      user,
+      rows,
+      totalMemory: rows.reduce((s, p) => s + p.memory_usage, 0),
+    })).sort((a, b) => b.totalMemory - a.totalMemory); // who's hogging memory first
+  }, [filtered, isGrouped]);
+
+  // Kill-all targets every running query by the user (all-by-user scope); the
+  // count comes from the raw process list, not the filtered view.
+  const killUserCount = useMemo(
+    () => (killUserTarget ? processes.filter((p) => p.user === killUserTarget).length : 0),
+    [killUserTarget, processes],
+  );
+
   if (!connected) return <NotConnectedState />;
+
+  const renderRow = (p: ProcessEntry) => (
+    <tr
+      key={p.query_id}
+      onClick={() => navigate(`/query/${p.query_id}`)}
+      className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)] transition-colors"
+    >
+      <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">
+        {formatTime(p.query_start_time)}
+      </td>
+      {!isGrouped && (
+        <td className="whitespace-nowrap px-4 py-3 text-[var(--color-text-secondary)]">{p.user}</td>
+      )}
+      <td className={`whitespace-nowrap px-4 py-3 font-mono ${durationColor(p.query_duration_ms)}`}>
+        {formatDuration(p.query_duration_ms)}
+      </td>
+      <td className={`whitespace-nowrap px-4 py-3 text-right font-mono ${memoryColor(p.memory_usage)}`}>
+        <div className="flex items-center justify-end gap-1">
+          <MemoryStick className="h-3 w-3" />
+          {formatBytes(p.memory_usage)}
+        </div>
+      </td>
+      <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-[var(--color-text-secondary)]">
+        {formatBytes(p.peak_memory_usage)}
+      </td>
+      <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-[var(--color-text-secondary)]">
+        {formatNumber(p.read_rows)}
+      </td>
+      <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-[var(--color-text-secondary)]">
+        {formatBytes(p.read_bytes)}
+      </td>
+      <td
+        className="max-w-md truncate px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]"
+        title={p.query}
+      >
+        <div className="flex items-center gap-1">
+          <Database className="h-3 w-3 shrink-0" />
+          <span className="truncate">{p.query}</span>
+        </div>
+      </td>
+      <td className="px-2 py-3">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={(e) => { e.stopPropagation(); sendToEditor(navigate, p.query); }}
+          title="Open in SQL Editor"
+        >
+          <Send className="h-3 w-3" />
+        </Button>
+      </td>
+      <td className="px-2 py-3">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={(e) => { e.stopPropagation(); copy(p.query_id, "Query ID copied!"); }}
+          title="Copy query ID"
+        >
+          <Copy className="h-3 w-3" />
+        </Button>
+      </td>
+      <td className="px-2 py-3">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={(e) => { e.stopPropagation(); setKillTarget(p); }}
+          disabled={killing.has(p.query_id)}
+          className="text-[var(--color-error)] hover:bg-[var(--state-error)]"
+          title="Kill query"
+        >
+          {killing.has(p.query_id) ? (
+            <Pause className="h-3 w-3 animate-pulse" />
+          ) : (
+            <Skull className="h-3 w-3" />
+          )}
+          Kill
+        </Button>
+      </td>
+    </tr>
+  );
 
   return (
     <PageContainer>
@@ -142,12 +284,33 @@ export function RunningQueries({ connected }: { connected: boolean }) {
         onCancel={() => setKillTarget(null)}
       />
 
+      <ConfirmDialog
+        open={!!killUserTarget}
+        title="Kill all queries"
+        message={
+          killUserTarget ? (
+            <div className="space-y-2">
+              <p>
+                Kill all <strong>{killUserCount}</strong> running {killUserCount === 1 ? "query" : "queries"} from user{" "}
+                <span className="font-mono">{killUserTarget}</span>?
+              </p>
+              <p className="text-xs opacity-80">This cannot be undone.</p>
+            </div>
+          ) : undefined
+        }
+        confirmLabel={`Kill all${killUserCount ? ` (${killUserCount})` : ""}`}
+        confirmVariant="danger"
+        onConfirm={() => killUserTarget && handleKillByUser(killUserTarget)}
+        onCancel={() => setKillUserTarget(null)}
+      />
+
       <PageHeader
         heading="h2"
         title="Running Queries"
         description="Live view of system.processes"
         actions={
           <>
+            {loading && processes.length > 0 && <RefreshIndicator elapsed={elapsed} />}
             <Button
               variant={autoRefresh ? "primary" : "secondary"}
               size="md"
@@ -185,6 +348,11 @@ export function RunningQueries({ connected }: { connected: boolean }) {
           onChange={(e) => setShowSystem(e.target.checked)}
           label="Internal queries"
         />
+        <Checkbox
+          checked={groupByUser}
+          onChange={(e) => setGroupByUser(e.target.checked)}
+          label="Group by user"
+        />
         {filtered.length > 0 && (
           <Badge variant="default">{filtered.length} running</Badge>
         )}
@@ -214,7 +382,12 @@ export function RunningQueries({ connected }: { connected: boolean }) {
       {error && <ErrorState error={error} onRetry={load} />}
 
       {loading && processes.length === 0 ? (
-        <div className="py-4"><TableSkeleton rows={5} cols={7} /></div>
+        <div className="py-4">
+          <TableSkeleton rows={5} cols={7} />
+          <LoadingNotice elapsed={elapsed} onCancel={cancel} />
+        </div>
+      ) : canceled && processes.length === 0 ? (
+        <LoadingNotice canceled onRetry={load} />
       ) : filtered.length === 0 ? (
         <EmptyState
           icon={Activity}
@@ -227,12 +400,15 @@ export function RunningQueries({ connected }: { connected: boolean }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
+                  <th className="whitespace-nowrap px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Start</th>
+                  {!isGrouped && (
+                    <th className="px-4 py-2.5 font-medium text-[var(--color-text-secondary)]">User</th>
+                  )}
                   <th className="px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]">Duration</th>
                   <th className="px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]">Memory</th>
                   <th className="px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]">Peak</th>
                   <th className="px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]">Rows</th>
                   <th className="px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]">Data</th>
-                  <th className="px-4 py-2.5 font-medium text-[var(--color-text-secondary)]">User</th>
                   <th className="px-4 py-2.5 font-medium text-[var(--color-text-secondary)]">Query</th>
                   <th className="px-4 py-2.5" />
                   <th className="px-4 py-2.5" />
@@ -240,79 +416,42 @@ export function RunningQueries({ connected }: { connected: boolean }) {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((p) => (
-                  <tr
-                    key={p.query_id}
-                    onClick={() => navigate(`/query/${p.query_id}`)}
-                    className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)] transition-colors"
-                  >
-                    <td className={`whitespace-nowrap px-4 py-3 font-mono ${durationColor(p.query_duration_ms)}`}>
-                      {formatDuration(p.query_duration_ms)}
-                    </td>
-                    <td className={`whitespace-nowrap px-4 py-3 text-right font-mono ${memoryColor(p.memory_usage)}`}>
-                      <div className="flex items-center justify-end gap-1">
-                        <MemoryStick className="h-3 w-3" />
-                        {formatBytes(p.memory_usage)}
-                      </div>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-[var(--color-text-secondary)]">
-                      {formatBytes(p.peak_memory_usage)}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-[var(--color-text-secondary)]">
-                      {formatNumber(p.read_rows)}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-[var(--color-text-secondary)]">
-                      {formatBytes(p.read_bytes)}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-[var(--color-text-secondary)]">{p.user}</td>
-                    <td
-                      className="max-w-md truncate px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]"
-                      title={p.query}
-                    >
-                      <div className="flex items-center gap-1">
-                        <Database className="h-3 w-3 shrink-0" />
-                        <span className="truncate">{p.query}</span>
-                      </div>
-                    </td>
-                    <td className="px-2 py-3">
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={(e) => { e.stopPropagation(); sendToEditor(navigate, p.query); }}
-                        title="Open in SQL Editor"
-                      >
-                        <Send className="h-3 w-3" />
-                      </Button>
-                    </td>
-                    <td className="px-2 py-3">
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={(e) => { e.stopPropagation(); copy(p.query_id, "Query ID copied!"); }}
-                        title="Copy query ID"
-                      >
-                        <Copy className="h-3 w-3" />
-                      </Button>
-                    </td>
-                    <td className="px-2 py-3">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => { e.stopPropagation(); setKillTarget(p); }}
-                        disabled={killing.has(p.query_id)}
-                        className="text-[var(--color-error)] hover:bg-[var(--state-error)]"
-                        title="Kill query"
-                      >
-                        {killing.has(p.query_id) ? (
-                          <Pause className="h-3 w-3 animate-pulse" />
-                        ) : (
-                          <Skull className="h-3 w-3" />
-                        )}
-                        Kill
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
+                {isGrouped && grouped
+                  ? grouped.flatMap((g) => {
+                      const collapsed = collapsedGroups.has(g.user);
+                      return [
+                        <tr key={`group-${g.user}`} className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
+                          <td colSpan={10} className="px-4 py-2">
+                            <div className="flex items-center justify-between gap-3">
+                              <button
+                                type="button"
+                                onClick={() => toggleGroup(g.user)}
+                                className="flex items-center gap-1.5 text-sm font-medium text-[var(--color-text-primary)]"
+                              >
+                                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${collapsed ? "-rotate-90" : ""}`} />
+                                {g.user}
+                                <span className="text-xs font-normal text-[var(--color-text-secondary)]">
+                                  {g.rows.length} running · {formatBytes(g.totalMemory)}
+                                </span>
+                              </button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={killingUser}
+                                onClick={() => setKillUserTarget(g.user)}
+                                className="shrink-0 text-[var(--color-error)] hover:bg-[var(--state-error)]"
+                                title={`Kill all running queries by ${g.user}`}
+                              >
+                                <Skull className="h-3 w-3" />
+                                Kill all
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>,
+                        ...(!collapsed ? g.rows.map(renderRow) : []),
+                      ];
+                    })
+                  : filtered.map(renderRow)}
               </tbody>
             </table>
           </div>

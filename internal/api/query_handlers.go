@@ -477,6 +477,32 @@ func (a *API) KillProcess(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (a *API) KillProcessesByUser(w http.ResponseWriter, r *http.Request) {
+	user := r.URL.Query().Get("user")
+	if user == "" {
+		MissingParam(w, "user")
+		return
+	}
+
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+
+	killed, err := ch.KillQueriesByUser(r.Context(), user)
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"killed": killed,
+		"user":   user,
+	})
+}
+
 func (a *API) ListFingerprints(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {

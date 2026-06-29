@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import { Fingerprint, TrendingUp, Clock, MemoryStick, HardDrive, Cpu, AlertTriangle, ChevronRight, Copy, Send, GitCompare } from "lucide-react";
 import CodeMirror from "@uiw/react-codemirror";
@@ -14,9 +14,10 @@ import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, m
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { sendToEditor } from "@/lib/send-to-editor";
 import { ApiError } from "@/api/errors";
+import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 
 type Interval = "hour" | "day";
 
@@ -55,11 +56,14 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
   const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [queries, setQueries] = useState<FingerprintQuery[]>([]);
   const [queriesTotal, setQueriesTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
+  const [canceled, setCanceled] = useState(false);
   const [interval, setInterval_] = useState<Interval>("hour");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const controllerRef = useRef<AbortController | null>(null);
+  const elapsed = useElapsedTimer(loading);
 
   const toggleSelect = useCallback((id: string) => {
     setSelected((prev) => {
@@ -76,6 +80,7 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
 
   const load = useCallback(async (signal?: AbortSignal) => {
     if (!hash) return;
+    setCanceled(false);
     setLoading(true);
     setError("");
     try {
@@ -91,7 +96,7 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       setError(e instanceof ApiError ? e.message : (e instanceof Error ? e.message : "Failed to load trend"));
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [hash, interval]);
 
@@ -111,9 +116,16 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
   useEffect(() => {
     if (!connected) return;
     const controller = new AbortController();
+    controllerRef.current = controller;
     load(controller.signal);
     return () => controller.abort();
   }, [load, connected]);
+
+  const cancel = useCallback(() => {
+    setCanceled(true);
+    controllerRef.current?.abort();
+    setLoading(false);
+  }, []);
 
   if (!connected) return <NotConnectedState />;
 
@@ -160,6 +172,7 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
         }
         actions={
           <>
+            {loading && trend.length > 0 && <RefreshIndicator elapsed={elapsed} />}
             {sampleQuery && (
               <Button variant="secondary" size="md" onClick={() => sendToEditor(navigate, sampleQuery, { origin: "fingerprint" })}>
                 <Send className="h-3.5 w-3.5" />
@@ -209,7 +222,10 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
         <div className="grid gap-4 sm:grid-cols-2">
           <CardSkeleton />
           <CardSkeleton />
+          <LoadingNotice elapsed={elapsed} onCancel={cancel} />
         </div>
+      ) : canceled && trend.length === 0 ? (
+        <LoadingNotice canceled onRetry={() => load()} />
       ) : trend.length === 0 ? (
         <EmptyState
           icon={TrendingUp}

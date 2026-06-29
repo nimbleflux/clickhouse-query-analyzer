@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, Filter, ChevronLeft, ChevronRight, Clock, MemoryStick, Database, GitCompare, ArrowUp, ArrowDown, Copy, FileSearch, Code } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -14,8 +14,9 @@ import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Checkbox } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { Badge } from "@/components/ui/badge";
+import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 
 const DATE_PRESETS: { label: string; hours: number }[] = [
   { label: "Last 1h", hours: 1 },
@@ -37,6 +38,9 @@ export function QueryList({ connected }: { connected: boolean }) {
   const [cachedTotal, setCachedTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
+  const [canceled, setCanceled] = useState(false);
+  const controllerRef = useRef<AbortController | null>(null);
+  const elapsed = useElapsedTimer(loading);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [params, setParams] = useState<QueryListParams>({
     limit: 50,
@@ -69,7 +73,9 @@ export function QueryList({ connected }: { connected: boolean }) {
   useEffect(() => {
     if (!connected) return;
     const controller = new AbortController();
+    controllerRef.current = controller;
     let active = true;
+    setCanceled(false);
     setLoading(true);
     setError(null);
     fetchQueries(
@@ -99,6 +105,12 @@ export function QueryList({ connected }: { connected: boolean }) {
       controller.abort();
     };
   }, [params, debouncedSearch, connected, showSystem, wantsCount]);
+
+  const cancel = useCallback(() => {
+    setCanceled(true);
+    controllerRef.current?.abort();
+    setLoading(false);
+  }, []);
 
   const displayTotal = cachedTotal ?? total;
   const totalPages = displayTotal > 0 ? Math.ceil(displayTotal / (params.limit || 50)) : 0;
@@ -132,6 +144,7 @@ export function QueryList({ connected }: { connected: boolean }) {
         description={
           total > 0 ? `${formatNumber(total)} queries found` : undefined
         }
+        actions={loading && queries.length > 0 ? <RefreshIndicator elapsed={elapsed} /> : undefined}
       />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -333,7 +346,12 @@ export function QueryList({ connected }: { connected: boolean }) {
           <div className="w-20 shrink-0 px-2 py-3"></div>
         </div>
         {loading && queries.length === 0 ? (
-          <div className="px-4 py-6"><TableSkeleton rows={20} cols={7} /></div>
+          <div className="px-4 py-6">
+            <TableSkeleton rows={20} cols={7} />
+            <LoadingNotice elapsed={elapsed} onCancel={cancel} />
+          </div>
+        ) : canceled && queries.length === 0 ? (
+          <LoadingNotice canceled onRetry={() => setParams((p) => ({ ...p }))} />
         ) : queries.length === 0 ? (
           <EmptyState
             icon={FileSearch}

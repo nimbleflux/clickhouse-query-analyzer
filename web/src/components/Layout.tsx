@@ -111,7 +111,7 @@ export function Layout({
     <TooltipProvider delayDuration={300}>
       <div className="h-screen flex flex-col bg-[var(--surface-base)]">
         <nav className="shrink-0 border-b border-[var(--color-border)] bg-[var(--surface-card)]">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="mx-auto max-w-[var(--content-max-width)] px-4 sm:px-6 lg:px-8">
             <div className="flex h-14 items-center justify-between">
               <div className="flex items-center gap-4">
                 <button
@@ -236,7 +236,7 @@ export function Layout({
 
         {editing && (
           <div className="border-b border-[var(--color-border)] bg-[var(--surface-card)]">
-            <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-4 py-3 sm:px-6 lg:px-8">
+            <div className="mx-auto flex max-w-[var(--content-max-width)] flex-wrap items-center gap-3 px-4 py-3 sm:px-6 lg:px-8">
               <Plug className="h-4 w-4 shrink-0 text-[var(--color-text-secondary)]" />
               <Input
                 value={params.url}
