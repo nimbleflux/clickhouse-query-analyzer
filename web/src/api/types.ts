@@ -274,6 +274,7 @@ export interface ProcessEntry {
   query: string;
   user: string;
   query_duration_ms: number;
+  query_start_time: string;
   memory_usage: number;
   peak_memory_usage: number;
   read_rows: number;
@@ -281,6 +282,8 @@ export interface ProcessEntry {
   written_rows: number;
   written_bytes: number;
   peak_threads_usage: number;
+  normalized_query_hash: string;
+  query_kind: string;
   current_database: string;
   is_initial_query: number;
   initial_query_id: string;
@@ -319,7 +322,7 @@ export interface DashboardData {
   recent_events: { event: string; host: string; value: number }[];
   database_sizes: { database: string; tables: number; rows: number; compressed_bytes: number; uncompressed_bytes: number }[];
   top_tables_by_size: { database: string; table: string; parts: number; rows: number; compressed_bytes: number; uncompressed_bytes: number }[];
-  top_tables_by_parts: { database: string; table: string; parts: number; rows: number; compressed_bytes: number; uncompressed_bytes: number }[];
+  top_tables_by_parts: { database: string; table: string; parts: number; max_parts_in_partition: number; rows: number; compressed_bytes: number; uncompressed_bytes: number }[];
   replication_queue: { database: string; table: string; replica_name: string; position: number; type: string; create_time: string; is_started: number; num_tries: number; last_exception: string }[];
   replica_statuses: { database: string; table: string; replica_name: string; is_leader: number; is_readonly: number; absolute_delay: number; queue_size: number; inserts_in_queue: number; merges_in_queue: number; log_max_index: number; log_pointer: number; total_replicas: number; active_replicas: number }[];
   nodes: { host: string; uptime: number; version: string }[];
@@ -333,6 +336,9 @@ export interface DashboardData {
   user: string;
   host_name: string;
   partial_errors: string[];
+  partial_error_details?: Record<string, string>;
+  parts_to_delay_insert: number;
+  parts_to_throw_insert: number;
 }
 
 export interface FingerprintQuery {

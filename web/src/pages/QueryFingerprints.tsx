@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Fingerprint, Search, Clock, MemoryStick, ArrowUp, ArrowDown, Filter, ChevronLeft, ChevronRight, AlertTriangle, BarChart3 } from "lucide-react";
 import { fetchFingerprints } from "../api/client";
@@ -9,7 +9,8 @@ import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Input, Checkbox } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
+import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 
 const DATE_PRESETS: { label: string; hours: number }[] = [
   { label: "Last 1h", hours: 1 },
@@ -52,8 +53,9 @@ function SortableHeader({ field, sortBy, sortDir, onToggle, label, align = "left
 export function QueryFingerprints({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
   const [data, setData] = useState<FingerprintListResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [canceled, setCanceled] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [search, setSearch] = useState("");
   const [user, setUser] = useState("");
@@ -66,12 +68,15 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
   const [cachedTotal, setCachedTotal] = useState<number | null>(null);
   const pageSize = 50;
   const debouncedSearch = useDebouncedValue(search, 300);
+  const controllerRef = useRef<AbortController | null>(null);
+  const elapsed = useElapsedTimer(loading);
 
   const isFirstPage = currentPage === 1;
   const hasDateFilter = !!(fromTime || toTime);
   const wantsCount = isFirstPage && hasDateFilter;
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
+    setCanceled(false);
     setLoading(true);
     setError("");
     try {
@@ -87,17 +92,32 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
         to_time: toTime || undefined,
         include_count: wantsCount,
         no_clamp: !fromTime ? true : undefined,
-      });
+      }, signal);
+      if (signal?.aborted) return;
       setData(result);
       if (wantsCount) setCachedTotal(result.total);
     } catch (e) {
+      if (signal?.aborted) return;
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Failed to load fingerprints");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [debouncedSearch, user, sortBy, sortDir, currentPage, showSystem, fromTime, toTime, wantsCount]);
 
-  useEffect(() => { if (connected) load(); }, [load, connected]);
+  const cancel = useCallback(() => {
+    setCanceled(true);
+    controllerRef.current?.abort();
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (!connected) return;
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    load(controller.signal);
+    return () => controller.abort();
+  }, [load, connected]);
 
   const displayTotal = cachedTotal ?? (data?.total ?? 0);
   const totalPages = displayTotal > 0 ? Math.ceil(displayTotal / pageSize) : 0;
@@ -133,6 +153,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
         heading="h2"
         title="Query Fingerprints"
         description={displayTotal > 0 ? `${formatNumber(displayTotal)} unique queries` : undefined}
+        actions={loading && data ? <RefreshIndicator elapsed={elapsed} /> : undefined}
       />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -218,7 +239,10 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
               </div>
             ))}
           </div>
+          <LoadingNotice elapsed={elapsed} onCancel={cancel} />
         </Card>
+      ) : canceled && !data ? (
+        <LoadingNotice canceled onRetry={load} />
       ) : data && data.fingerprints.length === 0 ? (
         <EmptyState
           icon={Fingerprint}

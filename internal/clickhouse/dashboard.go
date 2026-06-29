@@ -3,6 +3,8 @@ package clickhouse
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 type SystemMetrics struct {
@@ -26,19 +28,20 @@ type DatabaseSize struct {
 }
 
 type PartSummary struct {
-	Database          string `json:"database"`
-	Table             string `json:"table"`
-	Parts             uint64 `json:"parts"`
-	Rows              uint64 `json:"rows"`
-	CompressedBytes   uint64 `json:"compressed_bytes"`
-	UncompressedBytes uint64 `json:"uncompressed_bytes"`
+	Database            string `json:"database"`
+	Table               string `json:"table"`
+	Parts               uint64 `json:"parts"`
+	MaxPartsInPartition uint64 `json:"max_parts_in_partition"`
+	Rows                uint64 `json:"rows"`
+	CompressedBytes     uint64 `json:"compressed_bytes"`
+	UncompressedBytes   uint64 `json:"uncompressed_bytes"`
 }
 
 type ReplicationQueueEntry struct {
 	Database             string `json:"database"`
 	Table                string `json:"table"`
 	ReplicaName          string `json:"replica_name"`
-	Position             uint64 `json:"position"`
+	Position             uint32 `json:"position"`
 	Type                 string `json:"type"`
 	CreateTime           string `json:"create_time"`
 	IsCurrentlyExecuting uint8  `json:"is_currently_executing"`
@@ -74,24 +77,46 @@ type NodeInfo struct {
 }
 
 type DashboardData struct {
-	Metrics          []SystemMetrics         `json:"metrics"`
-	RecentEvents     []SystemEvent           `json:"recent_events"`
-	DatabaseSizes    []DatabaseSize          `json:"database_sizes"`
-	TopTablesBySize  []PartSummary           `json:"top_tables_by_size"`
-	TopTablesByParts []PartSummary           `json:"top_tables_by_parts"`
-	ReplicationQueue []ReplicationQueueEntry `json:"replication_queue"`
-	ReplicaStatuses  []ReplicaStatus         `json:"replica_statuses"`
-	Nodes            []NodeInfo              `json:"nodes"`
-	LogTables        []LogTableSize          `json:"log_tables"`
-	Settings         []SettingValue          `json:"settings"`
-	Warnings         []string                `json:"warnings"`
-	Cluster          string                  `json:"cluster"`
-	IsCluster        bool                    `json:"is_cluster"`
-	ClusterNote      string                  `json:"cluster_note,omitempty"`
-	Database         string                  `json:"database"`
-	User             string                  `json:"user"`
-	HostName         string                  `json:"host_name"`
-	PartialErrors    []string                `json:"partial_errors"`
+	Metrics             []SystemMetrics         `json:"metrics"`
+	RecentEvents        []SystemEvent           `json:"recent_events"`
+	DatabaseSizes       []DatabaseSize          `json:"database_sizes"`
+	TopTablesBySize     []PartSummary           `json:"top_tables_by_size"`
+	TopTablesByParts    []PartSummary           `json:"top_tables_by_parts"`
+	PartsToDelayInsert  uint64                  `json:"parts_to_delay_insert"`
+	PartsToThrowInsert  uint64                  `json:"parts_to_throw_insert"`
+	ReplicationQueue    []ReplicationQueueEntry `json:"replication_queue"`
+	ReplicaStatuses     []ReplicaStatus         `json:"replica_statuses"`
+	Nodes               []NodeInfo              `json:"nodes"`
+	LogTables           []LogTableSize          `json:"log_tables"`
+	Settings            []SettingValue          `json:"settings"`
+	Warnings            []string                `json:"warnings"`
+	Cluster             string                  `json:"cluster"`
+	IsCluster           bool                    `json:"is_cluster"`
+	ClusterNote         string                  `json:"cluster_note,omitempty"`
+	Database            string                  `json:"database"`
+	User                string                  `json:"user"`
+	HostName            string                  `json:"host_name"`
+	PartialErrors       []string                `json:"partial_errors"`
+	PartialErrorDetails map[string]string       `json:"partial_error_details,omitempty"`
+}
+
+// addPartial records a partial failure for one of the system.* tables the
+// dashboard queries: the clean table name goes in the banner list, the raw
+// error message goes in PartialErrorDetails for the hover tooltip. This mirrors
+// DDLStatus.addPartial / ReplicationStatus.addPartial. The banner no longer
+// assumes the cause is access rights — the real error (permission denied,
+// missing column, version skew, a query bug) is surfaced.
+func (d *DashboardData) addPartial(table string, err error) {
+	if err == nil {
+		return
+	}
+	if d.PartialErrorDetails == nil {
+		d.PartialErrorDetails = map[string]string{}
+	}
+	if _, ok := d.PartialErrorDetails[table]; !ok {
+		d.PartialErrors = append(d.PartialErrors, table)
+	}
+	d.PartialErrorDetails[table] = err.Error()
 }
 
 func (c *Client) GetDashboard(ctx context.Context) (*DashboardData, error) {
@@ -111,6 +136,7 @@ func (c *Client) GetDashboard(ctx context.Context) (*DashboardData, error) {
 	c.queryRecentEvents(ctx, d)
 	c.queryDatabaseSizes(ctx, d)
 	c.queryTopTables(ctx, d)
+	c.queryMergeTreeInsertThresholds(ctx, d)
 	c.queryReplication(ctx, d)
 	c.queryServerInfo(ctx, d)
 	c.fillHostName(ctx, d)
@@ -147,7 +173,7 @@ func (c *Client) queryMetrics(ctx context.Context, d *DashboardData) {
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
 		d.Metrics = []SystemMetrics{}
-		d.PartialErrors = append(d.PartialErrors, "system.metrics")
+		d.addPartial("system.metrics", err)
 		return
 	}
 	defer rows.Close()
@@ -172,7 +198,7 @@ func (c *Client) queryRecentEvents(ctx context.Context, d *DashboardData) {
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
 		d.RecentEvents = []SystemEvent{}
-		d.PartialErrors = append(d.PartialErrors, "system.events")
+		d.addPartial("system.events", err)
 		return
 	}
 	defer rows.Close()
@@ -206,7 +232,7 @@ func (c *Client) queryDatabaseSizes(ctx context.Context, d *DashboardData) {
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
 		d.DatabaseSizes = []DatabaseSize{}
-		d.PartialErrors = append(d.PartialErrors, "system.parts")
+		d.addPartial("system.parts", err)
 		return
 	}
 	defer rows.Close()
@@ -226,22 +252,34 @@ func (c *Client) queryDatabaseSizes(ctx context.Context, d *DashboardData) {
 
 func (c *Client) queryTopTables(ctx context.Context, d *DashboardData) {
 	table := c.tableRef("parts")
+	// Group by partition first, then aggregate to table level. parts stays the
+	// table's total active part count (used to rank the "top by parts" list);
+	// max_parts_in_partition is the largest partition — the value ClickHouse
+	// actually checks against parts_to_delay_insert / parts_to_throw_insert
+	// (insert throttling/rejection is per-partition, not per-table-total).
 	query := fmt.Sprintf(`SELECT
 		database, table,
-		count() AS parts,
+		sum(parts_in_part) AS parts,
+		max(parts_in_part) AS max_parts_in_partition,
 		sum(rows) AS rows,
 		sum(bytes_on_disk) AS compressed_bytes,
-		sum(data_uncompressed_bytes) AS uncompressed_bytes
-	FROM %s WHERE active
+		sum(uncompressed_bytes) AS uncompressed_bytes
+	FROM (
+		SELECT database, table, partition,
+			count() AS parts_in_part,
+			sum(rows) AS rows,
+			sum(bytes_on_disk) AS bytes_on_disk,
+			sum(data_uncompressed_bytes) AS uncompressed_bytes
+		FROM %s WHERE active
+		GROUP BY database, table, partition
+	)
 	GROUP BY database, table`, table)
 
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
 		d.TopTablesBySize = []PartSummary{}
 		d.TopTablesByParts = []PartSummary{}
-		if !sliceContains(d.PartialErrors, "system.parts") {
-			d.PartialErrors = append(d.PartialErrors, "system.parts")
-		}
+		d.addPartial("system.parts", err)
 		return
 	}
 	defer rows.Close()
@@ -249,7 +287,7 @@ func (c *Client) queryTopTables(ctx context.Context, d *DashboardData) {
 	var all []PartSummary
 	for rows.Next() {
 		var ps PartSummary
-		if err := rows.Scan(&ps.Database, &ps.Table, &ps.Parts, &ps.Rows, &ps.CompressedBytes, &ps.UncompressedBytes); err != nil {
+		if err := rows.Scan(&ps.Database, &ps.Table, &ps.Parts, &ps.MaxPartsInPartition, &ps.Rows, &ps.CompressedBytes, &ps.UncompressedBytes); err != nil {
 			d.TopTablesBySize = []PartSummary{}
 			d.TopTablesByParts = []PartSummary{}
 			return
@@ -288,13 +326,44 @@ func (c *Client) queryTopTables(ctx context.Context, d *DashboardData) {
 	d.TopTablesByParts = byParts[:limit]
 }
 
-func sliceContains(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
+// queryMergeTreeInsertThresholds reads the live parts_to_delay_insert and
+// parts_to_throw_insert merge-tree settings so the dashboard's parts warning
+// compares against the server's actual configured thresholds rather than
+// hardcoded defaults. Falls back to 150/300 on any failure (permission error,
+// older ClickHouse, or absent setting).
+func (c *Client) queryMergeTreeInsertThresholds(ctx context.Context, d *DashboardData) {
+	const fallbackDelay, fallbackThrow uint64 = 150, 300
+	d.PartsToDelayInsert = fallbackDelay
+	d.PartsToThrowInsert = fallbackThrow
+	rows, err := c.conn.Query(ctx,
+		`SELECT name, value FROM system.merge_tree_settings
+		 WHERE name IN ('parts_to_delay_insert', 'parts_to_throw_insert')`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, valStr string
+		if err := rows.Scan(&name, &valStr); err != nil {
+			continue
+		}
+		v, perr := parseMergeTreeUint(valStr)
+		if perr != nil {
+			continue
+		}
+		switch name {
+		case "parts_to_delay_insert":
+			d.PartsToDelayInsert = v
+		case "parts_to_throw_insert":
+			d.PartsToThrowInsert = v
 		}
 	}
-	return false
+}
+
+// parseMergeTreeUint parses a merge_tree_settings value (whose value column is
+// a String, possibly with surrounding whitespace) as a uint64.
+func parseMergeTreeUint(s string) (uint64, error) {
+	return strconv.ParseUint(strings.TrimSpace(s), 10, 64)
 }
 
 func (c *Client) queryReplication(ctx context.Context, d *DashboardData) {

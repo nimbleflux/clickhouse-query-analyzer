@@ -40,6 +40,9 @@
   --radius-lg: 8px;
   --radius-xl: 12px;
 
+  /* Layout */
+  --content-max-width: 1536px;
+
   /* Typography */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
@@ -150,6 +153,15 @@ body {
 input:focus-visible,
 select:focus-visible {
   outline-offset: 1px;
+}
+
+/* Tailwind v4's preflight does not set cursor: pointer on <button>, so every
+   clickable button (including the Button component) renders an arrow cursor.
+   Apply a hand cursor to all enabled buttons and role="button" elements once,
+   rather than per-instance. */
+button:not(:disabled),
+[role="button"] {
+  cursor: pointer;
 }
 
 .cm-editor {

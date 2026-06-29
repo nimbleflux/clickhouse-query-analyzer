@@ -12,7 +12,8 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
+import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
 
@@ -62,14 +63,17 @@ function ChartCard({ title, children }: { title: string; children: React.ReactNo
 export function Replication({ connected }: { connected: boolean }) {
   const [data, setData] = useState<ReplicationStatus | null>(null);
   const [history, setHistory] = useState<ReplicationMetricPoint[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
+  const [canceled, setCanceled] = useState(false);
   // Live refresh is opt-in: the page is heavy enough (charts + multi-table)
   // that silently polling every few seconds is a poor default. The user
   // clicks "Live" when they're actively watching a replication incident.
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(10);
   const intervalRef = useRef<ReturnType<typeof setInterval>>(null);
+  const controllerRef = useRef<AbortController | null>(null);
+  const elapsed = useElapsedTimer(loading);
 
   const [database, setDatabase] = useState("");
 
@@ -77,6 +81,7 @@ export function Replication({ connected }: { connected: boolean }) {
   // pull the 24h chart data. The auto-refresh tick passes false so live
   // polling only re-fetches the cheap live tables, not the (large) history.
   const load = useCallback(async (signal?: AbortSignal, includeHistory = true) => {
+    setCanceled(false);
     setLoading(true);
     setError(null);
     try {
@@ -98,9 +103,15 @@ export function Replication({ connected }: { connected: boolean }) {
   useEffect(() => {
     if (!connected) return;
     const controller = new AbortController();
+    controllerRef.current = controller;
     load(controller.signal);
     return () => controller.abort();
   }, [load, connected]);
+
+  const cancel = useCallback(() => {
+    setCanceled(true);
+    controllerRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     if (!connected || !autoRefresh) return;
@@ -137,6 +148,7 @@ export function Replication({ connected }: { connected: boolean }) {
         description="Replica status, queue depth, and pending mutations"
         actions={
           <>
+            {loading && data && <RefreshIndicator elapsed={elapsed} />}
             <Select
               value={refreshInterval}
               onChange={(e) => setRefreshInterval(Number(e.target.value))}
@@ -165,7 +177,7 @@ export function Replication({ connected }: { connected: boolean }) {
           title={data.partial_errors.map((t) => `${t}: ${data.partial_error_details?.[t] ?? ""}`).join("\n")}
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
-          <span>Some sections are unavailable — your ClickHouse user may lack access to: {data.partial_errors.join(", ")}. Hover for details.</span>
+          <span>Some sections are unavailable ({data.partial_errors.join(", ")}). Hover for details.</span>
         </div>
       )}
 
@@ -178,7 +190,10 @@ export function Replication({ connected }: { connected: boolean }) {
           </div>
           <Card className="p-4"><TableSkeleton rows={6} cols={7} /></Card>
           <Card className="p-4"><TableSkeleton rows={4} cols={8} /></Card>
+          <LoadingNotice elapsed={elapsed} onCancel={cancel} />
         </>
+      ) : canceled && !data ? (
+        <LoadingNotice canceled onRetry={() => load()} />
       ) : data ? (
         <>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">

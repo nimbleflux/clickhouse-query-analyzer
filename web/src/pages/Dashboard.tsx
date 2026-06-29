@@ -11,7 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ErrorState, NotConnectedState } from "@/components/ui/state";
+import { ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
+import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
 
 interface StatCardProps {
@@ -74,13 +75,17 @@ function formatEventValue(name: string, value: number): string {
 export function Dashboard({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
   const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
+  const [canceled, setCanceled] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(30);
   const intervalRef = useRef<ReturnType<typeof setInterval>>(null);
+  const controllerRef = useRef<AbortController | null>(null);
+  const elapsed = useElapsedTimer(loading);
 
   const load = useCallback(async (signal?: AbortSignal) => {
+    setCanceled(false);
     setLoading(true);
     setError(null);
     try {
@@ -98,9 +103,15 @@ export function Dashboard({ connected }: { connected: boolean }) {
   useEffect(() => {
     if (!connected) return;
     const controller = new AbortController();
+    controllerRef.current = controller;
     load(controller.signal);
     return () => controller.abort();
   }, [load, connected]);
+
+  const cancel = useCallback(() => {
+    setCanceled(true);
+    controllerRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     if (!connected || !autoRefresh) return;
@@ -130,6 +141,15 @@ export function Dashboard({ connected }: { connected: boolean }) {
           <CardSkeleton />
           <CardSkeleton />
         </div>
+        <LoadingNotice elapsed={elapsed} onCancel={cancel} />
+      </PageContainer>
+    );
+  }
+
+  if (canceled && !data) {
+    return (
+      <PageContainer>
+        <LoadingNotice canceled onRetry={() => load()} />
       </PageContainer>
     );
   }
@@ -150,6 +170,7 @@ export function Dashboard({ connected }: { connected: boolean }) {
         description={(data.nodes?.length ?? 0) > 0 ? `ClickHouse v${data.nodes[0].version}` : undefined}
         actions={
           <>
+            {loading && data && <RefreshIndicator elapsed={elapsed} />}
             <Select
               value={refreshInterval}
               onChange={(e) => setRefreshInterval(Number(e.target.value))}
@@ -177,10 +198,13 @@ export function Dashboard({ connected }: { connected: boolean }) {
       />
 
       {data.partial_errors?.length > 0 && (
-        <div className="flex items-center gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)] px-4 py-2 text-xs text-[var(--color-text-secondary)]">
+        <div
+          className="flex items-center gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)] px-4 py-2 text-xs text-[var(--color-text-secondary)]"
+          title={data.partial_errors.map((t) => `${t}: ${data.partial_error_details?.[t] ?? ""}`).join("\n")}
+        >
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
           <span>
-            Some sections are unavailable — your ClickHouse user may lack access to: {data.partial_errors.join(", ")}.
+            Some sections are unavailable ({data.partial_errors.join(", ")}). Hover for details.
           </span>
         </div>
       )}
@@ -490,17 +514,22 @@ function AnomaliesAndWarningsCard({ data }: { data: DashboardData }) {
   }
 
   for (const t of data.top_tables_by_parts || []) {
-    if (t.parts > 1000) {
+    // Insert throttling/rejection is driven by parts *within a single
+    // partition*, not the table total. Compare the largest partition against
+    // the server's live parts_to_delay_insert / parts_to_throw_insert.
+    const throwAt = data.parts_to_throw_insert || 300;
+    const delayAt = data.parts_to_delay_insert || 150;
+    if (t.max_parts_in_partition > throwAt) {
       anomalies.push({
         severity: "error",
-        title: "Too many parts",
-        detail: `${t.database}.${t.table}: ${formatNumber(t.parts)} parts (ClickHouse will refuse inserts above ~3000)`,
+        title: "Too many parts in a partition",
+        detail: `${t.database}.${t.table}: ${formatNumber(t.max_parts_in_partition)} parts in the largest partition (inserts refused above ${formatNumber(throwAt)})`,
       });
-    } else if (t.parts > 300) {
+    } else if (t.max_parts_in_partition > delayAt) {
       anomalies.push({
         severity: "warning",
-        title: "High parts count",
-        detail: `${t.database}.${t.table}: ${formatNumber(t.parts)} parts — consider OPTIMIZE or longer part merge window`,
+        title: "Insert throttling likely",
+        detail: `${t.database}.${t.table}: ${formatNumber(t.max_parts_in_partition)} parts in the largest partition (inserts delayed above ${formatNumber(delayAt)})`,
       });
     }
   }

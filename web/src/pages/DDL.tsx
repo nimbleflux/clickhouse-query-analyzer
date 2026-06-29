@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, memo, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, memo, useMemo } from "react";
 import { Fragment } from "react";
 import { useNavigate } from "react-router-dom";
 import { Layers, AlertTriangle, RefreshCw, CheckCircle2, ArrowRight, FlaskConical, Timer, ChevronRight, ChevronDown, Copy } from "lucide-react";
@@ -18,9 +18,10 @@ import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
+import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 
 const TIMEFRAMES: { label: string; hours: number }[] = [
   { label: "1h", hours: 1 },
@@ -92,11 +93,15 @@ function oldestUnfinishedAgeSec(entries: DDLStatus["distributed_ddl"]): number {
 export function DDL({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
   const [data, setData] = useState<DDLStatus | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
+  const [canceled, setCanceled] = useState(false);
   const [hours, setHours] = useState(24);
+  const controllerRef = useRef<AbortController | null>(null);
+  const elapsed = useElapsedTimer(loading);
 
   const load = useCallback(async (signal?: AbortSignal) => {
+    setCanceled(false);
     setLoading(true);
     setError(null);
     try {
@@ -114,9 +119,15 @@ export function DDL({ connected }: { connected: boolean }) {
   useEffect(() => {
     if (!connected) return;
     const controller = new AbortController();
+    controllerRef.current = controller;
     load(controller.signal);
     return () => controller.abort();
   }, [load, connected]);
+
+  const cancel = useCallback(() => {
+    setCanceled(true);
+    controllerRef.current?.abort();
+  }, []);
 
   if (!connected) return <NotConnectedState />;
 
@@ -138,10 +149,13 @@ export function DDL({ connected }: { connected: boolean }) {
         title="DDL"
         description="Distributed DDL queue and recent schema operations"
         actions={
-          <Button variant="secondary" size="md" onClick={() => load()} disabled={loading}>
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <>
+            {loading && data && <RefreshIndicator elapsed={elapsed} />}
+            <Button variant="secondary" size="md" onClick={() => load()} disabled={loading}>
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </>
         }
       />
 
@@ -169,7 +183,7 @@ export function DDL({ connected }: { connected: boolean }) {
           title={data.partial_errors.map((t) => `${t}: ${data.partial_error_details?.[t] ?? ""}`).join("\n")}
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
-          <span>Some sections are unavailable — your ClickHouse user may lack access to: {data.partial_errors.join(", ")}. Hover for details.</span>
+          <span>Some sections are unavailable ({data.partial_errors.join(", ")}). Hover for details.</span>
         </div>
       )}
 
@@ -182,7 +196,10 @@ export function DDL({ connected }: { connected: boolean }) {
           </div>
           <Card className="p-4"><TableSkeleton rows={6} cols={7} /></Card>
           <Card className="p-4"><TableSkeleton rows={6} cols={6} /></Card>
+          <LoadingNotice elapsed={elapsed} onCancel={cancel} />
         </>
+      ) : canceled && !data ? (
+        <LoadingNotice canceled onRetry={() => load()} />
       ) : data ? (
         <>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">

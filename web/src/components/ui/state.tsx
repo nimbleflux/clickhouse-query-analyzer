@@ -178,3 +178,66 @@ export function NotConnectedState() {
     </PageContainer>
   );
 }
+
+/**
+ * Inline "Refreshing…" pill for page headers. Shown over stale data while a
+ * refresh is in flight, so a slow refresh doesn't look frozen. Elapsed seconds
+ * appear only after `showAfter` so quick refreshes don't flash a number.
+ */
+export function RefreshIndicator({ elapsed, showAfter = 3 }: { elapsed: number; showAfter?: number }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--surface-card)] px-2 py-1 text-xs text-[var(--color-text-secondary)]">
+      <RefreshCw className="h-3 w-3 animate-spin" />
+      Refreshing{elapsed > showAfter ? `… ${elapsed}s` : "…"}
+    </span>
+  );
+}
+
+interface LoadingNoticeProps {
+  /** Elapsed seconds from useElapsedTimer. Not used in the canceled state. */
+  elapsed?: number;
+  /** Shown during the initial load; aborts the in-flight request. */
+  onCancel?: () => void;
+  /** When true, renders the post-cancel "Load canceled. [Retry]" state. */
+  canceled?: boolean;
+  /** Retry callback, shown only in the canceled state. */
+  onRetry?: () => void;
+  /** Seconds before the "large clusters can be slow" hint appears. */
+  slowAt?: number;
+}
+
+/**
+ * Block placed under a skeleton on initial load: a ticking "Loading… Ns"
+ * counter with Cancel, and after `slowAt` seconds a hint that large clusters
+ * can be slow. Also renders the post-cancel "Load canceled. [Retry]" state via
+ * `canceled`.
+ */
+export function LoadingNotice({ elapsed = 0, onCancel, canceled, onRetry, slowAt = 8 }: LoadingNoticeProps) {
+  if (canceled) {
+    return (
+      <div className="mt-3 flex items-center justify-center gap-2 text-xs text-[var(--color-text-secondary)]">
+        <span>Load canceled.</span>
+        {onRetry && (
+          <Button variant="ghost" size="sm" onClick={onRetry}>
+            <RefreshCw className="h-3 w-3" />
+            Retry
+          </Button>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-3 flex flex-col items-center gap-1 text-xs text-[var(--color-text-secondary)]">
+      <div className="flex items-center gap-2">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        <span>Loading{elapsed > 0 ? `… ${elapsed}s` : "…"}</span>
+        {onCancel && (
+          <Button variant="ghost" size="sm" onClick={onCancel} className="h-6 px-2 text-xs">
+            Cancel
+          </Button>
+        )}
+      </div>
+      {elapsed > slowAt && <span className="opacity-80">Large clusters can be slow.</span>}
+    </div>
+  );
+}
