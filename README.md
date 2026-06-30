@@ -7,6 +7,9 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 - **System Dashboard** — Overview of uptime, active queries/merges/parts, database sizes, top tables by size and part count, system metrics and events. Replica status and replication queue for clusters.
 - **Replication** — Dedicated monitoring of `system.replicas`, `system.replication_queue`, pending `system.mutations`, and Keeper session health, with summary stat cards, 24h activity charts from `system.metric_log`, action-item badges, filters (database / errors-only / executing), and opt-in live auto-refresh.
 - **DDL** — Distributed DDL queue (`system.distributed_ddl_queue`) and recent schema operations from `system.query_log`, surfacing stuck/failed `ON CLUSTER` DDL at a glance, with a configurable timeframe and ops-over-time chart.
+- **Mutations** — Active `system.mutations` (`ALTER … UPDATE/DELETE/TTL` data rewrites) with parts-to-do, age, and failure detail, plus `KILL MUTATION`.
+- **Merges** — In-progress part merges (`system.merges`) with progress, bytes, and elapsed; opt-in live auto-refresh.
+- **System Metrics** — Searchable, categorized asynchronous gauges (`system.asynchronous_metrics`) with a per-node view on clusters.
 - **Query List** — Browse, filter, sort, and paginate through `system.query_log` including failed queries
 - **Query Detail** — Overview with RAM/CPU/IO time-series charts, top ProfileEvents, thread breakdown with role inference, memory analysis, storage I/O stats, and settings
 - **Flame Graphs** — Canvas-based flame graphs from `system.trace_log` (Memory/MemorySample/MemoryPeak/CPU/Real) with auto-detection of available trace types
@@ -18,6 +21,7 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 - **Saved Queries** — Save, load, search, import, and export queries. Saved queries are stored in browser localStorage and organized in an accordion sidebar panel.
 - **Parameterized Queries** — Use `{{param_name}}` syntax in any query to define parameters. Parameter input fields appear automatically in the sidebar. Values are substituted at execution time. Escape with `\{{` for literal `{{`.
 - **Query Comparison** — Side-by-side diff of two queries including ProfileEvents metrics
+- **Users & Access** — Browse users, roles, grants, and quota usage (`system.users`/`roles`/`grants`/`quotas`/`quota_usage`); read-only plus permission-gated manage actions (DROP USER/ROLE, REVOKE).
 - **Cluster Support** — Auto-detects `system.clusters`, uses `clusterAllReplicas`
 - **Table Optimizer** — Analyze single tables, entire databases, or all databases for ClickHouse optimization opportunities including LowCardinality, integer right-sizing, Nullable removal, ORDER BY/PARTITION BY suggestions, skipping indices, codec recommendations, and table health checks. Generates copy-ready ALTER TABLE DDL. Bulk analysis streams results in real-time via SSE.
 
@@ -41,6 +45,9 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 ### DDL
 ![DDL](docs/screenshot-ddl.png)
 
+### Merges
+![Merges](docs/screenshot-merges.png)
+
 ### SQL Editor
 ![SQL Editor](docs/screenshot-editor.png)
 
@@ -49,6 +56,9 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 
 ### Table Optimizer
 ![Table Optimizer](docs/screenshot-table-optimizer.png)
+
+### Users & Access
+![Users & Access](docs/screenshot-users.png)
 
 ## Quick Start
 
