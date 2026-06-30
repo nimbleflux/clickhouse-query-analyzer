@@ -371,15 +371,16 @@ export interface AccessOverview {
 }
 
 export interface AsyncMetric {
+  host: string;
   metric: string;
   value: number;
   description: string;
 }
 
 export interface AsyncMetricsOverview {
-  host_name: string;
   is_cluster: boolean;
   cluster: string;
+  hosts: string[];
   metrics: AsyncMetric[];
 }
 

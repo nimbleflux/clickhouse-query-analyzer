@@ -56,7 +56,8 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
   const [canceled, setCanceled] = useState(false);
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState("");
-  const [host, setHost] = useState("");
+  const [hosts, setHosts] = useState<string[]>([]);
+  const [host, setHost] = useState(""); // "" = all nodes
   const controllerRef = useRef<AbortController | null>(null);
   const elapsed = useElapsedTimer(loading);
 
@@ -69,7 +70,7 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
     try {
       const res = await fetchAsyncMetrics(controller.signal);
       setMetrics(res.metrics);
-      setHost(res.host_name);
+      setHosts(res.hosts || []);
     } catch (e) {
       if (e instanceof ApiError && e.isAbort()) return;
       if (e instanceof DOMException && e.name === "AbortError") return;
@@ -90,13 +91,14 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
 
   const filtered = useMemo(() => {
     let out = metrics;
+    if (host) out = out.filter((m) => m.host === host);
     if (cat) out = out.filter((m) => category(m.metric) === cat);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       out = out.filter((m) => m.metric.toLowerCase().includes(q) || m.description.toLowerCase().includes(q));
     }
     return out;
-  }, [metrics, cat, search]);
+  }, [metrics, host, cat, search]);
 
   if (!connected) return <NotConnectedState />;
   if (error && metrics.length === 0) return <PageContainer><ErrorState error={error} onRetry={load} /></PageContainer>;
@@ -109,10 +111,10 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
         description="Live asynchronous gauges (system.asynchronous_metrics)"
         actions={
           <>
-            {host && (
-              <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--surface-card)] px-2.5 py-1.5 text-xs text-[var(--color-text-secondary)]" title="Per-node gauges are queried from the connected node">
+            {hosts.length > 0 && (
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--surface-card)] px-2.5 py-1.5 text-xs text-[var(--color-text-secondary)]" title={hosts.length > 1 ? `Cluster nodes: ${hosts.join(", ")}` : "Connected node"}>
                 <span className="inline-block h-2 w-2 rounded-full bg-[var(--color-accent)]" />
-                node: <span className="font-mono text-[var(--color-text-primary)]">{host}</span>
+                {hosts.length > 1 ? `${hosts.length} nodes` : `node: ${hosts[0]}`}
               </span>
             )}
             {loading && metrics.length > 0 && <RefreshIndicator elapsed={elapsed} />}
@@ -140,6 +142,12 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-secondary)]" />
               <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter metrics by name or description…" className="pl-9" />
             </div>
+            {hosts.length > 1 && (
+              <Select value={host} onChange={(e) => setHost(e.target.value)} className="w-44" title="Filter to a single node">
+                <option value="">All nodes ({hosts.length})</option>
+                {hosts.map((h) => <option key={h} value={h}>{h}</option>)}
+              </Select>
+            )}
             <Select value={cat} onChange={(e) => setCat(e.target.value)} className="w-40">
               {categories.map((c) => <option key={c} value={c}>{c === "" ? "All categories" : c}</option>)}
             </Select>
@@ -154,6 +162,9 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
                 <table className="w-full text-sm">
                   <thead className="sticky top-0">
                     <tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
+                      {hosts.length > 1 && (
+                        <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Node</th>
+                      )}
                       <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Metric</th>
                       <th className="px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]">Value</th>
                       <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Description</th>
@@ -161,7 +172,10 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
                   </thead>
                   <tbody>
                     {filtered.slice(0, 1000).map((m) => (
-                      <tr key={m.metric} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)]">
+                      <tr key={`${m.host}-${m.metric}`} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)]">
+                        {hosts.length > 1 && (
+                          <td className="whitespace-nowrap px-4 py-2 font-mono text-xs text-[var(--color-text-secondary)]">{m.host}</td>
+                        )}
                         <td className="whitespace-nowrap px-4 py-2 font-mono text-xs text-[var(--color-text-primary)]">{m.metric}</td>
                         <td className="whitespace-nowrap px-4 py-2 text-right font-mono text-xs text-[var(--color-text-secondary)]">{formatValue(m.metric, m.value)}</td>
                         <td className="max-w-md truncate px-4 py-2 text-xs text-[var(--color-text-secondary)]" title={m.description}>{m.description || "-"}</td>
