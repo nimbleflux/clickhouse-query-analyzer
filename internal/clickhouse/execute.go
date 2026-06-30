@@ -378,3 +378,14 @@ func isProbablyJSON(s string) bool {
 	s = strings.TrimSpace(s)
 	return len(s) > 0 && (s[0] == '{' || s[0] == '[')
 }
+
+// GetTableDDL returns the SHOW CREATE statement for a table. Identifiers are
+// quoted (they come from system tables but may be reserved words).
+func (c *Client) GetTableDDL(ctx context.Context, database, table string) (string, error) {
+	var stmt string
+	q := fmt.Sprintf("SHOW CREATE TABLE %s.%s", quoteIdent(database), quoteIdent(table))
+	if err := c.conn.QueryRow(ctx, q).Scan(&stmt); err != nil {
+		return "", fmt.Errorf("show create %s.%s: %w", database, table, err)
+	}
+	return stmt, nil
+}

@@ -768,6 +768,26 @@ func (a *API) RevokeGrant(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (a *API) GetTableDDL(w http.ResponseWriter, r *http.Request) {
+	db := chi.URLParam(r, "db")
+	table := chi.URLParam(r, "table")
+	if db == "" || table == "" {
+		MissingParam(w, "db, table")
+		return
+	}
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	stmt, err := ch.GetTableDDL(r.Context(), db, table)
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"statement": stmt})
+}
+
 func (a *API) ListAsyncMetrics(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {

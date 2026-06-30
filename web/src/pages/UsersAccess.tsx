@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { RefreshCw, Users, KeyRound, ShieldAlert, Trash2, BadgeCheck, AlertTriangle } from "lucide-react";
 import { fetchAccess, dropUser, dropRole, revokeGrant } from "../api/client";
-import type { AccessOverview, UserRow, RoleRow, GrantRow } from "../api/types";
+import type { AccessOverview, UserRow, RoleRow, GrantRow, QuotaUsageRow } from "../api/types";
 import { ApiError } from "../api/errors";
 import { useToast } from "../components/Toast";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { ConfirmDialog } from "@/components/ui/dialog";
+import { Pagination } from "@/components/ui/Pagination";
 import { formatBytes, formatNumber } from "../utils";
 
 type Tab = "users" | "grants" | "quota";
@@ -22,7 +23,10 @@ export function UsersAccess({ connected }: { connected: boolean }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
   const [canceled, setCanceled] = useState(false);
-  const [tab, setTab] = useState<Tab>("users");
+  const [tab, setTabRaw] = useState<Tab>("users");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const setTab = (t: Tab) => { setTabRaw(t); setPage(1); };
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<GrantRow | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
@@ -151,9 +155,24 @@ export function UsersAccess({ connected }: { connected: boolean }) {
             ))}
           </div>
 
-          {tab === "users" && <UsersRolesTab data={data} canManage={canManage} onDrop={setDropTarget} />}
-          {tab === "grants" && <GrantsTab data={data} canManage={canManage} onRevoke={setRevokeTarget} />}
-          {tab === "quota" && <QuotaTab data={data} />}
+          {(() => {
+            // Paginate the active tab client-side. Users paginates the users
+            // list (roles are usually few and render fully after).
+            const listLen = tab === "users" ? data.users.length : tab === "grants" ? data.grants.length : data.quota_usage.length;
+            const totalPages = Math.max(1, Math.ceil(listLen / pageSize));
+            const safePage = Math.min(page, totalPages);
+            const start = (safePage - 1) * pageSize;
+            return (
+            <>
+              {tab === "users" && <UsersRolesTab users={data.users.slice(start, start + pageSize)} roles={data.roles} canManage={canManage} onDrop={setDropTarget} />}
+              {tab === "grants" && <GrantsTab grants={data.grants.slice(start, start + pageSize)} canManage={canManage} onRevoke={setRevokeTarget} />}
+              {tab === "quota" && <QuotaTab rows={data.quota_usage.slice(start, start + pageSize)} />}
+              {listLen > pageSize && (
+                <Pagination page={safePage} pageSize={pageSize} total={listLen} onPage={setPage} onPageSize={(s) => { setPageSize(s); setPage(1); }} />
+              )}
+            </>
+            );
+          })()}
 
           <ConfirmDialog
             open={!!dropTarget}
@@ -183,8 +202,8 @@ export function UsersAccess({ connected }: { connected: boolean }) {
   );
 }
 
-function UsersRolesTab({ data, canManage, onDrop }: { data: AccessOverview; canManage: boolean; onDrop: (t: DropTarget) => void }) {
-  if (data.users.length === 0 && data.roles.length === 0) {
+function UsersRolesTab({ users, roles, canManage, onDrop }: { users: UserRow[]; roles: RoleRow[]; canManage: boolean; onDrop: (t: DropTarget) => void }) {
+  if (users.length === 0 && roles.length === 0) {
     return <EmptyState icon={Users} title="No users or roles visible" description="Your user may lack SELECT on system.users / system.roles." />;
   }
   return (
@@ -198,7 +217,7 @@ function UsersRolesTab({ data, canManage, onDrop }: { data: AccessOverview; canM
             <th className="px-4 py-2.5" />
           </tr></thead>
           <tbody>
-            {data.users.map((u: UserRow) => (
+            {users.map((u: UserRow) => (
               <tr key={u.name} className="border-b border-[var(--color-border)] last:border-0">
                 <td className="whitespace-nowrap px-4 py-3">
                   <div className="flex items-center gap-1.5 font-mono text-xs text-[var(--color-text-primary)]">
@@ -217,7 +236,7 @@ function UsersRolesTab({ data, canManage, onDrop }: { data: AccessOverview; canM
                 </td>
               </tr>
             ))}
-            {data.roles.map((r: RoleRow) => (
+            {roles.map((r: RoleRow) => (
               <tr key={`role-${r.name}`} className="border-b border-[var(--color-border)] last:border-0">
                 <td className="whitespace-nowrap px-4 py-3">
                   <div className="flex items-center gap-1.5 font-mono text-xs text-[var(--color-text-primary)]">
@@ -243,8 +262,8 @@ function UsersRolesTab({ data, canManage, onDrop }: { data: AccessOverview; canM
   );
 }
 
-function GrantsTab({ data, canManage, onRevoke }: { data: AccessOverview; canManage: boolean; onRevoke: (g: GrantRow) => void }) {
-  if (data.grants.length === 0) return <EmptyState icon={KeyRound} title="No grants visible" description="Your user may lack SELECT on system.grants." />;
+function GrantsTab({ grants, canManage, onRevoke }: { grants: GrantRow[]; canManage: boolean; onRevoke: (g: GrantRow) => void }) {
+  if (grants.length === 0) return <EmptyState icon={KeyRound} title="No grants visible" description="Your user may lack SELECT on system.grants." />;
   return (
     <Card className="overflow-hidden">
       <table className="w-full text-sm">
@@ -256,7 +275,7 @@ function GrantsTab({ data, canManage, onRevoke }: { data: AccessOverview; canMan
           <th className="px-4 py-2.5" />
         </tr></thead>
         <tbody>
-          {data.grants.map((g, i) => (
+          {grants.map((g, i) => (
             <tr key={`${g.user_name || g.role_name}-${g.access_type}-${g.database}-${g.table}-${i}`} className="border-b border-[var(--color-border)] last:border-0">
               <td className="whitespace-nowrap px-4 py-3 font-mono text-xs">
                 <div className="flex items-center gap-1.5">
@@ -289,8 +308,8 @@ function GrantsTab({ data, canManage, onRevoke }: { data: AccessOverview; canMan
   );
 }
 
-function QuotaTab({ data }: { data: AccessOverview }) {
-  if (data.quota_usage.length === 0) return <EmptyState icon={KeyRound} title="No quota usage" description="No quotas configured or visible." />;
+function QuotaTab({ rows }: { rows: QuotaUsageRow[] }) {
+  if (rows.length === 0) return <EmptyState icon={KeyRound} title="No quota usage" description="No quotas configured or visible." />;
   return (
     <Card className="overflow-hidden">
       <table className="w-full text-sm">
@@ -303,7 +322,7 @@ function QuotaTab({ data }: { data: AccessOverview }) {
           <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Result</th>
         </tr></thead>
         <tbody>
-          {data.quota_usage.map((q, i) => (
+          {rows.map((q, i) => (
             <tr key={`${q.quota_key}-${q.start_time}-${i}`} className="border-b border-[var(--color-border)] last:border-0">
               <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-primary)]">{q.quota_key}</td>
               <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{q.start_time} → {q.end_time}</td>

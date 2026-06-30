@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { FlaskConical, RefreshCw, Search, AlertTriangle, Clock, Layers, Skull } from "lucide-react";
+import { FlaskConical, RefreshCw, Search, AlertTriangle, Clock, Skull } from "lucide-react";
 import { fetchMutations, killMutation } from "../api/client";
 import type { MutationDetail } from "../api/types";
 import { ApiError } from "../api/errors";
@@ -9,10 +9,12 @@ import { TableSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input, Checkbox, Select } from "@/components/ui/input";
+import { Input, Checkbox } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { ConfirmDialog } from "@/components/ui/dialog";
+import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
+import { TableName } from "@/components/TableName";
 import { formatDuration, formatNumber } from "../utils";
 
 function StatCard({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "warning" | "error" }) {
@@ -163,13 +165,17 @@ export function Mutations({ connected }: { connected: boolean }) {
               />
             </div>
             <Checkbox checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} label="Failed only" />
-            <Select value={minAge} onChange={(e) => setMinAge(Number(e.target.value))} className="w-32">
-              <option value={0}>Any age</option>
-              <option value={60}>&gt; 1m</option>
-              <option value={3600}>&gt; 1h</option>
-              <option value={21600}>&gt; 6h</option>
-              <option value={86400}>&gt; 24h</option>
-            </Select>
+            <TimeframeSelector
+              options={[
+                { label: "All", value: 0 },
+                { label: ">1m", value: 60 },
+                { label: ">1h", value: 3600 },
+                { label: ">6h", value: 21600 },
+                { label: ">24h", value: 86400 },
+              ]}
+              value={minAge}
+              onChange={setMinAge}
+            />
           </div>
 
           {filtered.length === 0 ? (
@@ -199,10 +205,7 @@ export function Mutations({ connected }: { connected: boolean }) {
                       return (
                         <tr key={key} className="border-b border-[var(--color-border)] last:border-0">
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-primary)]">
-                            <div className="flex items-center gap-1.5">
-                              <Layers className="h-3 w-3 shrink-0 text-[var(--color-text-secondary)]" />
-                              {m.database}.{m.table}
-                            </div>
+                            <TableName database={m.database} table={m.table} />
                           </td>
                           <td className="max-w-md truncate px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]" title={m.command}>
                             {m.command}

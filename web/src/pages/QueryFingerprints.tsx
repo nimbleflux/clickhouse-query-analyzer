@@ -11,6 +11,7 @@ import { Input, Checkbox } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 
 const DATE_PRESETS: { label: string; hours: number }[] = [
   { label: "Last 1h", hours: 1 },
@@ -132,7 +133,11 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
     setCurrentPage(1);
   };
 
+  // Which quick-range preset is active (null = a custom From/To range is set).
+  const [preset, setPreset] = useState<number | null>(24);
+
   const applyDatePreset = (hours: number) => {
+    setPreset(hours);
     setCachedTotal(null);
     if (hours === 0) {
       setFromTime("");
@@ -183,11 +188,11 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
         <Card className="p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <span className="mr-1 self-center text-xs text-[var(--color-text-secondary)]">Quick range:</span>
-            {DATE_PRESETS.map((p) => (
-              <Button key={p.hours} variant="outline" size="sm" onClick={() => applyDatePreset(p.hours)}>
-                {p.label}
-              </Button>
-            ))}
+            <TimeframeSelector
+              options={DATE_PRESETS.map((p) => ({ label: p.label, value: p.hours }))}
+              value={preset ?? -1}
+              onChange={applyDatePreset}
+            />
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
             <div className="space-y-1">
@@ -195,7 +200,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
               <Input
                 type="datetime-local"
                 value={fromTime ? fromTime.slice(0, 16) : ""}
-                onChange={(e) => { setFromTime(e.target.value ? toCHDateTime(new Date(e.target.value)) : ""); setCurrentPage(1); }}
+                onChange={(e) => { setPreset(null); setFromTime(e.target.value ? toCHDateTime(new Date(e.target.value)) : ""); setCurrentPage(1); }}
                 className="w-full"
               />
             </div>
@@ -204,7 +209,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
               <Input
                 type="datetime-local"
                 value={toTime ? toTime.slice(0, 16) : ""}
-                onChange={(e) => { setToTime(e.target.value ? toCHDateTime(new Date(e.target.value)) : ""); setCurrentPage(1); }}
+                onChange={(e) => { setPreset(null); setToTime(e.target.value ? toCHDateTime(new Date(e.target.value)) : ""); setCurrentPage(1); }}
                 className="w-full"
               />
             </div>
