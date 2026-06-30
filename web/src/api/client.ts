@@ -14,6 +14,10 @@ import type {
   TableAnalysis,
   BulkEvent,
   ProcessEntry,
+  MutationDetail,
+  MergeDetail,
+  AccessOverview,
+  AsyncMetricsOverview,
   FingerprintListResponse,
   DashboardData,
   TrendPoint,
@@ -243,6 +247,52 @@ export async function killProcess(queryId: string, signal?: AbortSignal): Promis
 
 export async function killProcessesByUser(user: string, signal?: AbortSignal): Promise<{ status: string; killed: number; user: string }> {
   return fetchJSON<{ status: string; killed: number; user: string }>(`${BASE}/processes/kill-by-user?user=${encodeURIComponent(user)}`, { method: "POST", signal });
+}
+
+export async function fetchMutations(signal?: AbortSignal): Promise<MutationDetail[]> {
+  return fetchJSON<MutationDetail[]>(`${BASE}/mutations`, { signal });
+}
+
+export async function killMutation(database: string, table: string, mutationId: string, signal?: AbortSignal): Promise<{ status: string }> {
+  return fetchJSON<{ status: string }>(`${BASE}/mutations/kill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ database, table, mutation_id: mutationId }),
+    signal,
+  });
+}
+
+export async function fetchMerges(signal?: AbortSignal): Promise<MergeDetail[]> {
+  return fetchJSON<MergeDetail[]>(`${BASE}/merges`, { signal });
+}
+
+export async function fetchAccess(signal?: AbortSignal): Promise<AccessOverview> {
+  return fetchJSON<AccessOverview>(`${BASE}/access`, { signal });
+}
+
+export async function dropUser(name: string, signal?: AbortSignal): Promise<{ status: string }> {
+  return fetchJSON<{ status: string }>(`${BASE}/access/users/${encodeURIComponent(name)}/drop`, { method: "POST", signal });
+}
+
+export async function dropRole(name: string, signal?: AbortSignal): Promise<{ status: string }> {
+  return fetchJSON<{ status: string }>(`${BASE}/access/roles/${encodeURIComponent(name)}/drop`, { method: "POST", signal });
+}
+
+export async function revokeGrant(
+  granteeKind: string, grantee: string, accessType: string,
+  database: string, table: string, column: string, grantOption: boolean,
+  signal?: AbortSignal,
+): Promise<{ status: string }> {
+  return fetchJSON<{ status: string }>(`${BASE}/access/grants/revoke`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ grantee_kind: granteeKind, grantee, access_type: accessType, database, table, column, grant_option: grantOption }),
+    signal,
+  });
+}
+
+export async function fetchAsyncMetrics(signal?: AbortSignal): Promise<AsyncMetricsOverview> {
+  return fetchJSON<AsyncMetricsOverview>(`${BASE}/system-metrics`, { signal });
 }
 
 export async function fetchFingerprints(params: Partial<QueryListParams>, signal?: AbortSignal): Promise<FingerprintListResponse> {

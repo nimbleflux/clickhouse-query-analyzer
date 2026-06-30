@@ -108,6 +108,14 @@ func apiRoutes(api *API) http.Handler {
 	r.Get("/dashboard", api.GetDashboard)
 	r.Get("/replication", api.GetReplication)
 	r.Get("/ddl", api.GetDDL)
+	r.Get("/mutations", api.ListMutations)
+	r.Post("/mutations/kill", api.KillMutationHandler)
+	r.Get("/merges", api.ListMerges)
+	r.Get("/access", api.GetAccess)
+	r.Post("/access/users/{user}/drop", api.DropUser)
+	r.Post("/access/roles/{role}/drop", api.DropRole)
+	r.Post("/access/grants/revoke", api.RevokeGrant)
+	r.Get("/system-metrics", api.ListAsyncMetrics)
 
 	return r
 }

@@ -15,6 +15,10 @@ import { FingerprintDetail } from "./pages/FingerprintDetail";
 import { Dashboard } from "./pages/Dashboard";
 import { Replication } from "./pages/Replication";
 import { DDL } from "./pages/DDL";
+import { Mutations } from "./pages/Mutations";
+import { Merges } from "./pages/Merges";
+import { UsersAccess } from "./pages/UsersAccess";
+import { SystemMetrics } from "./pages/SystemMetrics";
 import { loadConnection, saveConnection, setConnectionHeaders, clearConnectionHeaders, DEFAULT_CONNECTION } from "./api/connection";
 import type { ConnectionParams } from "./api/connection";
 import { testConnection, fetchServerConfig } from "./api/client";
@@ -119,6 +123,10 @@ function App() {
             <Route path="/fingerprints/:hash" element={<FingerprintDetail connected={connected} />} />
             <Route path="/replication" element={<Replication connected={connected} />} />
             <Route path="/ddl" element={<DDL connected={connected} />} />
+            <Route path="/mutations" element={<Mutations connected={connected} />} />
+            <Route path="/merges" element={<Merges connected={connected} />} />
+            <Route path="/access" element={<UsersAccess connected={connected} />} />
+            <Route path="/system-metrics" element={<SystemMetrics connected={connected} />} />
           </Route>
         </Routes>
       </BrowserRouter>
