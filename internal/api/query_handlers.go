@@ -625,3 +625,159 @@ func (a *API) GetDashboard(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, dashboard)
 }
+
+func (a *API) ListMutations(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+
+	mutations, err := ch.ListMutations(r.Context())
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, mutations)
+}
+
+func (a *API) KillMutationHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Database   string `json:"database"`
+		Table      string `json:"table"`
+		MutationID string `json:"mutation_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		InvalidBody(w, "")
+		return
+	}
+	if req.Database == "" || req.Table == "" || req.MutationID == "" {
+		MissingParam(w, "database, table, mutation_id")
+		return
+	}
+
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+
+	if err := ch.KillMutation(r.Context(), req.Database, req.Table, req.MutationID); err != nil {
+		respondErr(w, err, false)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (a *API) ListMerges(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	merges, err := ch.ListMerges(r.Context())
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, merges)
+}
+
+func (a *API) GetAccess(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	access, err := ch.GetAccess(r.Context())
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, access)
+}
+
+func (a *API) DropUser(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "user")
+	if name == "" {
+		MissingParam(w, "user")
+		return
+	}
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	if err := ch.DropUser(r.Context(), name); err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (a *API) DropRole(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "role")
+	if name == "" {
+		MissingParam(w, "role")
+		return
+	}
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	if err := ch.DropRole(r.Context(), name); err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (a *API) RevokeGrant(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		GranteeKind string `json:"grantee_kind"` // "user" | "role"
+		Grantee     string `json:"grantee"`
+		AccessType  string `json:"access_type"`
+		Database    string `json:"database"`
+		Table       string `json:"table"`
+		Column      string `json:"column"`
+		GrantOption bool   `json:"grant_option"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		InvalidBody(w, "")
+		return
+	}
+	if req.Grantee == "" || req.AccessType == "" {
+		MissingParam(w, "grantee, access_type")
+		return
+	}
+	if req.GranteeKind == "" {
+		req.GranteeKind = "user"
+	}
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	if err := ch.RevokeGrant(r.Context(), req.GranteeKind, req.Grantee, req.AccessType, req.Database, req.Table, req.Column, req.GrantOption); err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (a *API) ListAsyncMetrics(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	metrics, err := ch.ListAsyncMetrics(r.Context())
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, metrics)
+}

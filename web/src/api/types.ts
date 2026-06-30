@@ -289,6 +289,93 @@ export interface ProcessEntry {
   initial_query_id: string;
 }
 
+export interface MutationDetail {
+  database: string;
+  table: string;
+  mutation_id: string;
+  command: string;
+  create_time: string;
+  age_seconds: number;
+  parts_to_do: number;
+  is_done: number;
+  is_killed: number;
+  latest_failed_part: string;
+  latest_fail_time: string;
+  latest_fail_reason: string;
+  latest_fail_error_code_name: string;
+}
+
+export interface MergeDetail {
+  database: string;
+  table: string;
+  elapsed: number;
+  progress: number;
+  num_parts: number;
+  result_part_name: string;
+  total_size_bytes_compressed: number;
+  rows_read: number;
+  memory_usage: number;
+  merge_type: string;
+  merge_algorithm: string;
+  is_mutation: number;
+}
+
+export interface UserRow {
+  name: string;
+  storage: string;
+  auth_type: string[] | null;
+  default_roles: string[] | null;
+  default_database: string;
+}
+
+export interface RoleRow {
+  name: string;
+  storage: string;
+}
+
+export interface GrantRow {
+  user_name: string;
+  role_name: string;
+  access_type: string;
+  database: string;
+  table: string;
+  column: string;
+  is_partial_revoke: number;
+  grant_option: number;
+}
+
+export interface QuotaUsageRow {
+  quota_key: string;
+  start_time: string;
+  end_time: string;
+  duration: number;
+  queries: number;
+  max_queries: number;
+  errors: number;
+  result_rows: number;
+  result_bytes: number;
+  read_rows: number;
+  read_bytes: number;
+  execution_time: number;
+}
+
+export interface AccessOverview {
+  current_user: string;
+  can_manage_access: boolean;
+  users: UserRow[];
+  roles: RoleRow[];
+  grants: GrantRow[];
+  quota_usage: QuotaUsageRow[];
+  partial_errors: string[];
+  partial_error_details?: Record<string, string>;
+}
+
+export interface AsyncMetric {
+  metric: string;
+  value: number;
+  description: string;
+}
+
 export interface QueryFingerprint {
   normalized_query_hash: string;
   sample_query: string;
