@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { RefreshCw, Search, Layers, GitMerge, HardDrive, Clock } from "lucide-react";
+import { RefreshCw, Search, Layers, GitMerge, HardDrive, Clock, Pause, Play } from "lucide-react";
 import { fetchMerges } from "../api/client";
 import type { MergeDetail } from "../api/types";
 import { ApiError } from "../api/errors";
@@ -8,7 +8,7 @@ import { TableSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Input, Select } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { formatBytes, formatDuration, formatNumber } from "../utils";
@@ -30,6 +30,10 @@ export function Merges({ connected }: { connected: boolean }) {
   const [error, setError] = useState<ApiError | null>(null);
   const [canceled, setCanceled] = useState(false);
   const [search, setSearch] = useState("");
+  const [minElapsed, setMinElapsed] = useState(0); // seconds; 0 = all
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(5);
+  const intervalRef = useRef<ReturnType<typeof setInterval>>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const elapsed = useElapsedTimer(loading);
 
@@ -52,13 +56,23 @@ export function Merges({ connected }: { connected: boolean }) {
 
   useEffect(() => { if (connected) load(); }, [load, connected]);
 
+  useEffect(() => {
+    if (!connected || !autoRefresh) return;
+    intervalRef.current = setInterval(load, refreshInterval * 1000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [autoRefresh, refreshInterval, load, connected]);
+
   const cancel = useCallback(() => { setCanceled(true); controllerRef.current?.abort(); setLoading(false); }, []);
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return merges;
-    const q = search.trim().toLowerCase();
-    return merges.filter((m) => `${m.database}.${m.table}`.toLowerCase().includes(q) || m.result_part_name.toLowerCase().includes(q));
-  }, [merges, search]);
+    let out = merges;
+    if (minElapsed > 0) out = out.filter((m) => m.elapsed >= minElapsed);
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      out = out.filter((m) => `${m.database}.${m.table}`.toLowerCase().includes(q) || m.result_part_name.toLowerCase().includes(q));
+    }
+    return out;
+  }, [merges, minElapsed, search]);
 
   const stats = useMemo(() => {
     let bytes = 0, slowest = 0, mutations = 0;
@@ -82,6 +96,20 @@ export function Merges({ connected }: { connected: boolean }) {
         actions={
           <>
             {loading && merges.length > 0 && <RefreshIndicator elapsed={elapsed} />}
+            <Select
+              value={refreshInterval}
+              onChange={(e) => setRefreshInterval(Number(e.target.value))}
+              disabled={!autoRefresh}
+              className={!autoRefresh ? "opacity-50" : ""}
+            >
+              <option value={5}>5s</option>
+              <option value={10}>10s</option>
+              <option value={30}>30s</option>
+            </Select>
+            <Button variant={autoRefresh ? "primary" : "secondary"} size="md" onClick={() => setAutoRefresh(!autoRefresh)}>
+              {autoRefresh ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+              Live
+            </Button>
             <Button variant="secondary" size="md" onClick={load} disabled={loading}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               Refresh
@@ -113,6 +141,12 @@ export function Merges({ connected }: { connected: boolean }) {
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-secondary)]" />
               <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter by table or result part…" className="pl-9" />
             </div>
+            <Select value={minElapsed} onChange={(e) => setMinElapsed(Number(e.target.value))} className="w-32">
+              <option value={0}>Any elapsed</option>
+              <option value={60}>&gt; 1m</option>
+              <option value={300}>&gt; 5m</option>
+              <option value={900}>&gt; 15m</option>
+            </Select>
           </div>
 
           {filtered.length === 0 ? (

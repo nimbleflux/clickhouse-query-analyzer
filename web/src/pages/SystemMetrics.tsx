@@ -56,6 +56,7 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
   const [canceled, setCanceled] = useState(false);
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState("");
+  const [host, setHost] = useState("");
   const controllerRef = useRef<AbortController | null>(null);
   const elapsed = useElapsedTimer(loading);
 
@@ -66,7 +67,9 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
     const controller = new AbortController();
     controllerRef.current = controller;
     try {
-      setMetrics(await fetchAsyncMetrics(controller.signal));
+      const res = await fetchAsyncMetrics(controller.signal);
+      setMetrics(res.metrics);
+      setHost(res.host_name);
     } catch (e) {
       if (e instanceof ApiError && e.isAbort()) return;
       if (e instanceof DOMException && e.name === "AbortError") return;
@@ -106,6 +109,12 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
         description="Live asynchronous gauges (system.asynchronous_metrics)"
         actions={
           <>
+            {host && (
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--surface-card)] px-2.5 py-1.5 text-xs text-[var(--color-text-secondary)]" title="Per-node gauges are queried from the connected node">
+                <span className="inline-block h-2 w-2 rounded-full bg-[var(--color-accent)]" />
+                node: <span className="font-mono text-[var(--color-text-primary)]">{host}</span>
+              </span>
+            )}
             {loading && metrics.length > 0 && <RefreshIndicator elapsed={elapsed} />}
             <Button variant="secondary" size="md" onClick={load} disabled={loading}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />

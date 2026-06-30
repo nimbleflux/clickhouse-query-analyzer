@@ -376,6 +376,13 @@ export interface AsyncMetric {
   description: string;
 }
 
+export interface AsyncMetricsOverview {
+  host_name: string;
+  is_cluster: boolean;
+  cluster: string;
+  metrics: AsyncMetric[];
+}
+
 export interface QueryFingerprint {
   normalized_query_hash: string;
   sample_query: string;

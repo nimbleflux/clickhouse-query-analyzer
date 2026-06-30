@@ -17,7 +17,7 @@ import type {
   MutationDetail,
   MergeDetail,
   AccessOverview,
-  AsyncMetric,
+  AsyncMetricsOverview,
   FingerprintListResponse,
   DashboardData,
   TrendPoint,
@@ -291,8 +291,8 @@ export async function revokeGrant(
   });
 }
 
-export async function fetchAsyncMetrics(signal?: AbortSignal): Promise<AsyncMetric[]> {
-  return fetchJSON<AsyncMetric[]>(`${BASE}/system-metrics`, { signal });
+export async function fetchAsyncMetrics(signal?: AbortSignal): Promise<AsyncMetricsOverview> {
+  return fetchJSON<AsyncMetricsOverview>(`${BASE}/system-metrics`, { signal });
 }
 
 export async function fetchFingerprints(params: Partial<QueryListParams>, signal?: AbortSignal): Promise<FingerprintListResponse> {

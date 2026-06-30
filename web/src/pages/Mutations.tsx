@@ -9,7 +9,7 @@ import { TableSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input, Checkbox } from "@/components/ui/input";
+import { Input, Checkbox, Select } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { ConfirmDialog } from "@/components/ui/dialog";
@@ -36,6 +36,7 @@ export function Mutations({ connected }: { connected: boolean }) {
   const [killTarget, setKillTarget] = useState<MutationDetail | null>(null);
   const [search, setSearch] = useState("");
   const [errorsOnly, setErrorsOnly] = useState(false);
+  const [minAge, setMinAge] = useState(0); // seconds; 0 = all
   const controllerRef = useRef<AbortController | null>(null);
   const elapsed = useElapsedTimer(loading);
   const { toast } = useToast();
@@ -87,13 +88,14 @@ export function Mutations({ connected }: { connected: boolean }) {
 
   const filtered = useMemo(() => {
     let out = mutations;
+    if (minAge > 0) out = out.filter((m) => m.age_seconds >= minAge);
     if (errorsOnly) out = out.filter((m) => m.latest_fail_reason);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       out = out.filter((m) => `${m.database}.${m.table}`.toLowerCase().includes(q) || m.command.toLowerCase().includes(q));
     }
     return out;
-  }, [mutations, errorsOnly, search]);
+  }, [mutations, minAge, errorsOnly, search]);
 
   const stats = useMemo(() => {
     let failed = 0, killed = 0, oldest = 0;
@@ -161,6 +163,13 @@ export function Mutations({ connected }: { connected: boolean }) {
               />
             </div>
             <Checkbox checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} label="Failed only" />
+            <Select value={minAge} onChange={(e) => setMinAge(Number(e.target.value))} className="w-32">
+              <option value={0}>Any age</option>
+              <option value={60}>&gt; 1m</option>
+              <option value={3600}>&gt; 1h</option>
+              <option value={21600}>&gt; 6h</option>
+              <option value={86400}>&gt; 24h</option>
+            </Select>
           </div>
 
           {filtered.length === 0 ? (

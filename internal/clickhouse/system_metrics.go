@@ -16,10 +16,26 @@ type AsyncMetric struct {
 	Description string  `json:"description"`
 }
 
-func (c *Client) ListAsyncMetrics(ctx context.Context) ([]AsyncMetric, error) {
-	// Local table on purpose: asynchronous_metrics are per-node gauges; a
-	// cluster-wide fan-out would return one row per host per metric and balloon
-	// the payload without a host column to disambiguate.
+// AsyncMetricsOverview wraps the metric rows with the node they belong to.
+// asynchronous_metrics are per-node gauges queried locally (a cluster-wide
+// fan-out would need a host column and balloon the payload), so the page must
+// make clear which node the numbers describe.
+type AsyncMetricsOverview struct {
+	HostName  string        `json:"host_name"`
+	IsCluster bool          `json:"is_cluster"`
+	Cluster   string        `json:"cluster"`
+	Metrics   []AsyncMetric `json:"metrics"`
+}
+
+func (c *Client) ListAsyncMetrics(ctx context.Context) (*AsyncMetricsOverview, error) {
+	out := &AsyncMetricsOverview{IsCluster: c.isCluster, Cluster: c.cluster, Metrics: []AsyncMetric{}}
+
+	// Hostname is informational; ignore failure (older/configured-out setups).
+	var host string
+	if err := c.conn.QueryRow(ctx, "SELECT hostName()").Scan(&host); err == nil {
+		out.HostName = host
+	}
+
 	rows, err := c.conn.Query(ctx,
 		"SELECT metric, value, description FROM system.asynchronous_metrics ORDER BY metric")
 	if err != nil {
@@ -27,16 +43,12 @@ func (c *Client) ListAsyncMetrics(ctx context.Context) ([]AsyncMetric, error) {
 	}
 	defer rows.Close()
 
-	var out []AsyncMetric
 	for rows.Next() {
 		var m AsyncMetric
 		if err := rows.Scan(&m.Metric, &m.Value, &m.Description); err != nil {
 			return nil, fmt.Errorf("scanning asynchronous_metric row: %w", err)
 		}
-		out = append(out, m)
-	}
-	if out == nil {
-		out = []AsyncMetric{}
+		out.Metrics = append(out.Metrics, m)
 	}
 	return out, nil
 }

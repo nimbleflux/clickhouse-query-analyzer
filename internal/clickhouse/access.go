@@ -118,8 +118,8 @@ func (c *Client) queryAccessCapability(ctx context.Context, out *AccessOverview)
 }
 
 func (c *Client) queryUsers(ctx context.Context, out *AccessOverview) {
-	const q = `SELECT name, storage, arrayString(auth_type, ','),
-		arrayString(default_roles_list, ','), default_database
+	const q = `SELECT name, storage, arrayStringConcat(auth_type, ','),
+		arrayStringConcat(default_roles_list, ','), default_database
 		FROM system.users ORDER BY name`
 	rows, err := c.conn.Query(ctx, q)
 	if err != nil {
