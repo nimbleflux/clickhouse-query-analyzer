@@ -177,7 +177,11 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
           )}
         </div>
       )}
-      {result.columns.length > 0 ? (
+      {result.is_text && result.output ? (
+        <pre className="max-h-[60vh] overflow-auto rounded-lg border border-[var(--color-border)] bg-[var(--surface-base)] p-3 font-mono text-xs whitespace-pre text-[var(--color-text-primary)]">
+          {result.output}
+        </pre>
+      ) : result.columns.length > 0 ? (
         <>
           <div className="overflow-auto rounded-lg border border-[var(--color-border)]">
             <table className="w-full text-sm">

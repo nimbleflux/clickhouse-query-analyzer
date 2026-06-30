@@ -186,6 +186,9 @@ export interface QueryResult {
   total_rows: number;
   timing_ms: number;
   query_id: string;
+  /** When true, the query had a FORMAT clause and `output` is its raw text. */
+  is_text?: boolean;
+  output?: string;
 }
 
 export interface OptColumn {
@@ -345,6 +348,7 @@ export interface GrantRow {
 }
 
 export interface QuotaUsageRow {
+  quota_name: string;
   quota_key: string;
   start_time: string;
   end_time: string;
@@ -359,12 +363,22 @@ export interface QuotaUsageRow {
   execution_time: number;
 }
 
+export interface QuotaDef {
+  name: string;
+  keys: string;
+  durations: number[];
+  apply_to_all: number;
+  apply_to_list: string[] | null;
+  apply_to_except: string[] | null;
+}
+
 export interface AccessOverview {
   current_user: string;
   can_manage_access: boolean;
   users: UserRow[];
   roles: RoleRow[];
   grants: GrantRow[];
+  quotas: QuotaDef[];
   quota_usage: QuotaUsageRow[];
   partial_errors: string[];
   partial_error_details?: Record<string, string>;

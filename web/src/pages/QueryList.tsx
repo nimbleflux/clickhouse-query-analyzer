@@ -17,6 +17,7 @@ import { Card } from "@/components/ui/card";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { Badge } from "@/components/ui/badge";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 
 const DATE_PRESETS: { label: string; hours: number }[] = [
   { label: "Last 1h", hours: 1 },
@@ -117,7 +118,11 @@ export function QueryList({ connected }: { connected: boolean }) {
   const currentPage = Math.floor((params.offset || 0) / (params.limit || 50)) + 1;
   const totalKnown = displayTotal > 0;
 
+  // Which quick-range preset is active (null = a custom From/To range is set).
+  const [preset, setPreset] = useState<number | null>(24);
+
   const applyDatePreset = (hours: number) => {
+    setPreset(hours);
     setTotal(0);
     setCachedTotal(null);
     if (hours === 0) {
@@ -184,16 +189,11 @@ export function QueryList({ connected }: { connected: boolean }) {
         <Card className="p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <span className="mr-1 self-center text-xs text-[var(--color-text-secondary)]">Quick range:</span>
-            {DATE_PRESETS.map((p) => (
-              <Button
-                key={p.hours}
-                variant="outline"
-                size="sm"
-                onClick={() => applyDatePreset(p.hours)}
-              >
-                {p.label}
-              </Button>
-            ))}
+            <TimeframeSelector
+              options={DATE_PRESETS.map((p) => ({ label: p.label, value: p.hours }))}
+              value={preset ?? -1}
+              onChange={applyDatePreset}
+            />
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-6">
             <div className="space-y-1">
@@ -201,7 +201,7 @@ export function QueryList({ connected }: { connected: boolean }) {
               <Input
                 type="datetime-local"
                 value={params.from_time ? params.from_time.slice(0, 16) : ""}
-                onChange={(e) => setParams((p) => ({ ...p, from_time: e.target.value ? toCHDateTime(new Date(e.target.value)) : undefined, offset: 0 }))}
+                onChange={(e) => { setPreset(null); setParams((p) => ({ ...p, from_time: e.target.value ? toCHDateTime(new Date(e.target.value)) : undefined, offset: 0 })); }}
                 className="w-full"
               />
             </div>
@@ -210,7 +210,7 @@ export function QueryList({ connected }: { connected: boolean }) {
               <Input
                 type="datetime-local"
                 value={params.to_time ? params.to_time.slice(0, 16) : ""}
-                onChange={(e) => setParams((p) => ({ ...p, to_time: e.target.value ? toCHDateTime(new Date(e.target.value)) : undefined, offset: 0 }))}
+                onChange={(e) => { setPreset(null); setParams((p) => ({ ...p, to_time: e.target.value ? toCHDateTime(new Date(e.target.value)) : undefined, offset: 0 })); }}
                 className="w-full"
               />
             </div>

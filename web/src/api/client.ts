@@ -295,6 +295,10 @@ export async function fetchAsyncMetrics(signal?: AbortSignal): Promise<AsyncMetr
   return fetchJSON<AsyncMetricsOverview>(`${BASE}/system-metrics`, { signal });
 }
 
+export async function fetchTableDDL(database: string, table: string, signal?: AbortSignal): Promise<{ statement: string }> {
+  return fetchJSON<{ statement: string }>(`${BASE}/schema/${encodeURIComponent(database)}/${encodeURIComponent(table)}/ddl`, { signal });
+}
+
 export async function fetchFingerprints(params: Partial<QueryListParams>, signal?: AbortSignal): Promise<FingerprintListResponse> {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {

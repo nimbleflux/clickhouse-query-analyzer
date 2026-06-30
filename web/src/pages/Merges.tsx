@@ -11,6 +11,8 @@ import { Card } from "@/components/ui/card";
 import { Input, Select } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
+import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
+import { TableName } from "@/components/TableName";
 import { formatBytes, formatDuration, formatNumber } from "../utils";
 
 function StatCard({ label, value, icon: Icon }: { label: string; value: string; icon: typeof Clock }) {
@@ -141,12 +143,16 @@ export function Merges({ connected }: { connected: boolean }) {
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-secondary)]" />
               <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter by table or result part…" className="pl-9" />
             </div>
-            <Select value={minElapsed} onChange={(e) => setMinElapsed(Number(e.target.value))} className="w-32">
-              <option value={0}>Any elapsed</option>
-              <option value={60}>&gt; 1m</option>
-              <option value={300}>&gt; 5m</option>
-              <option value={900}>&gt; 15m</option>
-            </Select>
+            <TimeframeSelector
+              options={[
+                { label: ">1m", value: 60 },
+                { label: ">5m", value: 300 },
+                { label: ">15m", value: 900 },
+                { label: "All", value: 0 },
+              ]}
+              value={minElapsed}
+              onChange={setMinElapsed}
+            />
           </div>
 
           {filtered.length === 0 ? (
@@ -175,10 +181,7 @@ export function Merges({ connected }: { connected: boolean }) {
                       return (
                         <tr key={`${m.database}.${m.table}.${m.result_part_name}-${i}`} className="border-b border-[var(--color-border)] last:border-0">
                           <td className="whitespace-nowrap px-4 py-3 font-mono text-xs">
-                            <div className="flex items-center gap-1.5 text-[var(--color-text-primary)]">
-                              <Layers className="h-3 w-3 shrink-0 text-[var(--color-text-secondary)]" />
-                              {m.database}.{m.table}
-                            </div>
+                            <TableName database={m.database} table={m.table} />
                             <div className="mt-0.5 truncate text-[var(--color-text-secondary)]" title={m.result_part_name}>→ {m.result_part_name}</div>
                           </td>
                           <td className="px-4 py-3">

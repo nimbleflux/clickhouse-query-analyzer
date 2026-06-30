@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { TableName } from "@/components/TableName";
 import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
 
@@ -342,7 +343,7 @@ function ReplicaStatusCard({ replicas }: { replicas: ReplicationStatus["replica_
               return (
                 <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
                   <td className="py-1.5 text-xs">
-                    <span className="text-[var(--color-text-secondary)]">{r.database}.</span>{r.table}
+                    <TableName database={r.database} table={r.table} />
                   </td>
                   <td className="py-1.5 font-mono text-xs text-[var(--color-text-secondary)]">
                     {r.replica_name}
@@ -419,7 +420,7 @@ function ReplicationQueueCard({ queue }: { queue: ReplicationStatus["replication
             {sorted.map((q, i) => (
               <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
                 <td className="py-1.5 text-xs">
-                  <span className="text-[var(--color-text-secondary)]">{q.database}.</span>{q.table}
+                  <TableName database={q.database} table={q.table} />
                 </td>
                 <td className="py-1.5 font-mono text-xs text-[var(--color-text-secondary)]">{q.replica_name}</td>
                 <td className="py-1.5 text-right font-mono text-xs">{q.type}</td>
@@ -484,7 +485,7 @@ function MutationsCard({ mutations }: { mutations: ReplicationStatus["mutations"
             {sorted.map((m, i) => (
               <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
                 <td className="py-1.5 text-xs">
-                  <span className="text-[var(--color-text-secondary)]">{m.database}.</span>{m.table}
+                  <TableName database={m.database} table={m.table} />
                 </td>
                 <td className="max-w-md truncate py-1.5 font-mono text-xs text-[var(--color-text-secondary)]" title={m.command}>{m.command}</td>
                 <td className={`py-1.5 text-right font-mono text-xs ${m.parts_to_do > 0 ? "text-[var(--color-warning)]" : ""}`}>

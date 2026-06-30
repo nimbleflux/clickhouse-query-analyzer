@@ -22,6 +22,7 @@ import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNot
 import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 
 const TIMEFRAMES: { label: string; hours: number }[] = [
   { label: "1h", hours: 1 },
@@ -161,16 +162,11 @@ export function DDL({ connected }: { connected: boolean }) {
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-[var(--color-text-secondary)]">Timeframe:</span>
-        {TIMEFRAMES.map((tf) => (
-          <Button
-            key={tf.hours}
-            variant={hours === tf.hours ? "primary" : "secondary"}
-            size="sm"
-            onClick={() => setHours(tf.hours)}
-          >
-            {tf.label}
-          </Button>
-        ))}
+        <TimeframeSelector
+          options={TIMEFRAMES.map((tf) => ({ label: tf.label, value: tf.hours }))}
+          value={hours}
+          onChange={setHours}
+        />
         <span className="text-xs text-[var(--color-text-secondary)]">
           Showing recent DDL for <span className="font-medium text-[var(--color-text-primary)]">{windowLabel}</span>
           {hours === 0 && <span className="ml-1">(queue is always current-state)</span>}

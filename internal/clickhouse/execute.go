@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -48,11 +49,26 @@ type QueryResult struct {
 	TotalRows int64            `json:"total_rows"`
 	TimingMs  int64            `json:"timing_ms"`
 	QueryID   string           `json:"query_id"`
+	// IsText marks a result that is the raw output of a user-specified FORMAT
+	// clause (e.g. FORMAT Vertical / Pretty / TSV) rather than a parsed table.
+	// Output holds that text and the editor renders it verbatim.
+	IsText bool   `json:"is_text"`
+	Output string `json:"output"`
 }
 
 // isSelectLike returns true if the query looks like a SELECT (or WITH/EXPLAIN/VALUES)
 // that returns rows and can therefore be wrapped for pagination. Non-SELECT
 // statements (INSERT, CREATE, DROP, ALTER, SET, USE, …) are executed as-is.
+// formatClauseRe detects a user-specified `FORMAT <name>` suffix. We don't wrap
+// or JSON-parse such queries: ClickHouse honors the clause and returns that
+// format's text, which we surface verbatim. (Best-effort: a FORMAT inside a
+// string literal is rare enough to ignore.)
+var formatClauseRe = regexp.MustCompile(`(?i)\bFORMAT\s+[A-Za-z_]`)
+
+func hasFormatClause(query string) bool {
+	return formatClauseRe.MatchString(query)
+}
+
 func isSelectLike(query string) bool {
 	trimmed := strings.TrimSpace(query)
 	// strip a leading SQL line comment
@@ -94,7 +110,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, query string, limit, offset i
 	// LIMIT/OFFSET window. For everything else (DDL/DML), execute verbatim
 	// with a max_result_rows ceiling as defense-in-depth.
 	var executedQuery string
-	if selectLike {
+	if selectLike && !hasFormatClause(query) {
 		executedQuery = fmt.Sprintf("SELECT * FROM (%s) LIMIT %d OFFSET %d", query, limit, offset)
 	} else {
 		executedQuery = query
@@ -137,6 +153,21 @@ func (c *Client) ExecuteQuery(ctx context.Context, query string, limit, offset i
 			Code:    extractHTTPCode(string(b)),
 			Message: strings.TrimSpace(string(b)),
 		}
+	}
+
+	// A user-specified FORMAT clause (e.g. FORMAT Vertical) makes ClickHouse
+	// return that format's text, which isn't the JSON we parse below. Surface
+	// it verbatim so Vertical/Pretty/TSV/etc. render as the user asked.
+	if hasFormatClause(executedQuery) {
+		b, _ := io.ReadAll(resp.Body)
+		return &QueryResult{
+			IsText:   true,
+			Output:   string(b),
+			Columns:  []ColumnInfo{},
+			Rows:     []map[string]any{},
+			TimingMs: time.Since(start).Milliseconds(),
+			QueryID:  resp.Header.Get("X-ClickHouse-Query-Id"),
+		}, nil
 	}
 
 	dec := json.NewDecoder(resp.Body)
@@ -377,4 +408,15 @@ func (c *Client) GetColumns(ctx context.Context, database, table string) ([]Colu
 func isProbablyJSON(s string) bool {
 	s = strings.TrimSpace(s)
 	return len(s) > 0 && (s[0] == '{' || s[0] == '[')
+}
+
+// GetTableDDL returns the SHOW CREATE statement for a table. Identifiers are
+// quoted (they come from system tables but may be reserved words).
+func (c *Client) GetTableDDL(ctx context.Context, database, table string) (string, error) {
+	var stmt string
+	q := fmt.Sprintf("SHOW CREATE TABLE %s.%s", quoteIdent(database), quoteIdent(table))
+	if err := c.conn.QueryRow(ctx, q).Scan(&stmt); err != nil {
+		return "", fmt.Errorf("show create %s.%s: %w", database, table, err)
+	}
+	return stmt, nil
 }

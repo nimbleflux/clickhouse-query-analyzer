@@ -18,6 +18,7 @@ import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNot
 import { sendToEditor } from "@/lib/send-to-editor";
 import { ApiError } from "@/api/errors";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 
 type Interval = "hour" | "day";
 
@@ -179,20 +180,11 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
                 Open in Editor
               </Button>
             )}
-            <div className="flex items-center gap-1 rounded-md border border-[var(--color-border)] p-0.5">
-              {(["hour", "day"] as Interval[]).map((iv) => (
-                <Button
-                  key={iv}
-                  variant="ghost"
-                  size="sm"
-                  active={interval === iv}
-                  onClick={() => setInterval_(iv)}
-                  className="capitalize"
-                >
-                  {iv}
-                </Button>
-              ))}
-            </div>
+            <TimeframeSelector
+              options={[{ label: "Hour", value: "hour" }, { label: "Day", value: "day" }]}
+              value={interval}
+              onChange={(v) => setInterval_(v as Interval)}
+            />
           </>
         }
       />
