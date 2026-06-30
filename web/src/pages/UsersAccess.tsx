@@ -170,20 +170,18 @@ export function UsersAccess({ connected }: { connected: boolean }) {
             const start = (safePage - 1) * pageSize;
             return (
             <>
+              <div className="flex flex-wrap items-center gap-2 py-2">
+                <div className="relative min-w-[180px] flex-1">
+                  <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-text-secondary)]" />
+                  <Input value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} placeholder={`Search ${tab}…`} className="h-7 pl-8 text-xs" />
+                </div>
+                {list.length > pageSize && (
+                  <Pagination page={safePage} pageSize={pageSize} total={list.length} onPage={setPage} onPageSize={(s) => { setPageSize(s); setPage(1); }} />
+                )}
+              </div>
               {tab === "users" && <UsersRolesTab users={usersF.slice(start, start + pageSize)} roles={data.roles} canManage={canManage} onDrop={setDropTarget} />}
               {tab === "grants" && <GrantsTab grants={grantsF.slice(start, start + pageSize)} canManage={canManage} onRevoke={setRevokeTarget} />}
               {tab === "quota" && <QuotaTab rows={quotaF.slice(start, start + pageSize)} definitions={data.quotas} />}
-              {(list.length > pageSize || q) && (
-                <div className="flex flex-wrap items-center gap-2 py-2">
-                  <div className="relative min-w-[180px] flex-1">
-                    <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-text-secondary)]" />
-                    <Input value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} placeholder={`Search ${tab}…`} className="h-7 pl-8 text-xs" />
-                  </div>
-                  {list.length > pageSize && (
-                    <Pagination page={safePage} pageSize={pageSize} total={list.length} onPage={setPage} onPageSize={(s) => { setPageSize(s); setPage(1); }} />
-                  )}
-                </div>
-              )}
             </>
             );
           })()}
