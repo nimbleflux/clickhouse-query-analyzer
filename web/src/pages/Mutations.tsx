@@ -167,11 +167,11 @@ export function Mutations({ connected }: { connected: boolean }) {
             <Checkbox checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} label="Failed only" />
             <TimeframeSelector
               options={[
-                { label: "All", value: 0 },
                 { label: ">1m", value: 60 },
                 { label: ">1h", value: 3600 },
                 { label: ">6h", value: 21600 },
                 { label: ">24h", value: 86400 },
+                { label: "All", value: 0 },
               ]}
               value={minAge}
               onChange={setMinAge}

@@ -3,6 +3,7 @@ import { formatNumber } from "@/utils";
 import type { SchemaData } from "@/api/schema-cache";
 import { AccordionHeader } from "./AccordionSection";
 import type { SidebarSections } from "./storage";
+import { DdlButton } from "@/components/TableName";
 
 interface SchemaSidebarProps {
   sections: SidebarSections;
@@ -77,6 +78,7 @@ export function SchemaSidebar({
                     >
                       <ExternalLink className="h-3 w-3" />
                     </button>
+                    <DdlButton database={dbName} table={t.name} />
                   </div>
                   {expanded.has(`tbl:${dbName}.${t.name}`) && (
                     <div className="pl-10">

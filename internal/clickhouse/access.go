@@ -37,6 +37,7 @@ type GrantRow struct {
 // QuotaUsageRow is one row of system.quota_usage: a consumption bucket. The
 // max_* fields are null when the quota sets no limit for that dimension.
 type QuotaUsageRow struct {
+	QuotaName     string  `json:"quota_name"`
 	QuotaKey      string  `json:"quota_key"`
 	StartTime     string  `json:"start_time"`
 	EndTime       string  `json:"end_time"`
@@ -51,6 +52,18 @@ type QuotaUsageRow struct {
 	ExecutionTime float64 `json:"execution_time"`
 }
 
+// QuotaDef is one row of system.quotas: a quota's configuration (independent of
+// consumption). Shown so the usage rows can be tied back to the quota that
+// defines the limits and window.
+type QuotaDef struct {
+	Name          string   `json:"name"`
+	Keys          string   `json:"keys"`
+	Durations     []uint32 `json:"durations"`
+	ApplyToAll    uint8    `json:"apply_to_all"`
+	ApplyToList   []string `json:"apply_to_list"`
+	ApplyToExcept []string `json:"apply_to_except"`
+}
+
 // AccessOverview is the composite returned by the Users & Access page. The
 // system tables behind access management are frequently restricted, so each is
 // fetched independently and recorded via addPartial — the page degrades to
@@ -61,6 +74,7 @@ type AccessOverview struct {
 	Users               []UserRow         `json:"users"`
 	Roles               []RoleRow         `json:"roles"`
 	Grants              []GrantRow        `json:"grants"`
+	Quotas              []QuotaDef        `json:"quotas"`
 	QuotaUsage          []QuotaUsageRow   `json:"quota_usage"`
 	PartialErrors       []string          `json:"partial_errors"`
 	PartialErrorDetails map[string]string `json:"partial_error_details,omitempty"`
@@ -83,13 +97,14 @@ func (a *AccessOverview) addPartial(table string, err error) {
 // whether the UI offers destructive actions; every manage call is still
 // validated server-side (the probe can be wrong or privileges partial).
 func (c *Client) GetAccess(ctx context.Context) (*AccessOverview, error) {
-	out := &AccessOverview{Users: []UserRow{}, Roles: []RoleRow{}, Grants: []GrantRow{}, QuotaUsage: []QuotaUsageRow{}}
+	out := &AccessOverview{Users: []UserRow{}, Roles: []RoleRow{}, Grants: []GrantRow{}, Quotas: []QuotaDef{}, QuotaUsage: []QuotaUsageRow{}}
 
 	c.queryCurrentUser(ctx, out)
 	c.queryAccessCapability(ctx, out)
 	c.queryUsers(ctx, out)
 	c.queryRoles(ctx, out)
 	c.queryGrants(ctx, out)
+	c.queryQuotas(ctx, out)
 	c.queryQuotaUsage(ctx, out)
 
 	return out, nil
@@ -181,8 +196,33 @@ func (c *Client) queryGrants(ctx context.Context, out *AccessOverview) {
 	}
 }
 
+func (c *Client) queryQuotas(ctx context.Context, out *AccessOverview) {
+	const q = `SELECT name, arrayStringConcat(keys, ','),
+		durations, apply_to_all,
+		arrayStringConcat(apply_to_list, ','), arrayStringConcat(apply_to_except, ',')
+		FROM system.quotas ORDER BY name`
+	rows, err := c.conn.Query(ctx, q)
+	if err != nil {
+		out.addPartial("system.quotas", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var qf QuotaDef
+		var keys, applyList, applyExcept string
+		if err := rows.Scan(&qf.Name, &keys, &qf.Durations, &qf.ApplyToAll, &applyList, &applyExcept); err != nil {
+			out.addPartial("system.quotas", err)
+			return
+		}
+		qf.Keys = keys
+		qf.ApplyToList = splitCSV(applyList)
+		qf.ApplyToExcept = splitCSV(applyExcept)
+		out.Quotas = append(out.Quotas, qf)
+	}
+}
+
 func (c *Client) queryQuotaUsage(ctx context.Context, out *AccessOverview) {
-	const q = `SELECT quota_key, toString(start_time), toString(end_time), assumeNotNull(duration),
+	const q = `SELECT quota_name, quota_key, toString(start_time), toString(end_time), assumeNotNull(duration),
 		assumeNotNull(queries), assumeNotNull(max_queries),
 		assumeNotNull(errors), assumeNotNull(result_rows), assumeNotNull(result_bytes),
 		assumeNotNull(read_rows), assumeNotNull(read_bytes), assumeNotNull(execution_time)
@@ -198,7 +238,7 @@ func (c *Client) queryQuotaUsage(ctx context.Context, out *AccessOverview) {
 	defer rows.Close()
 	for rows.Next() {
 		var q QuotaUsageRow
-		if err := rows.Scan(&q.QuotaKey, &q.StartTime, &q.EndTime, &q.Duration,
+		if err := rows.Scan(&q.QuotaName, &q.QuotaKey, &q.StartTime, &q.EndTime, &q.Duration,
 			&q.Queries, &q.MaxQueries, &q.Errors, &q.ResultRows, &q.ResultBytes,
 			&q.ReadRows, &q.ReadBytes, &q.ExecutionTime); err != nil {
 			out.addPartial("system.quota_usage", err)

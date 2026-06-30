@@ -145,10 +145,10 @@ export function Merges({ connected }: { connected: boolean }) {
             </div>
             <TimeframeSelector
               options={[
-                { label: "All", value: 0 },
                 { label: ">1m", value: 60 },
                 { label: ">5m", value: 300 },
                 { label: ">15m", value: 900 },
+                { label: "All", value: 0 },
               ]}
               value={minElapsed}
               onChange={setMinElapsed}

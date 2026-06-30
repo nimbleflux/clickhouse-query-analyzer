@@ -21,20 +21,48 @@ import { ErrorState } from "@/components/ui/state";
 export function TableName({ database, table, className }: { database: string; table: string; className?: string }) {
   const [open, setOpen] = useState(false);
   return (
+    <span className={className ?? ""}>
+      <span className="text-[var(--color-text-secondary)]">{database}.</span>
+      {table}
+      <DdlButton database={database} table={table} open={open} onOpenChange={setOpen} inline />
+    </span>
+  );
+}
+
+/**
+ * Just the DDL icon button + dialog (no table name). Use where the name is
+ * already rendered elsewhere (e.g. the editor schema sidebar) and you only
+ * want the affordance.
+ */
+export function DdlButton({
+  database,
+  table,
+  open,
+  onOpenChange,
+  inline,
+}: {
+  database: string;
+  table: string;
+  open?: boolean;
+  onOpenChange?: (v: boolean) => void;
+  inline?: boolean;
+}) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isOpen = open ?? internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
+  return (
     <>
-      <span className={className ?? ""}>
-        <span className="text-[var(--color-text-secondary)]">{database}.</span>
-        {table}
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          title={`SHOW CREATE TABLE ${database}.${table}`}
-          className="ml-1 inline-flex translate-y-[-1px] items-center rounded p-0.5 text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]"
-        >
-          <FileCode className="h-3 w-3" />
-        </button>
-      </span>
-      <DdlDialog open={open} onOpenChange={setOpen} database={database} table={table} />
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        title={`SHOW CREATE TABLE ${database}.${table}`}
+        className={inline
+          ? "ml-1 inline-flex translate-y-[-1px] items-center rounded p-0.5 text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]"
+          : "shrink-0 rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-accent)]"}
+      >
+        <FileCode className="h-3 w-3" />
+      </button>
+      <DdlDialog open={isOpen} onOpenChange={setOpen} database={database} table={table} />
     </>
   );
 }
