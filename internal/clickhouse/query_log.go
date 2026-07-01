@@ -232,12 +232,34 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 }
 
 func (c *Client) GetQuery(ctx context.Context, queryID string) (*QueryLogEntry, error) {
+	// Retry loop: after a query finishes there is a window (up to
+	// flush_interval_milliseconds, ~7.5s default) where the row has left
+	// system.processes but hasn't been flushed to query_log yet. In that gap
+	// neither source has the row. We retry once after 2s — by then the flush
+	// has usually landed. The common cases (still running → processes, or
+	// already flushed → query_log) return immediately on the first attempt.
+	for attempt := 0; attempt < 2; attempt++ {
+		entry, retryable, err := c.getQueryOnce(ctx, queryID)
+		if err == nil {
+			return entry, nil
+		}
+		if !retryable || attempt == 1 {
+			return nil, err
+		}
+		select {
+		case <-time.After(2 * time.Second):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, NotFoundErrorf("query %s", queryID)
+}
+
+// getQueryOnce is a single attempt: terminal query_log → system.processes
+// fallback. Returns (nil, true, err) when neither source has the row and a
+// retry might help (the race window).
+func (c *Client) getQueryOnce(ctx context.Context, queryID string) (*QueryLogEntry, bool, error) {
 	table := c.tableRef("query_log")
-	// Filter to terminal types: ProfileEvents/Settings are only populated on
-	// QueryFinish / Exception* rows, not QueryStart. QueryStart and QueryFinish
-	// share the same event_time, so ORDER BY event_time DESC LIMIT 1 alone can
-	// non-deterministically return the empty QueryStart row (the cause of "all
-	// compared metrics are 0" on the compare page).
 	query := fmt.Sprintf(`SELECT
 		type, event_time, query_start_time, query_duration_ms, query_id, query,
 		normalized_query_hash, query_kind, user,
@@ -261,25 +283,23 @@ func (c *Client) GetQuery(ctx context.Context, queryID string) (*QueryLogEntry, 
 		&e.IsInitialQuery, &e.InitialQueryID, &e.Settings, &e.ProfileEvents,
 		&e.UsedFunctions, &e.UsedStorages, &e.UsedAggregateFunctions,
 	); err != nil {
-		// No terminal query_log row: query_log rows are written on completion,
-		// so a still-running query has none yet. Fall back to system.processes
-		// (the live view) so opening a running query from the Running page does
-		// not 404. ProfileEvents/Settings/result-counts are unavailable live
-		// and stay empty — those tabs populate once the query finishes.
 		if !errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("querying query_log for %s: %w", queryID, err)
+			return nil, false, fmt.Errorf("querying query_log for %s: %w", queryID, err)
 		}
+		// No terminal query_log row yet. Try system.processes (still running).
 		proc, perr := c.GetProcess(ctx, queryID)
 		if perr != nil {
 			if errors.Is(perr, ErrNotFound) {
-				return nil, NotFoundErrorf("query %s", queryID)
+				// Neither source has the row — likely the race window (query
+				// just finished, query_log flush pending). Signal retryable.
+				return nil, true, NotFoundErrorf("query %s", queryID)
 			}
-			return nil, perr
+			return nil, false, perr
 		}
-		return processToEntry(proc), nil
+		return processToEntry(proc), false, nil
 	}
 	e.NormalizedQueryHash = strconv.FormatUint(hash, 10)
-	return &e, nil
+	return &e, false, nil
 }
 
 // processToEntry synthesizes a QueryLogEntry from a live system.processes row,
