@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Link } from "react-router-dom";
-import { RefreshCw, Users, KeyRound, ShieldAlert, Trash2, BadgeCheck, AlertTriangle, Search, ChevronRight } from "lucide-react";
+import { RefreshCw, Users, KeyRound, ShieldAlert, Trash2, BadgeCheck, AlertTriangle, Search, ChevronRight, ChevronsUpDown, ChevronsDownUp } from "lucide-react";
 import { fetchAccess, dropUser, dropRole, revokeGrant } from "../api/client";
 import type { AccessOverview, UserRow, RoleRow, GrantRow, QuotaUsageRow, QuotaDef } from "../api/types";
 import { ApiError } from "../api/errors";
@@ -16,9 +16,10 @@ import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Pagination } from "@/components/ui/Pagination";
+import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 import { formatBytes, formatNumber } from "../utils";
 
-type Tab = "users" | "grants" | "quota";
+type Tab = "users" | "roles" | "grants" | "quota";
 type DropTarget = { kind: "user" | "role"; name: string };
 
 export function UsersAccess({ connected }: { connected: boolean }) {
@@ -30,7 +31,9 @@ export function UsersAccess({ connected }: { connected: boolean }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [query, setQuery] = useState("");
+  const [roleFilter, setRoleFilter] = useState<string>("");
   const setTab = (t: Tab) => { setTabRaw(t); setPage(1); setQuery(""); };
+  const showRole = (role: string) => { setRoleFilter(role); setTabRaw("roles"); setPage(1); };
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<GrantRow | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
@@ -93,7 +96,8 @@ export function UsersAccess({ connected }: { connected: boolean }) {
   if (error && !data) return <PageContainer><ErrorState error={error} onRetry={load} /></PageContainer>;
 
   const tabs: { id: Tab; label: string; count: number }[] = [
-    { id: "users", label: "Users & Roles", count: (data?.users.length ?? 0) + (data?.roles.length ?? 0) },
+    { id: "users", label: "Users", count: data?.users.length ?? 0 },
+    { id: "roles", label: "Roles", count: data?.roles.length ?? 0 },
     { id: "grants", label: "Grants", count: data?.grants.length ?? 0 },
     { id: "quota", label: "Quota Usage", count: data?.quota_usage.length ?? 0 },
   ];
@@ -182,8 +186,9 @@ export function UsersAccess({ connected }: { connected: boolean }) {
                   <Pagination page={safePage} pageSize={pageSize} total={paged.length} onPage={setPage} onPageSize={(s) => { setPageSize(s); setPage(1); }} />
                 )}
               </div>
-              {tab === "users" && <UsersRolesTab users={usersF.slice(start, start + pageSize)} roles={data.roles} canManage={canManage} onDrop={setDropTarget} />}
-              {tab === "grants" && <GrantsTab grants={grantsF} canManage={canManage} onRevoke={setRevokeTarget} />}
+              {tab === "users" && <UsersRolesTab users={usersF.slice(start, start + pageSize)} canManage={canManage} onDrop={setDropTarget} onRoleClick={showRole} />}
+              {tab === "roles" && <RolesTab roles={data.roles} users={data.users} grants={data.grants} focusRole={roleFilter} canManage={canManage} onDrop={setDropTarget} />}
+              {tab === "grants" && <GrantsTab grants={grantsF} canManage={canManage} onRevoke={setRevokeTarget} onRoleClick={showRole} />}
               {tab === "quota" && <QuotaTab rows={quotaF.slice(start, start + pageSize)} definitions={data.quotas} />}
             </>
             );
@@ -217,22 +222,23 @@ export function UsersAccess({ connected }: { connected: boolean }) {
   );
 }
 
-function UsersRolesTab({ users, roles, canManage, onDrop }: { users: UserRow[]; roles: RoleRow[]; canManage: boolean; onDrop: (t: DropTarget) => void }) {
-  if (users.length === 0 && roles.length === 0) {
-    return <EmptyState icon={Users} title="No users or roles visible" description="Your user may lack SELECT on system.users / system.roles." />;
+function UsersRolesTab({ users, canManage, onDrop, onRoleClick }: { users: UserRow[]; canManage: boolean; onDrop: (t: DropTarget) => void; onRoleClick: (role: string) => void }) {
+  if (users.length === 0) {
+    return <EmptyState icon={Users} title="No users visible" description="Your user may lack SELECT on system.users." />;
   }
   return (
-    <div className="space-y-4">
-      <Card className="overflow-hidden">
-        <table className="w-full text-sm">
-          <thead><tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
-            <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">User</th>
-            <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Auth</th>
-            <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Default roles</th>
-            <th className="px-4 py-2.5" />
-          </tr></thead>
-          <tbody>
-            {users.map((u: UserRow) => (
+    <Card className="overflow-hidden">
+      <table className="w-full text-sm">
+        <thead><tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
+          <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">User</th>
+          <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Auth</th>
+          <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Roles</th>
+          <th className="px-4 py-2.5" />
+        </tr></thead>
+        <tbody>
+          {users.map((u: UserRow) => {
+            const rolesList = u.default_roles ?? [];
+            return (
               <tr key={u.name} className="border-b border-[var(--color-border)] last:border-0">
                 <td className="whitespace-nowrap px-4 py-3">
                   <div className="flex items-center gap-1.5 font-mono text-xs text-[var(--color-text-primary)]">
@@ -244,7 +250,16 @@ function UsersRolesTab({ users, roles, canManage, onDrop }: { users: UserRow[]; 
                   </div>
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{(u.auth_type ?? []).join(", ") || "-"}</td>
-                <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{(u.default_roles ?? []).join(", ") || "-"}</td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-1">
+                    {rolesList.length === 0 && <span className="text-xs text-[var(--color-text-secondary)]">-</span>}
+                    {rolesList.map((r) => (
+                      <button key={r} onClick={() => onRoleClick(r)} title={`Show role ${r} (members + grants)`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--surface-elevated)] px-2 py-0.5 text-[10px] font-mono text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]">
+                        <KeyRound className="h-2.5 w-2.5" />{r}
+                      </button>
+                    ))}
+                  </div>
+                </td>
                 <td className="px-2 py-3 text-right">
                   {canManage && (
                     <Button variant="ghost" size="sm" onClick={() => onDrop({ kind: "user", name: u.name })} className="text-[var(--color-error)] hover:bg-[var(--state-error)]" title="Drop user">
@@ -253,67 +268,135 @@ function UsersRolesTab({ users, roles, canManage, onDrop }: { users: UserRow[]; 
                   )}
                 </td>
               </tr>
-            ))}
-            {roles.map((r: RoleRow) => (
-              <tr key={`role-${r.name}`} className="border-b border-[var(--color-border)] last:border-0">
-                <td className="whitespace-nowrap px-4 py-3">
-                  <div className="flex items-center gap-1.5 font-mono text-xs text-[var(--color-text-primary)]">
-                    <KeyRound className="h-3 w-3 text-[var(--color-text-secondary)]" /> {r.name}
-                    <Badge variant="default">role</Badge>
+            );
+          })}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+function RolesTab({ roles, users, grants, focusRole, canManage, onDrop }: { roles: RoleRow[]; users: UserRow[]; grants: GrantRow[]; focusRole: string; canManage: boolean; onDrop: (t: DropTarget) => void }) {
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(focusRole ? [focusRole] : []));
+  const toggle = (name: string) => setExpanded((prev) => { const n = new Set(prev); if (n.has(name)) n.delete(name); else n.add(name); return n; });
+
+  if (roles.length === 0) return <EmptyState icon={KeyRound} title="No roles visible" description="Your user may lack SELECT on system.roles." />;
+  return (
+    <div className="space-y-2">
+      {roles.map((r) => {
+        const members = users.filter((u) => (u.default_roles ?? []).includes(r.name));
+        const roleGrants = grants.filter((g) => g.role_name === r.name);
+        const open = expanded.has(r.name);
+        return (
+          <div key={r.name} className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)]">
+            <button onClick={() => toggle(r.name)} className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-[var(--surface-hover)]">
+              <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)] transition-transform ${open ? "rotate-90" : ""}`} />
+              <KeyRound className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)]" />
+              <span className="font-mono text-xs text-[var(--color-text-primary)]">{r.name}</span>
+              <Badge variant="default">{members.length} member{members.length === 1 ? "" : "s"}</Badge>
+              <Badge variant="default">{roleGrants.length} grant{roleGrants.length === 1 ? "" : "s"}</Badge>
+              <span className="ml-auto">
+                {canManage && (
+                  <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); onDrop({ kind: "role", name: r.name }); }} className="text-[var(--color-error)] hover:bg-[var(--state-error)]" title="Drop role">
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                )}
+              </span>
+            </button>
+            {open && (
+              <div className="space-y-3 border-t border-[var(--color-border)] p-3">
+                <div>
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">Members</div>
+                  <div className="flex flex-wrap gap-1">
+                    {members.length === 0 ? <span className="text-xs text-[var(--color-text-secondary)]">no members</span> : members.map((m) => (
+                      <Link key={m.name} to={`/queries?user=${encodeURIComponent(m.name)}`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--surface-elevated)] px-2 py-0.5 text-[10px] font-mono text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]">
+                        <Users className="h-2.5 w-2.5" />{m.name}
+                      </Link>
+                    ))}
                   </div>
-                </td>
-                <td className="px-4 py-3 text-xs text-[var(--color-text-secondary)]">{r.storage}</td>
-                <td className="px-4 py-3" />
-                <td className="px-2 py-3 text-right">
-                  {canManage && (
-                    <Button variant="ghost" size="sm" onClick={() => onDrop({ kind: "role", name: r.name })} className="text-[var(--color-error)] hover:bg-[var(--state-error)]" title="Drop role">
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
+                </div>
+                <div>
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">Grants</div>
+                  <div className="space-y-0.5">
+                    {roleGrants.length === 0 ? <span className="text-xs text-[var(--color-text-secondary)]">no grants</span> : roleGrants.map((g, i) => (
+                      <div key={i} className="font-mono text-xs text-[var(--color-text-secondary)]">
+                        <span className="text-[var(--color-text-primary)]">{g.access_type}</span> on {g.database || "*"}{g.table ? `.${g.table}` : ".*"}{g.column ? ` (${g.column})` : ""}
+                        {g.grant_option === 1 && <Badge variant="secondary"><BadgeCheck className="mr-0.5 inline h-3 w-3" />grant option</Badge>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-function GrantsTab({ grants, canManage, onRevoke }: { grants: GrantRow[]; canManage: boolean; onRevoke: (g: GrantRow) => void }) {
-  // Hooks must run before the empty-state early return.
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const toggle = (name: string) => setCollapsed((prev) => {
+function GrantsTab({ grants, canManage, onRevoke, onRoleClick }: { grants: GrantRow[]; canManage: boolean; onRevoke: (g: GrantRow) => void; onRoleClick: (role: string) => void }) {
+  const [groupMode, setGroupMode] = useState<"grantee" | "privilege">("grantee");
+  // `expanded` holds open group keys (grantee names or privilege keys).
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = (key: string) => setExpanded((prev) => {
     const next = new Set(prev);
-    if (next.has(name)) next.delete(name); else next.add(name);
+    if (next.has(key)) next.delete(key); else next.add(key);
     return next;
   });
 
   if (grants.length === 0) return <EmptyState icon={KeyRound} title="No grants visible" description="Your user may lack SELECT on system.grants." />;
 
-  // Group by grantee (user or role), preserving first-seen order.
-  const groups = new Map<string, { kind: "user" | "role"; rows: GrantRow[] }>();
+  // ---- Group by grantee (user/role) ----
+  const granteeGroups = new Map<string, { kind: "user" | "role"; rows: GrantRow[] }>();
   for (const g of grants) {
     const name = g.user_name || g.role_name || "";
     const kind = g.user_name ? "user" : "role";
-    let entry = groups.get(name);
-    if (!entry) { entry = { kind, rows: [] }; groups.set(name, entry); }
+    let entry = granteeGroups.get(name);
+    if (!entry) { entry = { kind, rows: [] }; granteeGroups.set(name, entry); }
     entry.rows.push(g);
   }
-  const names = [...groups.keys()];
-  const allCollapsed = names.length > 0 && names.every((n) => collapsed.has(n));
+  const granteeNames = [...granteeGroups.keys()];
+
+  // ---- Group by privilege (access_type ON object) ----
+  const privKey = (g: GrantRow) => `${g.access_type} ON ${g.database || "*"}.${g.table || "*"}${g.column ? `(${g.column})` : ""}`;
+  const privGroups = new Map<string, { accessType: string; object: string; rows: GrantRow[] }>();
+  for (const g of grants) {
+    const key = privKey(g);
+    let entry = privGroups.get(key);
+    if (!entry) { entry = { accessType: g.access_type, object: `${g.database || "*"}${g.table ? `.${g.table}` : ".*"}${g.column ? ` (${g.column})` : ""}`, rows: [] }; privGroups.set(key, entry); }
+    entry.rows.push(g);
+  }
+  const privKeys = [...privGroups.keys()];
+
+  // Active grouping
+  const groupKeys = groupMode === "grantee" ? granteeNames : privKeys;
+  const allExpanded = groupKeys.length > 0 && groupKeys.every((k) => expanded.has(k));
+  const countLabel = groupMode === "grantee"
+    ? `${granteeNames.length} grantee${granteeNames.length === 1 ? "" : "s"}`
+    : `${privKeys.length} privilege${privKeys.length === 1 ? "" : "s"}`;
 
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-        <button onClick={() => setCollapsed(new Set())} disabled={collapsed.size === 0} className="rounded px-2 py-1 hover:bg-[var(--surface-hover)] disabled:opacity-40" title="Expand all grantees">Expand all</button>
-        <span className="opacity-40">·</span>
-        <button onClick={() => setCollapsed(new Set(names))} disabled={allCollapsed} className="rounded px-2 py-1 hover:bg-[var(--surface-hover)] disabled:opacity-40" title="Collapse all grantees">Collapse all</button>
-        <span className="ml-auto">{names.length} grantee{names.length === 1 ? "" : "s"}</span>
+        <TimeframeSelector
+          options={[{ label: "By grantee", value: "grantee" }, { label: "By privilege", value: "privilege" }]}
+          value={groupMode}
+          onChange={(v) => { setGroupMode(v); setExpanded(new Set()); }}
+        />
+        <button onClick={() => setExpanded(new Set(groupKeys))} disabled={allExpanded} className="rounded p-1 hover:bg-[var(--surface-hover)] disabled:opacity-40" title={`Expand all ${groupMode === "grantee" ? "grantees" : "privileges"}`}>
+          <ChevronsUpDown className="h-3.5 w-3.5" />
+        </button>
+        <button onClick={() => setExpanded(new Set())} disabled={expanded.size === 0} className="rounded p-1 hover:bg-[var(--surface-hover)] disabled:opacity-40" title="Collapse all">
+          <ChevronsDownUp className="h-3.5 w-3.5" />
+        </button>
+        <span className="ml-auto">{countLabel}</span>
       </div>
-      {names.map((name) => {
-        const { kind, rows } = groups.get(name)!;
-        const open = !collapsed.has(name);
+
+      {/* --- By grantee --- */}
+      {groupMode === "grantee" && granteeNames.map((name) => {
+        const { kind, rows } = granteeGroups.get(name)!;
+        const open = expanded.has(name);
         return (
           <div key={name} className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)]">
             <button onClick={() => toggle(name)} className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-[var(--surface-hover)]">
@@ -362,6 +445,41 @@ function GrantsTab({ grants, canManage, onRevoke }: { grants: GrantRow[]; canMan
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* --- By privilege --- */}
+      {groupMode === "privilege" && privKeys.map((key) => {
+        const { accessType, object, rows } = privGroups.get(key)!;
+        const open = expanded.has(key);
+        return (
+          <div key={key} className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)]">
+            <button onClick={() => toggle(key)} className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-[var(--surface-hover)]">
+              <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)] transition-transform ${open ? "rotate-90" : ""}`} />
+              <span className="font-mono text-xs text-[var(--color-text-primary)]">{accessType}</span>
+              <span className="font-mono text-xs text-[var(--color-text-secondary)]">on {object}</span>
+              <span className="ml-auto text-xs text-[var(--color-text-secondary)]">{rows.length} grantee{rows.length === 1 ? "" : "s"}</span>
+            </button>
+            {open && (
+              <div className="flex flex-wrap gap-1 border-t border-[var(--color-border)] p-3">
+                {rows.map((g, i) => {
+                  const name = g.user_name || g.role_name || "";
+                  const isUser = !!g.user_name;
+                  return isUser ? (
+                    <Link key={i} to={`/queries?user=${encodeURIComponent(name)}`} title={`Show queries by ${name}`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--surface-elevated)] px-2 py-0.5 text-[10px] font-mono text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]">
+                      <Users className="h-2.5 w-2.5" />{name}
+                      {g.grant_option === 1 && <BadgeCheck className="h-2.5 w-2.5" />}
+                    </Link>
+                  ) : (
+                    <button key={i} onClick={() => onRoleClick(name)} title={`Show role ${name}`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--surface-elevated)] px-2 py-0.5 text-[10px] font-mono text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]">
+                      <KeyRound className="h-2.5 w-2.5" />{name}
+                      {g.grant_option === 1 && <BadgeCheck className="h-2.5 w-2.5" />}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>

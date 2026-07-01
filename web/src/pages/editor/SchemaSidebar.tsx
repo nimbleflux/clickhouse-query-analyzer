@@ -66,12 +66,12 @@ export function SchemaSidebar({
               className="w-full rounded border border-[var(--color-border)] bg-[var(--surface-base)] py-1 pl-7 pr-2 text-xs text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
             />
           </div>
-          <div className="mb-1 flex items-center justify-end gap-1 px-2 text-[10px] text-[var(--color-text-secondary)]">
-            <button onClick={onExpandAll} className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--surface-hover)]" title="Expand all databases">
-              <ChevronsUpDown className="h-3 w-3" /> Expand all
+          <div className="mb-1 flex items-center justify-end gap-0.5 px-1">
+            <button onClick={onExpandAll} className="rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-text-primary)]" title="Expand all databases">
+              <ChevronsUpDown className="h-3.5 w-3.5" />
             </button>
-            <button onClick={onCollapseAll} className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--surface-hover)]" title="Collapse all">
-              <ChevronsDownUp className="h-3 w-3" /> Collapse all
+            <button onClick={onCollapseAll} className="rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-text-primary)]" title="Collapse all databases">
+              <ChevronsDownUp className="h-3.5 w-3.5" />
             </button>
           </div>
           {visibleDbs.length > 0 ? visibleDbs.map((dbName) => (

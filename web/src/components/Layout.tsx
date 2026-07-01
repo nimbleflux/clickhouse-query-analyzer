@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { Plug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge, Menu, X, Network, Layers, FlaskConical, ChevronRight, PanelLeft, PanelLeftClose, GitMerge, Users, BarChart3, TrendingUp, type LucideIcon } from "lucide-react";
+import { Plug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge, Menu, X, Network, Layers, FlaskConical, ChevronRight, PanelLeft, PanelLeftClose, GitMerge, Users, BarChart3, TrendingUp, ChevronsUpDown, ChevronsDownUp, type LucideIcon } from "lucide-react";
 import type { ConnectionParams } from "../api/connection";
 import { setConnectionHeaders } from "../api/connection";
 import { testConnection } from "../api/client";
@@ -189,6 +189,16 @@ export function Layout({
           </svg>
           {!rail && <span className="text-lg font-semibold text-[var(--color-text-primary)]">ClickLens</span>}
         </NavLink>
+        {!rail && !isMobile && (
+          <div className="ml-auto flex items-center gap-0.5">
+            <button onClick={() => setCollapsedSections({})} title="Expand all sections" className="rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-text-primary)]">
+              <ChevronsUpDown className="h-3.5 w-3.5" />
+            </button>
+            <button onClick={() => setCollapsedSections(Object.fromEntries(NAV_SECTIONS.map((s) => [s.label, true])))} title="Collapse all sections" className="rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-text-primary)]">
+              <ChevronsDownUp className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
         {isMobile && (
           <button
             onClick={() => setMobileMenuOpen(false)}
@@ -225,13 +235,6 @@ export function Layout({
             </div>
           );
         })}
-        {!rail && (
-          <div className="mt-2 flex items-center gap-1 px-2 text-[10px] text-[var(--color-text-secondary)]">
-            <button onClick={() => setCollapsedSections({})} className="rounded px-1.5 py-0.5 hover:bg-[var(--surface-hover)]" title="Expand all sections">Expand all</button>
-            <span className="opacity-40">·</span>
-            <button onClick={() => setCollapsedSections(Object.fromEntries(NAV_SECTIONS.map((s) => [s.label, true])))} className="rounded px-1.5 py-0.5 hover:bg-[var(--surface-hover)]" title="Collapse all sections">Collapse all</button>
-          </div>
-        )}
       </nav>
 
       {/* Bottom cluster: connection + collapse + theme + github */}

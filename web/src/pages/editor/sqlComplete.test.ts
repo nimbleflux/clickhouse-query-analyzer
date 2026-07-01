@@ -61,35 +61,45 @@ describe("makeSqlCompletion", () => {
   // Minimal CompletionContext stand-in: CodeMirror's real ctx has state.doc and pos.
   const ctxAt = (doc: string, pos = doc.length) => source({ state: { doc: { toString: () => doc } }, pos } as never);
 
-  it("offers columns after ORDER BY using the statement's FROM table", () => {
-    const res = ctxAt("select * from mydb.users order by ");
+  it("offers columns after ORDER BY using the statement's FROM table", async () => {
+    const res = await ctxAt("select * from mydb.users order by ");
     expect(res).not.toBeNull();
     const labels = (res!.options as { label: string }[]).map((o) => o.label);
     expect(labels).toEqual(expect.arrayContaining(["id", "name", "email"]));
   });
 
-  it("offers columns in the SELECT list when FROM is present later in the text", () => {
-    const res = ctxAt("select  from mydb.users", "select ".length);
+  it("offers columns in the SELECT list when FROM is present later in the text", async () => {
+    const res = await ctxAt("select  from mydb.users", "select ".length);
     expect(res).not.toBeNull();
     const labels = (res!.options as { label: string }[]).map((o) => o.label);
     expect(labels).toEqual(expect.arrayContaining(["id", "name", "email"]));
   });
 
-  it("offers tables after FROM", () => {
-    const res = ctxAt("select * from ");
+  it("offers tables after FROM", async () => {
+    const res = await ctxAt("select * from ");
     expect(res).not.toBeNull();
     const labels = (res!.options as { label: string }[]).map((o) => o.label);
     expect(labels).toEqual(expect.arrayContaining(["users", "orders", "mydb"]));
   });
 
-  it("offers columns after a db.table. qualifier", () => {
-    const res = ctxAt("select mydb.users.");
+  it("offers columns after a db.table. qualifier", async () => {
+    const res = await ctxAt("select mydb.users.");
     expect(res).not.toBeNull();
     const labels = (res!.options as { label: string }[]).map((o) => o.label);
     expect(labels).toEqual(expect.arrayContaining(["id", "name", "email"]));
   });
 
-  it("returns null inside a string literal", () => {
-    expect(ctxAt("select 'abc")).toBeNull();
+  it("returns null inside a string literal", async () => {
+    expect(await ctxAt("select 'abc")).toBeNull();
+  });
+
+  it("fetches columns on demand for a table not in the namespace", async () => {
+    const unloadedNs: SqlNs = { freshdb: {} as Record<string, string[]> };
+    const ensure = async (_db: string, _t: string) => ["a", "b", "c"];
+    const src = makeSqlCompletion(() => unloadedNs, ensure);
+    const res = await src({ state: { doc: { toString: () => "select  from freshdb.t" } }, pos: "select ".length } as never);
+    expect(res).not.toBeNull();
+    const labels = (res!.options as { label: string }[]).map((o) => o.label);
+    expect(labels).toEqual(expect.arrayContaining(["a", "b", "c"]));
   });
 });

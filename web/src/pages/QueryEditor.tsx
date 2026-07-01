@@ -190,6 +190,25 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     } catch {}
   }, []);
 
+  // Autocomplete column loader: returns a table's column names, fetching + caching
+  // on demand so columns are offered even for tables never expanded in the sidebar.
+  const colCacheRef = useRef<Map<string, string[]>>(new Map());
+  const ensureColumns = useCallback(async (db: string, table: string): Promise<string[]> => {
+    const key = `${db}.${table}`;
+    const cached = colCacheRef.current.get(key);
+    if (cached) return cached;
+    const existing = schemaData[db]?.tables?.find((t) => t.name === table)?.columns?.map((c) => c.name);
+    if (existing) { colCacheRef.current.set(key, existing); return existing; }
+    try {
+      const res = await fetchColumns(db, table);
+      const names = (res.columns || []).map((c) => c.name);
+      colCacheRef.current.set(key, names);
+      return names;
+    } catch {
+      return [];
+    }
+  }, [schemaData]);
+
   useEffect(() => {
     saveTabs(tabs);
     try { localStorage.setItem("ch-editor-active-tab", activeTab.id); } catch {}
@@ -948,7 +967,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
               value={sqlText}
               onChange={setSQLText}
               theme={cmTheme}
-              extensions={[cmKeymap, sql(), autocompletion({ override: [makeSqlCompletion(() => buildSQLNamespace() as unknown as SqlNs)] })]}
+              extensions={[cmKeymap, sql(), autocompletion({ override: [makeSqlCompletion(() => buildSQLNamespace() as unknown as SqlNs, ensureColumns)] })]}
               basicSetup={{ lineNumbers: true, foldGutter: false }}
               className="h-full text-sm [&_.cm-editor]:h-full [&_.cm-scroller]:!font-mono [&_.cm-scroller]:text-[13px]"
             />
