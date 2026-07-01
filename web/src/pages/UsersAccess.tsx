@@ -16,6 +16,7 @@ import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Pagination } from "@/components/ui/Pagination";
+import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 import { formatBytes, formatNumber } from "../utils";
 
 type Tab = "users" | "roles" | "grants" | "quota";
@@ -187,7 +188,7 @@ export function UsersAccess({ connected }: { connected: boolean }) {
               </div>
               {tab === "users" && <UsersRolesTab users={usersF.slice(start, start + pageSize)} canManage={canManage} onDrop={setDropTarget} onRoleClick={showRole} />}
               {tab === "roles" && <RolesTab roles={data.roles} users={data.users} grants={data.grants} focusRole={roleFilter} canManage={canManage} onDrop={setDropTarget} />}
-              {tab === "grants" && <GrantsTab grants={grantsF} canManage={canManage} onRevoke={setRevokeTarget} />}
+              {tab === "grants" && <GrantsTab grants={grantsF} canManage={canManage} onRevoke={setRevokeTarget} onRoleClick={showRole} />}
               {tab === "quota" && <QuotaTab rows={quotaF.slice(start, start + pageSize)} definitions={data.quotas} />}
             </>
             );
@@ -334,43 +335,67 @@ function RolesTab({ roles, users, grants, focusRole, canManage, onDrop }: { role
   );
 }
 
-function GrantsTab({ grants, canManage, onRevoke }: { grants: GrantRow[]; canManage: boolean; onRevoke: (g: GrantRow) => void }) {
-  // Groups are collapsed by default (the list is long); `expanded` holds the
-  // open ones. Hooks run before the empty-state early return.
+function GrantsTab({ grants, canManage, onRevoke, onRoleClick }: { grants: GrantRow[]; canManage: boolean; onRevoke: (g: GrantRow) => void; onRoleClick: (role: string) => void }) {
+  const [groupMode, setGroupMode] = useState<"grantee" | "privilege">("grantee");
+  // `expanded` holds open group keys (grantee names or privilege keys).
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const toggle = (name: string) => setExpanded((prev) => {
+  const toggle = (key: string) => setExpanded((prev) => {
     const next = new Set(prev);
-    if (next.has(name)) next.delete(name); else next.add(name);
+    if (next.has(key)) next.delete(key); else next.add(key);
     return next;
   });
 
   if (grants.length === 0) return <EmptyState icon={KeyRound} title="No grants visible" description="Your user may lack SELECT on system.grants." />;
 
-  // Group by grantee (user or role), preserving first-seen order.
-  const groups = new Map<string, { kind: "user" | "role"; rows: GrantRow[] }>();
+  // ---- Group by grantee (user/role) ----
+  const granteeGroups = new Map<string, { kind: "user" | "role"; rows: GrantRow[] }>();
   for (const g of grants) {
     const name = g.user_name || g.role_name || "";
     const kind = g.user_name ? "user" : "role";
-    let entry = groups.get(name);
-    if (!entry) { entry = { kind, rows: [] }; groups.set(name, entry); }
+    let entry = granteeGroups.get(name);
+    if (!entry) { entry = { kind, rows: [] }; granteeGroups.set(name, entry); }
     entry.rows.push(g);
   }
-  const names = [...groups.keys()];
-  const allExpanded = names.length > 0 && names.every((n) => expanded.has(n));
+  const granteeNames = [...granteeGroups.keys()];
+
+  // ---- Group by privilege (access_type ON object) ----
+  const privKey = (g: GrantRow) => `${g.access_type} ON ${g.database || "*"}.${g.table || "*"}${g.column ? `(${g.column})` : ""}`;
+  const privGroups = new Map<string, { accessType: string; object: string; rows: GrantRow[] }>();
+  for (const g of grants) {
+    const key = privKey(g);
+    let entry = privGroups.get(key);
+    if (!entry) { entry = { accessType: g.access_type, object: `${g.database || "*"}${g.table ? `.${g.table}` : ".*"}${g.column ? ` (${g.column})` : ""}`, rows: [] }; privGroups.set(key, entry); }
+    entry.rows.push(g);
+  }
+  const privKeys = [...privGroups.keys()];
+
+  // Active grouping
+  const groupKeys = groupMode === "grantee" ? granteeNames : privKeys;
+  const allExpanded = groupKeys.length > 0 && groupKeys.every((k) => expanded.has(k));
+  const countLabel = groupMode === "grantee"
+    ? `${granteeNames.length} grantee${granteeNames.length === 1 ? "" : "s"}`
+    : `${privKeys.length} privilege${privKeys.length === 1 ? "" : "s"}`;
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-0.5 text-xs text-[var(--color-text-secondary)]">
-        <button onClick={() => setExpanded(new Set(names))} disabled={allExpanded} className="rounded p-1 hover:bg-[var(--surface-hover)] disabled:opacity-40" title="Expand all grantees">
+      <div className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+        <TimeframeSelector
+          options={[{ label: "By grantee", value: "grantee" }, { label: "By privilege", value: "privilege" }]}
+          value={groupMode}
+          onChange={(v) => { setGroupMode(v); setExpanded(new Set()); }}
+        />
+        <button onClick={() => setExpanded(new Set(groupKeys))} disabled={allExpanded} className="rounded p-1 hover:bg-[var(--surface-hover)] disabled:opacity-40" title={`Expand all ${groupMode === "grantee" ? "grantees" : "privileges"}`}>
           <ChevronsUpDown className="h-3.5 w-3.5" />
         </button>
-        <button onClick={() => setExpanded(new Set())} disabled={expanded.size === 0} className="rounded p-1 hover:bg-[var(--surface-hover)] disabled:opacity-40" title="Collapse all grantees">
+        <button onClick={() => setExpanded(new Set())} disabled={expanded.size === 0} className="rounded p-1 hover:bg-[var(--surface-hover)] disabled:opacity-40" title="Collapse all">
           <ChevronsDownUp className="h-3.5 w-3.5" />
         </button>
-        <span className="ml-auto">{names.length} grantee{names.length === 1 ? "" : "s"}</span>
+        <span className="ml-auto">{countLabel}</span>
       </div>
-      {names.map((name) => {
-        const { kind, rows } = groups.get(name)!;
+
+      {/* --- By grantee --- */}
+      {groupMode === "grantee" && granteeNames.map((name) => {
+        const { kind, rows } = granteeGroups.get(name)!;
         const open = expanded.has(name);
         return (
           <div key={name} className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)]">
@@ -420,6 +445,41 @@ function GrantsTab({ grants, canManage, onRevoke }: { grants: GrantRow[]; canMan
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* --- By privilege --- */}
+      {groupMode === "privilege" && privKeys.map((key) => {
+        const { accessType, object, rows } = privGroups.get(key)!;
+        const open = expanded.has(key);
+        return (
+          <div key={key} className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)]">
+            <button onClick={() => toggle(key)} className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-[var(--surface-hover)]">
+              <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)] transition-transform ${open ? "rotate-90" : ""}`} />
+              <span className="font-mono text-xs text-[var(--color-text-primary)]">{accessType}</span>
+              <span className="font-mono text-xs text-[var(--color-text-secondary)]">on {object}</span>
+              <span className="ml-auto text-xs text-[var(--color-text-secondary)]">{rows.length} grantee{rows.length === 1 ? "" : "s"}</span>
+            </button>
+            {open && (
+              <div className="flex flex-wrap gap-1 border-t border-[var(--color-border)] p-3">
+                {rows.map((g, i) => {
+                  const name = g.user_name || g.role_name || "";
+                  const isUser = !!g.user_name;
+                  return isUser ? (
+                    <Link key={i} to={`/queries?user=${encodeURIComponent(name)}`} title={`Show queries by ${name}`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--surface-elevated)] px-2 py-0.5 text-[10px] font-mono text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]">
+                      <Users className="h-2.5 w-2.5" />{name}
+                      {g.grant_option === 1 && <BadgeCheck className="h-2.5 w-2.5" />}
+                    </Link>
+                  ) : (
+                    <button key={i} onClick={() => onRoleClick(name)} title={`Show role ${name}`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--surface-elevated)] px-2 py-0.5 text-[10px] font-mono text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]">
+                      <KeyRound className="h-2.5 w-2.5" />{name}
+                      {g.grant_option === 1 && <BadgeCheck className="h-2.5 w-2.5" />}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
