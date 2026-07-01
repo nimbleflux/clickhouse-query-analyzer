@@ -52,6 +52,17 @@ type QuotaUsageRow struct {
 	ExecutionTime float64 `json:"execution_time"`
 }
 
+// RoleGrant is one row of system.role_grants: a role granted to a user or
+// another role. Unlike system.users.default_roles_list (which only covers
+// default roles), this covers ALL role grants — default and non-default — so
+// the Roles tab can show every member.
+type RoleGrant struct {
+	UserName        string `json:"user_name"`
+	GrantedRoleName string `json:"granted_role_name"`
+	IsDefault       uint8  `json:"granted_role_is_default"`
+	WithAdminOption uint8  `json:"with_admin_option"`
+}
+
 // QuotaDef is one row of system.quotas: a quota's configuration (independent of
 // consumption). Shown so the usage rows can be tied back to the quota that
 // defines the limits and window.
@@ -74,6 +85,7 @@ type AccessOverview struct {
 	Users               []UserRow         `json:"users"`
 	Roles               []RoleRow         `json:"roles"`
 	Grants              []GrantRow        `json:"grants"`
+	RoleGrants          []RoleGrant       `json:"role_grants"`
 	Quotas              []QuotaDef        `json:"quotas"`
 	QuotaUsage          []QuotaUsageRow   `json:"quota_usage"`
 	PartialErrors       []string          `json:"partial_errors"`
@@ -97,13 +109,14 @@ func (a *AccessOverview) addPartial(table string, err error) {
 // whether the UI offers destructive actions; every manage call is still
 // validated server-side (the probe can be wrong or privileges partial).
 func (c *Client) GetAccess(ctx context.Context) (*AccessOverview, error) {
-	out := &AccessOverview{Users: []UserRow{}, Roles: []RoleRow{}, Grants: []GrantRow{}, Quotas: []QuotaDef{}, QuotaUsage: []QuotaUsageRow{}}
+	out := &AccessOverview{Users: []UserRow{}, Roles: []RoleRow{}, Grants: []GrantRow{}, RoleGrants: []RoleGrant{}, Quotas: []QuotaDef{}, QuotaUsage: []QuotaUsageRow{}}
 
 	c.queryCurrentUser(ctx, out)
 	c.queryAccessCapability(ctx, out)
 	c.queryUsers(ctx, out)
 	c.queryRoles(ctx, out)
 	c.queryGrants(ctx, out)
+	c.queryRoleGrants(ctx, out)
 	c.queryQuotas(ctx, out)
 	c.queryQuotaUsage(ctx, out)
 
@@ -193,6 +206,27 @@ func (c *Client) queryGrants(ctx context.Context, out *AccessOverview) {
 			return
 		}
 		out.Grants = append(out.Grants, g)
+	}
+}
+
+func (c *Client) queryRoleGrants(ctx context.Context, out *AccessOverview) {
+	const q = `SELECT assumeNotNull(user_name), granted_role_name, granted_role_is_default, with_admin_option
+		FROM system.role_grants
+		WHERE user_name IS NOT NULL
+		ORDER BY granted_role_name, user_name`
+	rows, err := c.conn.Query(ctx, q)
+	if err != nil {
+		out.addPartial("system.role_grants", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rg RoleGrant
+		if err := rows.Scan(&rg.UserName, &rg.GrantedRoleName, &rg.IsDefault, &rg.WithAdminOption); err != nil {
+			out.addPartial("system.role_grants", err)
+			return
+		}
+		out.RoleGrants = append(out.RoleGrants, rg)
 	}
 }
 

@@ -51,6 +51,24 @@ const NAV_SECTIONS: NavSectionDef[] = [
   },
 ];
 
+// Route → browser-tab title. Dynamic routes use prefix matching in the effect.
+const PAGE_TITLES: Record<string, string> = {
+  "/": "Dashboard",
+  "/queries": "Queries",
+  "/running": "Running Queries",
+  "/fingerprints": "Fingerprints",
+  "/replication": "Replication",
+  "/ddl": "DDL",
+  "/mutations": "Mutations",
+  "/merges": "Merges",
+  "/system-metrics": "System Metrics",
+  "/trends": "Trends",
+  "/access": "Users & Access",
+  "/optimizer": "Table Optimizer",
+  "/editor": "SQL Editor",
+  "/compare": "Query Comparison",
+};
+
 export function Layout({
   connection,
   connected,
@@ -76,6 +94,20 @@ export function Layout({
   const [cluster, setCluster] = useState<string>("");
   const [clusterNote, setClusterNote] = useState<string>("");
   const location = useLocation();
+
+  // Set the browser tab title from the route + active tab param.
+  useEffect(() => {
+    const path = location.pathname;
+    let title = PAGE_TITLES[path];
+    if (!title) {
+      if (path.startsWith("/query/")) title = "Query Detail";
+      else if (path.startsWith("/fingerprints/")) title = "Fingerprint Detail";
+      else title = "ClickLens";
+    }
+    const tab = new URLSearchParams(location.search).get("tab");
+    if (tab) title += ` \u2014 ${tab.charAt(0).toUpperCase()}${tab.slice(1)}`;
+    document.title = `${title} \u2014 ClickLens`;
+  }, [location.pathname, location.search]);
 
   useEffect(() => { try { localStorage.setItem("ch-nav-collapsed", collapsed ? "1" : "0"); } catch {} }, [collapsed]);
   useEffect(() => { try { localStorage.setItem("ch-nav-sections", JSON.stringify(collapsedSections)); } catch {} }, [collapsedSections]);

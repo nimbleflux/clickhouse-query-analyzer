@@ -171,6 +171,7 @@ export interface QueryListParams {
   min_duration?: number;
   min_memory?: number;
   min_read_bytes?: number;
+  errors_only?: boolean;
   search?: string;
   sort_by?: string;
   sort_dir?: string;
@@ -338,6 +339,13 @@ export interface RoleRow {
   storage: string;
 }
 
+export interface RoleGrant {
+  user_name: string;
+  granted_role_name: string;
+  granted_role_is_default: number;
+  with_admin_option: number;
+}
+
 export interface GrantRow {
   user_name: string;
   role_name: string;
@@ -380,6 +388,7 @@ export interface AccessOverview {
   users: UserRow[];
   roles: RoleRow[];
   grants: GrantRow[];
+  role_grants: RoleGrant[];
   quotas: QuotaDef[];
   quota_usage: QuotaUsageRow[];
   partial_errors: string[];

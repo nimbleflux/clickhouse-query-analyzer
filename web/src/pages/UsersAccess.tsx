@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { RefreshCw, Users, KeyRound, ShieldAlert, Trash2, BadgeCheck, AlertTriangle, Search, ChevronRight, ChevronsUpDown, ChevronsDownUp } from "lucide-react";
 import { fetchAccess, dropUser, dropRole, revokeGrant } from "../api/client";
-import type { AccessOverview, UserRow, RoleRow, GrantRow, QuotaUsageRow, QuotaDef } from "../api/types";
+import type { AccessOverview, UserRow, RoleRow, GrantRow, RoleGrant, QuotaUsageRow, QuotaDef } from "../api/types";
 import { ApiError } from "../api/errors";
 import { useToast } from "../components/Toast";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
@@ -27,13 +27,19 @@ export function UsersAccess({ connected }: { connected: boolean }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
   const [canceled, setCanceled] = useState(false);
-  const [tab, setTabRaw] = useState<Tab>("users");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [tab, setTabRaw] = useState<Tab>((searchParams.get("tab") as Tab) || "users");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("");
-  const setTab = (t: Tab) => { setTabRaw(t); setPage(1); setQuery(""); };
-  const showRole = (role: string) => { setRoleFilter(role); setTabRaw("roles"); setPage(1); };
+  const syncTab = (t: Tab) => {
+    const next = new URLSearchParams();
+    if (t !== "users") next.set("tab", t);
+    setSearchParams(next, { replace: true });
+  };
+  const setTab = (t: Tab) => { setTabRaw(t); setPage(1); setQuery(""); syncTab(t); };
+  const showRole = (role: string) => { setRoleFilter(role); setTabRaw("roles"); setPage(1); syncTab("roles"); };
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<GrantRow | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
@@ -187,7 +193,7 @@ export function UsersAccess({ connected }: { connected: boolean }) {
                 )}
               </div>
               {tab === "users" && <UsersRolesTab users={usersF.slice(start, start + pageSize)} canManage={canManage} onDrop={setDropTarget} onRoleClick={showRole} />}
-              {tab === "roles" && <RolesTab roles={data.roles} users={data.users} grants={data.grants} focusRole={roleFilter} canManage={canManage} onDrop={setDropTarget} />}
+              {tab === "roles" && <RolesTab roles={data.roles} grants={data.grants} roleGrants={data.role_grants} focusRole={roleFilter} canManage={canManage} onDrop={setDropTarget} />}
               {tab === "grants" && <GrantsTab grants={grantsF} canManage={canManage} onRevoke={setRevokeTarget} onRoleClick={showRole} />}
               {tab === "quota" && <QuotaTab rows={quotaF.slice(start, start + pageSize)} definitions={data.quotas} />}
             </>
@@ -276,7 +282,7 @@ function UsersRolesTab({ users, canManage, onDrop, onRoleClick }: { users: UserR
   );
 }
 
-function RolesTab({ roles, users, grants, focusRole, canManage, onDrop }: { roles: RoleRow[]; users: UserRow[]; grants: GrantRow[]; focusRole: string; canManage: boolean; onDrop: (t: DropTarget) => void }) {
+function RolesTab({ roles, grants, roleGrants, focusRole, canManage, onDrop }: { roles: RoleRow[]; grants: GrantRow[]; roleGrants: RoleGrant[]; focusRole: string; canManage: boolean; onDrop: (t: DropTarget) => void }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(focusRole ? [focusRole] : []));
   const toggle = (name: string) => setExpanded((prev) => { const n = new Set(prev); if (n.has(name)) n.delete(name); else n.add(name); return n; });
 
@@ -284,8 +290,8 @@ function RolesTab({ roles, users, grants, focusRole, canManage, onDrop }: { role
   return (
     <div className="space-y-2">
       {roles.map((r) => {
-        const members = users.filter((u) => (u.default_roles ?? []).includes(r.name));
-        const roleGrants = grants.filter((g) => g.role_name === r.name);
+        const members = roleGrants.filter((rg) => rg.granted_role_name === r.name);
+        const roleGrantRows = grants.filter((g) => g.role_name === r.name);
         const open = expanded.has(r.name);
         return (
           <div key={r.name} className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)]">
@@ -294,7 +300,7 @@ function RolesTab({ roles, users, grants, focusRole, canManage, onDrop }: { role
               <KeyRound className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)]" />
               <span className="font-mono text-xs text-[var(--color-text-primary)]">{r.name}</span>
               <Badge variant="default">{members.length} member{members.length === 1 ? "" : "s"}</Badge>
-              <Badge variant="default">{roleGrants.length} grant{roleGrants.length === 1 ? "" : "s"}</Badge>
+              <Badge variant="default">{roleGrantRows.length} grant{roleGrantRows.length === 1 ? "" : "s"}</Badge>
               <span className="ml-auto">
                 {canManage && (
                   <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); onDrop({ kind: "role", name: r.name }); }} className="text-[var(--color-error)] hover:bg-[var(--state-error)]" title="Drop role">
@@ -309,8 +315,9 @@ function RolesTab({ roles, users, grants, focusRole, canManage, onDrop }: { role
                   <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">Members</div>
                   <div className="flex flex-wrap gap-1">
                     {members.length === 0 ? <span className="text-xs text-[var(--color-text-secondary)]">no members</span> : members.map((m) => (
-                      <Link key={m.name} to={`/queries?user=${encodeURIComponent(m.name)}`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--surface-elevated)] px-2 py-0.5 text-[10px] font-mono text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]">
-                        <Users className="h-2.5 w-2.5" />{m.name}
+                      <Link key={m.user_name} to={`/queries?user=${encodeURIComponent(m.user_name)}`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--surface-elevated)] px-2 py-0.5 text-[10px] font-mono text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]" title={m.granted_role_is_default === 1 ? "Default role" : "Granted (not default)"}>
+                        <Users className="h-2.5 w-2.5" />{m.user_name}
+                        {m.granted_role_is_default === 0 && <span className="opacity-60">●</span>}
                       </Link>
                     ))}
                   </div>
@@ -318,7 +325,7 @@ function RolesTab({ roles, users, grants, focusRole, canManage, onDrop }: { role
                 <div>
                   <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">Grants</div>
                   <div className="space-y-0.5">
-                    {roleGrants.length === 0 ? <span className="text-xs text-[var(--color-text-secondary)]">no grants</span> : roleGrants.map((g, i) => (
+                    {roleGrantRows.length === 0 ? <span className="text-xs text-[var(--color-text-secondary)]">no grants</span> : roleGrantRows.map((g, i) => (
                       <div key={i} className="font-mono text-xs text-[var(--color-text-secondary)]">
                         <span className="text-[var(--color-text-primary)]">{g.access_type}</span> on {g.database || "*"}{g.table ? `.${g.table}` : ".*"}{g.column ? ` (${g.column})` : ""}
                         {g.grant_option === 1 && <Badge variant="secondary"><BadgeCheck className="mr-0.5 inline h-3 w-3" />grant option</Badge>}

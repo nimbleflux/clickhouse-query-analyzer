@@ -53,6 +53,7 @@ type QueryListParams struct {
 	MinDuration       uint64 `json:"min_duration"`
 	MinMemory         uint64 `json:"min_memory"`
 	MinReadBytes      uint64 `json:"min_read_bytes"`
+	ErrorsOnly        bool   `json:"errors_only"`
 	Search            string `json:"search"`
 	SortBy            string `json:"sort_by"`
 	SortDir           string `json:"sort_dir"`
@@ -158,6 +159,9 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 	if params.MinReadBytes > 0 {
 		whereParts = append(whereParts, "read_bytes >= ?")
 		whereArgs = append(whereArgs, params.MinReadBytes)
+	}
+	if params.ErrorsOnly {
+		whereParts = append(whereParts, "exception_code != 0")
 	}
 
 	allowedSorts := map[string]bool{
