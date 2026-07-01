@@ -98,3 +98,65 @@ func (c *Client) GetFingerprintTrend(ctx context.Context, hash uint64, interval 
 	}
 	return points, nil
 }
+
+// QueryHealthPoint is one time bucket of aggregate query-log health: volume,
+// latency (p50/p95), memory, and errors. Used by the Trends page to answer
+// "is the cluster getting slower / erroring more?".
+type QueryHealthPoint struct {
+	Bucket        time.Time `json:"bucket"`
+	Count         uint64    `json:"count"`
+	P50DurationMs float64   `json:"p50_duration_ms"`
+	P95DurationMs float64   `json:"p95_duration_ms"`
+	AvgMemory     float64   `json:"avg_memory"`
+	Errors        uint64    `json:"errors"`
+}
+
+// GetQueryHealthTrend buckets all user queries over the last `hours` hours and
+// reports per-bucket count/p50/p95 latency, average memory, and error count.
+// The bucket width scales with the window so the chart stays readable.
+func (c *Client) GetQueryHealthTrend(ctx context.Context, hours int) ([]QueryHealthPoint, error) {
+	if hours <= 0 {
+		hours = 24
+	}
+	bucketMinutes := 60
+	switch hours {
+	case 1:
+		bucketMinutes = 5
+	case 168:
+		bucketMinutes = 360
+	}
+	table := c.tableRef("query_log")
+	query := fmt.Sprintf(`SELECT
+		toStartOfInterval(event_time, INTERVAL %d MINUTE) AS bucket,
+		count() AS count,
+		quantile(0.5)(query_duration_ms) AS p50,
+		quantile(0.95)(query_duration_ms) AS p95,
+		avg(memory_usage) AS avg_mem,
+		countIf(type IN ('ExceptionWhileProcessing', 'ExceptionBeforeStart')) AS errors
+	FROM %s
+	WHERE event_time >= now() - INTERVAL %d HOUR
+		AND type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')
+		AND is_initial_query = 1
+		AND log_comment != '%s'
+	GROUP BY bucket
+	ORDER BY bucket`, bucketMinutes, table, hours, managedLogComment)
+
+	rows, err := c.conn.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("querying query health trend: %w", err)
+	}
+	defer rows.Close()
+
+	var out []QueryHealthPoint
+	for rows.Next() {
+		var p QueryHealthPoint
+		if err := rows.Scan(&p.Bucket, &p.Count, &p.P50DurationMs, &p.P95DurationMs, &p.AvgMemory, &p.Errors); err != nil {
+			return nil, fmt.Errorf("scanning query health point: %w", err)
+		}
+		out = append(out, p)
+	}
+	if out == nil {
+		out = []QueryHealthPoint{}
+	}
+	return out, nil
+}

@@ -88,6 +88,7 @@ func apiRoutes(api *API) http.Handler {
 	r.Get("/compare", api.CompareQueries)
 	r.Get("/queries", api.ListQueries)
 	r.Get("/queries/fingerprints", api.ListFingerprints)
+	r.Get("/queries/health-trend", api.GetQueryHealthTrend)
 	r.Get("/queries/fingerprints/{hash}/trend", api.GetFingerprintTrend)
 	r.Get("/queries/fingerprints/{hash}/queries", api.ListFingerprintQueries)
 	r.Get("/queries/{queryID}", api.GetQuery)

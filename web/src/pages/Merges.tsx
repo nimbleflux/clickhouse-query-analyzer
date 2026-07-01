@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input, Select } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 import { TableName } from "@/components/TableName";
@@ -75,6 +76,25 @@ export function Merges({ connected }: { connected: boolean }) {
     }
     return out;
   }, [merges, minElapsed, search]);
+
+  const sort = useTableSort<"table" | "progress" | "elapsed" | "parts" | "size">("elapsed", "desc");
+  const sorted = useMemo(() => {
+    if (!sort.field) return filtered;
+    const dir = sort.dir === "asc" ? 1 : -1;
+    const by = (m: typeof merges[number]): number | string => {
+      switch (sort.field) {
+        case "progress": return m.progress;
+        case "elapsed": return m.elapsed;
+        case "parts": return m.num_parts;
+        case "size": return m.total_size_bytes_compressed;
+        default: return `${m.database}.${m.table}`;
+      }
+    };
+    return [...filtered].sort((a, b) => {
+      const va = by(a), vb = by(b);
+      return (va < vb ? -1 : va > vb ? 1 : 0) * dir;
+    });
+  }, [filtered, sort.field, sort.dir]);
 
   const stats = useMemo(() => {
     let bytes = 0, slowest = 0, mutations = 0;
@@ -162,21 +182,20 @@ export function Merges({ connected }: { connected: boolean }) {
               description={merges.length === 0 ? "Nothing merging right now." : "Try clearing the search."}
             />
           ) : (
-            <div className="mt-4 overflow-hidden rounded-lg border border-[var(--color-border)]">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
-                      <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Table</th>
-                      <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Progress</th>
-                      <th className="px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]">Elapsed</th>
-                      <th className="px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]">Parts</th>
-                      <th className="px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]">Size</th>
-                      <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Type</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map((m, i) => {
+            <div className="mt-4 max-h-[65vh] overflow-auto rounded-lg border border-[var(--color-border)]">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10">
+                  <tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
+                    <SortableHeader field="table" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Table" className="px-4 py-2.5 text-xs" />
+                    <SortableHeader field="progress" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Progress" className="px-4 py-2.5 text-xs" />
+                    <SortableHeader field="elapsed" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Elapsed" align="right" className="px-4 py-2.5 text-xs" />
+                    <SortableHeader field="parts" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Parts" align="right" className="px-4 py-2.5 text-xs" />
+                    <SortableHeader field="size" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Size" align="right" className="px-4 py-2.5 text-xs" />
+                    <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Type</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map((m, i) => {
                       const pct = Math.round(m.progress * 100);
                       return (
                         <tr key={`${m.database}.${m.table}.${m.result_part_name}-${i}`} className="border-b border-[var(--color-border)] last:border-0">
@@ -207,7 +226,6 @@ export function Merges({ connected }: { connected: boolean }) {
                   </tbody>
                 </table>
               </div>
-            </div>
           )}
         </>
       )}

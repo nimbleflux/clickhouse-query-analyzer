@@ -165,6 +165,8 @@ export interface QueryListParams {
   from_time?: string;
   to_time?: string;
   user?: string;
+  database?: string;
+  table?: string;
   query_kind?: string;
   min_duration?: number;
   min_memory?: number;
@@ -389,6 +391,15 @@ export interface AsyncMetric {
   metric: string;
   value: number;
   description: string;
+}
+
+export interface QueryHealthPoint {
+  bucket: string;
+  count: number;
+  p50_duration_ms: number;
+  p95_duration_ms: number;
+  avg_memory: number;
+  errors: number;
 }
 
 export interface AsyncMetricsOverview {

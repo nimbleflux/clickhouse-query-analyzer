@@ -1,4 +1,5 @@
-import { Loader2, RefreshCw, AlertTriangle, ChevronDown, ChevronRight, Table2, ExternalLink, Database } from "lucide-react";
+import { useState } from "react";
+import { Loader2, RefreshCw, AlertTriangle, ChevronDown, ChevronRight, Table2, ExternalLink, Database, Search, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { formatNumber } from "@/utils";
 import type { SchemaData } from "@/api/schema-cache";
 import { AccordionHeader } from "./AccordionSection";
@@ -17,17 +18,27 @@ interface SchemaSidebarProps {
   onInsertAtCursor: (text: string) => void;
   onSetSQLText: (sql: string) => void;
   onRefreshSchema: () => void;
+  onExpandAll: () => void;
+  onCollapseAll: () => void;
   sectionStyle: React.CSSProperties;
 }
 
 export function SchemaSidebar({
   sections, onToggleSection, databases, schemaData, schemaLoading, schemaStale,
-  expanded, onToggleExpand, onInsertAtCursor, onSetSQLText, onRefreshSchema, sectionStyle,
+  expanded, onToggleExpand, onInsertAtCursor, onSetSQLText, onRefreshSchema, onExpandAll, onCollapseAll, sectionStyle,
 }: SchemaSidebarProps) {
+  const [filter, setFilter] = useState("");
+  const q = filter.trim().toLowerCase();
+  // A database matches if its name matches OR any of its (loaded) tables match.
+  const dbMatches = (dbName: string) =>
+    !q || dbName.toLowerCase().includes(q) ||
+    (schemaData[dbName]?.tables || []).some((t) => t.name.toLowerCase().includes(q));
+  const tableMatches = (name: string) => !q || name.toLowerCase().includes(q);
+  const visibleDbs = q ? databases.filter(dbMatches) : databases;
   return (
     <>
       <AccordionHeader
-        label="Schema"
+        label="Databases"
         icon={<Database className="h-3.5 w-3.5" />}
         sectionKey="schema"
         sections={sections}
@@ -46,7 +57,24 @@ export function SchemaSidebar({
       />
       <div style={sectionStyle} className="border-b border-[var(--color-border)]">
         <div className="p-1">
-          {databases.length > 0 ? databases.map((dbName) => (
+          <div className="relative mb-1 px-1">
+            <Search className="absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--color-text-secondary)]" />
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter databases or tables…"
+              className="w-full rounded border border-[var(--color-border)] bg-[var(--surface-base)] py-1 pl-7 pr-2 text-xs text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+            />
+          </div>
+          <div className="mb-1 flex items-center justify-end gap-1 px-2 text-[10px] text-[var(--color-text-secondary)]">
+            <button onClick={onExpandAll} className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--surface-hover)]" title="Expand all databases">
+              <ChevronsUpDown className="h-3 w-3" /> Expand all
+            </button>
+            <button onClick={onCollapseAll} className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--surface-hover)]" title="Collapse all">
+              <ChevronsDownUp className="h-3 w-3" /> Collapse all
+            </button>
+          </div>
+          {visibleDbs.length > 0 ? visibleDbs.map((dbName) => (
             <div key={dbName}>
               <button
                 onClick={() => onToggleExpand(`db:${dbName}`)}
@@ -59,7 +87,7 @@ export function SchemaSidebar({
                   <span className="ml-auto shrink-0 text-[10px] text-[var(--color-text-secondary)]">{schemaData[dbName].tables!.length}</span>
                 )}
               </button>
-              {expanded.has(`db:${dbName}`) && (schemaData[dbName]?.tables || []).map((t) => (
+              {(expanded.has(`db:${dbName}`) || (q && dbMatches(dbName))) && (schemaData[dbName]?.tables || []).filter((t) => tableMatches(t.name)).map((t) => (
                 <div key={t.name} className="group relative">
                   <div className="flex items-center">
                     <button
@@ -69,7 +97,7 @@ export function SchemaSidebar({
                       {expanded.has(`tbl:${dbName}.${t.name}`) ? <ChevronDown className="h-3 w-3 shrink-0" /> : <ChevronRight className="h-3 w-3 shrink-0" />}
                       <Table2 className="h-3 w-3 shrink-0 text-[var(--color-text-secondary)]" />
                       <span className="truncate">{t.name}</span>
-                      {t.row_count > 0 && <span className="ml-1 shrink-0 text-[10px] text-[var(--color-text-secondary)]">({formatNumber(t.row_count)})</span>}
+                      {t.row_count > 0 && <span className="ml-1 shrink-0 self-center text-[10px] leading-none text-[var(--color-text-secondary)]">({formatNumber(t.row_count)})</span>}
                     </button>
                     <button
                       onClick={() => onSetSQLText(`SELECT * FROM "${dbName}"."${t.name}"`)}
@@ -105,10 +133,10 @@ export function SchemaSidebar({
                 <div className="px-5 py-1 text-[10px] text-[var(--color-text-secondary)]">Failed to load tables</div>
               )}
             </div>
-          )) : (
+          )          ) : (
             <div className="flex items-center justify-center gap-2 px-3 py-6 text-xs text-[var(--color-text-secondary)]">
               {schemaLoading && <Loader2 className="h-3 w-3 animate-spin" />}
-              {schemaLoading ? "Loading databases..." : "No databases found"}
+              {schemaLoading ? "Loading databases..." : q ? "No matches" : "No databases found"}
             </div>
           )}
         </div>
