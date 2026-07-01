@@ -343,16 +343,6 @@ export function RunningQueries({ connected }: { connected: boolean }) {
           <Filter className="h-3.5 w-3.5" />
           Filters
         </Button>
-        <Checkbox
-          checked={showSystem}
-          onChange={(e) => setShowSystem(e.target.checked)}
-          label="Internal queries"
-        />
-        <Checkbox
-          checked={groupByUser}
-          onChange={(e) => setGroupByUser(e.target.checked)}
-          label="Group by user"
-        />
         {filtered.length > 0 && (
           <Badge variant="default">{filtered.length} running</Badge>
         )}
@@ -375,6 +365,18 @@ export function RunningQueries({ connected }: { connected: boolean }) {
                 {QUERY_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
               </Select>
             </div>
+          </div>
+          <div className="mt-3 flex items-center gap-4">
+            <Checkbox
+              checked={showSystem}
+              onChange={(e) => setShowSystem(e.target.checked)}
+              label="Internal queries"
+            />
+            <Checkbox
+              checked={groupByUser}
+              onChange={(e) => setGroupByUser(e.target.checked)}
+              label="Group by user"
+            />
           </div>
         </Card>
       )}
