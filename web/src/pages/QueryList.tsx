@@ -213,6 +213,11 @@ export function QueryList({ connected }: { connected: boolean }) {
           }}
           label="Internal queries"
         />
+        <Checkbox
+          checked={!!params.errors_only}
+          onChange={(e) => setParams((p) => ({ ...p, errors_only: e.target.checked, offset: 0 }))}
+          label="Failed only"
+        />
       </div>
 
       {(params.user || params.database || params.table || params.errors_only) && (
