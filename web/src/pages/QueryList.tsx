@@ -205,19 +205,6 @@ export function QueryList({ connected }: { connected: boolean }) {
           <Filter className="h-3.5 w-3.5" />
           Filters
         </Button>
-        <Checkbox
-          checked={showSystem}
-          onChange={(e) => {
-            setShowSystem(e.target.checked);
-            setParams((p) => ({ ...p, hide_system_queries: !e.target.checked, offset: 0 }));
-          }}
-          label="Internal queries"
-        />
-        <Checkbox
-          checked={!!params.errors_only}
-          onChange={(e) => setParams((p) => ({ ...p, errors_only: e.target.checked, offset: 0 }))}
-          label="Failed only"
-        />
       </div>
 
       {(params.user || params.database || params.table || params.errors_only) && (
@@ -314,6 +301,21 @@ export function QueryList({ connected }: { connected: boolean }) {
                 <option value="ASC">Ascending</option>
               </Select>
             </div>
+          </div>
+          <div className="mt-3 flex items-center gap-4">
+            <Checkbox
+              checked={showSystem}
+              onChange={(e) => {
+                setShowSystem(e.target.checked);
+                setParams((p) => ({ ...p, hide_system_queries: !e.target.checked, offset: 0 }));
+              }}
+              label="Internal queries"
+            />
+            <Checkbox
+              checked={!!params.errors_only}
+              onChange={(e) => setParams((p) => ({ ...p, errors_only: e.target.checked, offset: 0 }))}
+              label="Failed only"
+            />
           </div>
         </Card>
       )}
