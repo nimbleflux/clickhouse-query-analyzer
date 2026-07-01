@@ -60,6 +60,7 @@ export function QueryList({ connected }: { connected: boolean }) {
     min_duration: Number(urlParam("min_duration")) || undefined,
     min_memory: Number(urlParam("min_memory")) || undefined,
     min_read_bytes: Number(urlParam("min_read_bytes")) || undefined,
+    errors_only: urlParam("errors_only") === "true",
   });
   const [search, setSearch] = useState(urlParam("q"));
   const [showFilters, setShowFilters] = useState(false);
@@ -80,6 +81,7 @@ export function QueryList({ connected }: { connected: boolean }) {
     if (params.min_duration) sp.set("min_duration", String(params.min_duration));
     if (params.min_memory) sp.set("min_memory", String(params.min_memory));
     if (params.min_read_bytes) sp.set("min_read_bytes", String(params.min_read_bytes));
+    if (params.errors_only) sp.set("errors_only", "true");
     if (!params.hide_system_queries) sp.set("hide_system", "false");
     setSearchParams(sp, { replace: true });
   }, [search, params, setSearchParams]);
@@ -203,17 +205,9 @@ export function QueryList({ connected }: { connected: boolean }) {
           <Filter className="h-3.5 w-3.5" />
           Filters
         </Button>
-        <Checkbox
-          checked={showSystem}
-          onChange={(e) => {
-            setShowSystem(e.target.checked);
-            setParams((p) => ({ ...p, hide_system_queries: !e.target.checked, offset: 0 }));
-          }}
-          label="Internal queries"
-        />
       </div>
 
-      {(params.user || params.database || params.table) && (
+      {(params.user || params.database || params.table || params.errors_only) && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           <span className="text-xs text-[var(--color-text-secondary)]">Filtered by:</span>
           {params.user && (
@@ -224,6 +218,9 @@ export function QueryList({ connected }: { connected: boolean }) {
           )}
           {params.table && (
             <Chip onClear={() => setParams((p) => ({ ...p, table: undefined, offset: 0 }))} label={`table: ${params.table}`} />
+          )}
+          {params.errors_only && (
+            <Chip onClear={() => setParams((p) => ({ ...p, errors_only: false, offset: 0 }))} label="failed only" />
           )}
         </div>
       )}
@@ -304,6 +301,21 @@ export function QueryList({ connected }: { connected: boolean }) {
                 <option value="ASC">Ascending</option>
               </Select>
             </div>
+          </div>
+          <div className="mt-3 flex items-center gap-4">
+            <Checkbox
+              checked={showSystem}
+              onChange={(e) => {
+                setShowSystem(e.target.checked);
+                setParams((p) => ({ ...p, hide_system_queries: !e.target.checked, offset: 0 }));
+              }}
+              label="Internal queries"
+            />
+            <Checkbox
+              checked={!!params.errors_only}
+              onChange={(e) => setParams((p) => ({ ...p, errors_only: e.target.checked, offset: 0 }))}
+              label="Failed only"
+            />
           </div>
         </Card>
       )}

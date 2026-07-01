@@ -62,6 +62,7 @@ func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 		SortDir:           strings.ToUpper(r.URL.Query().Get("sort_dir")),
 		HideSystemQueries: r.URL.Query().Get("hide_system_queries") != "false",
 		IncludeCount:      r.URL.Query().Get("include_count") != "false",
+		ErrorsOnly:        r.URL.Query().Get("errors_only") == "true",
 	}
 	params.FromTime, _ = defaultQueryLogWindow(r)
 

@@ -177,11 +177,6 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
           <Filter className="h-3.5 w-3.5" />
           Filters
         </Button>
-        <Checkbox
-          checked={showSystem}
-          onChange={(e) => { setShowSystem(e.target.checked); setCurrentPage(1); }}
-          label="Internal queries"
-        />
       </div>
 
       {showFilters && (
@@ -222,6 +217,13 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
                 className="w-full"
               />
             </div>
+          </div>
+          <div className="mt-3">
+            <Checkbox
+              checked={showSystem}
+              onChange={(e) => { setShowSystem(e.target.checked); setCurrentPage(1); }}
+              label="Internal queries"
+            />
           </div>
         </Card>
       )}
