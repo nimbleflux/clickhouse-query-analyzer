@@ -47,6 +47,8 @@ type QueryListParams struct {
 	FromTime          string `json:"from_time"`
 	ToTime            string `json:"to_time"`
 	User              string `json:"user"`
+	Database          string `json:"database"`
+	Table             string `json:"table"`
 	QueryKind         string `json:"query_kind"`
 	MinDuration       uint64 `json:"min_duration"`
 	MinMemory         uint64 `json:"min_memory"`
@@ -132,6 +134,14 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 	if params.User != "" {
 		whereParts = append(whereParts, "user = ?")
 		whereArgs = append(whereArgs, params.User)
+	}
+	if params.Database != "" {
+		whereParts = append(whereParts, "has(databases, ?)")
+		whereArgs = append(whereArgs, params.Database)
+	}
+	if params.Table != "" {
+		whereParts = append(whereParts, "has(tables, ?)")
+		whereArgs = append(whereArgs, params.Table)
 	}
 	if params.QueryKind != "" {
 		whereParts = append(whereParts, "query_kind = ?")

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input, Checkbox } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
@@ -99,6 +100,21 @@ export function Mutations({ connected }: { connected: boolean }) {
     return out;
   }, [mutations, minAge, errorsOnly, search]);
 
+  const sort = useTableSort<"table" | "age" | "parts">("age", "desc");
+  const sorted = useMemo(() => {
+    if (!sort.field) return filtered;
+    const dir = sort.dir === "asc" ? 1 : -1;
+    const by = (m: MutationDetail): number | string => {
+      if (sort.field === "age") return m.age_seconds;
+      if (sort.field === "parts") return m.parts_to_do;
+      return `${m.database}.${m.table}`;
+    };
+    return [...filtered].sort((a, b) => {
+      const va = by(a), vb = by(b);
+      return (va < vb ? -1 : va > vb ? 1 : 0) * dir;
+    });
+  }, [filtered, sort.field, sort.dir]);
+
   const stats = useMemo(() => {
     let failed = 0, killed = 0, oldest = 0;
     for (const m of mutations) {
@@ -185,21 +201,20 @@ export function Mutations({ connected }: { connected: boolean }) {
               description={mutations.length === 0 ? "Nothing waiting in system.mutations." : "Try clearing the search or the failed-only filter."}
             />
           ) : (
-            <div className="mt-4 overflow-hidden rounded-lg border border-[var(--color-border)]">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
-                      <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Table</th>
-                      <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Command</th>
-                      <th className="px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]">Age</th>
-                      <th className="px-4 py-2.5 text-right font-medium text-[var(--color-text-secondary)]">Parts to do</th>
-                      <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Status</th>
-                      <th className="px-4 py-2.5" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map((m) => {
+            <div className="mt-4 max-h-[65vh] overflow-auto rounded-lg border border-[var(--color-border)]">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10">
+                  <tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
+                    <SortableHeader field="table" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Table" className="px-4 py-2.5 text-xs" />
+                    <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Command</th>
+                    <SortableHeader field="age" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Age" align="right" className="px-4 py-2.5 text-xs" />
+                    <SortableHeader field="parts" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Parts to do" align="right" className="px-4 py-2.5 text-xs" />
+                    <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Status</th>
+                    <th className="px-4 py-2.5" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map((m) => {
                       const key = `${m.database}.${m.table}.${m.mutation_id}`;
                       const isKilling = killing.has(key);
                       return (
@@ -244,7 +259,6 @@ export function Mutations({ connected }: { connected: boolean }) {
                   </tbody>
                 </table>
               </div>
-            </div>
           )}
 
           {stats.failed > 0 && (

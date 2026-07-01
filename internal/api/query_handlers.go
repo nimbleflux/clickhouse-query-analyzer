@@ -29,6 +29,21 @@ func defaultQueryLogWindow(r *http.Request) (string, bool) {
 	return time.Now().Add(-24 * time.Hour).Format("2006-01-02 15:04:05"), true
 }
 
+func (a *API) GetQueryHealthTrend(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	points, err := ch.GetQueryHealthTrend(r.Context(), hours)
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, points)
+}
+
 func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
@@ -39,6 +54,8 @@ func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 	params := clickhouse.QueryListParams{
 		ToTime:            r.URL.Query().Get("to_time"),
 		User:              r.URL.Query().Get("user"),
+		Database:          r.URL.Query().Get("database"),
+		Table:             r.URL.Query().Get("table"),
 		QueryKind:         r.URL.Query().Get("query_kind"),
 		Search:            r.URL.Query().Get("search"),
 		SortBy:            r.URL.Query().Get("sort_by"),

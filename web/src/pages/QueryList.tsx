@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Search, Filter, ChevronLeft, ChevronRight, Clock, MemoryStick, Database, GitCompare, ArrowUp, ArrowDown, Copy, FileSearch, Code } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { fetchQueries } from "../api/client";
@@ -43,18 +43,46 @@ export function QueryList({ connected }: { connected: boolean }) {
   const controllerRef = useRef<AbortController | null>(null);
   const elapsed = useElapsedTimer(loading);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlParam = (k: string) => searchParams.get(k) ?? "";
   const [params, setParams] = useState<QueryListParams>({
     limit: 50,
     offset: 0,
     sort_by: "event_time",
     sort_dir: "DESC",
-    hide_system_queries: true,
-    from_time: toCHDateTime(new Date(Date.now() - 24 * 3600 * 1000)),
+    hide_system_queries: urlParam("hide_system") !== "false",
+    from_time: urlParam("from_time") || toCHDateTime(new Date(Date.now() - 24 * 3600 * 1000)),
+    to_time: urlParam("to_time"),
+    user: urlParam("user"),
+    database: urlParam("database"),
+    table: urlParam("table"),
+    query_kind: urlParam("query_kind"),
+    min_duration: Number(urlParam("min_duration")) || undefined,
+    min_memory: Number(urlParam("min_memory")) || undefined,
+    min_read_bytes: Number(urlParam("min_read_bytes")) || undefined,
   });
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(urlParam("q"));
   const [showFilters, setShowFilters] = useState(false);
-  const [showSystem, setShowSystem] = useState(false);
+  const [showSystem, setShowSystem] = useState(urlParam("hide_system") === "false");
   const debouncedSearch = useDebouncedValue(search, 300);
+
+  // Keep the URL in sync with the active filters so views are shareable and
+  // drill-down links (e.g. ?table=X) work. Uses replace to avoid history spam.
+  useEffect(() => {
+    const sp = new URLSearchParams();
+    if (search) sp.set("q", search);
+    if (params.user) sp.set("user", params.user);
+    if (params.database) sp.set("database", params.database);
+    if (params.table) sp.set("table", params.table);
+    if (params.query_kind) sp.set("query_kind", params.query_kind);
+    if (params.from_time) sp.set("from_time", params.from_time);
+    if (params.to_time) sp.set("to_time", params.to_time);
+    if (params.min_duration) sp.set("min_duration", String(params.min_duration));
+    if (params.min_memory) sp.set("min_memory", String(params.min_memory));
+    if (params.min_read_bytes) sp.set("min_read_bytes", String(params.min_read_bytes));
+    if (!params.hide_system_queries) sp.set("hide_system", "false");
+    setSearchParams(sp, { replace: true });
+  }, [search, params, setSearchParams]);
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
@@ -179,12 +207,26 @@ export function QueryList({ connected }: { connected: boolean }) {
           checked={showSystem}
           onChange={(e) => {
             setShowSystem(e.target.checked);
-            setParams((p) => ({ ...p, offset: 0 }));
+            setParams((p) => ({ ...p, hide_system_queries: !e.target.checked, offset: 0 }));
           }}
           label="Internal queries"
         />
       </div>
 
+      {(params.user || params.database || params.table) && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-[var(--color-text-secondary)]">Filtered by:</span>
+          {params.user && (
+            <Chip onClear={() => setParams((p) => ({ ...p, user: undefined, offset: 0 }))} label={`user: ${params.user}`} />
+          )}
+          {params.database && (
+            <Chip onClear={() => setParams((p) => ({ ...p, database: undefined, offset: 0 }))} label={`database: ${params.database}`} />
+          )}
+          {params.table && (
+            <Chip onClear={() => setParams((p) => ({ ...p, table: undefined, offset: 0 }))} label={`table: ${params.table}`} />
+          )}
+        </div>
+      )}
       {showFilters && (
         <Card className="p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -516,5 +558,14 @@ function VirtualQueryRows({
         })}
       </div>
     </div>
+  );
+}
+
+function Chip({ label, onClear }: { label: string; onClear: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--surface-elevated)] px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)]">
+      <span className="font-mono">{label}</span>
+      <button onClick={onClear} className="rounded-full px-1 hover:bg-[var(--surface-hover)] hover:text-[var(--color-text-primary)]" title="Clear filter">×</button>
+    </span>
   );
 }

@@ -5,10 +5,11 @@ import { sql, type SQLNamespace } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { keymap } from "@codemirror/view";
 import { Prec } from "@codemirror/state";
-import { acceptCompletion } from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion } from "@codemirror/autocomplete";
 import { format as sqlFormat } from "sql-formatter";
 import { Play, Loader2, Square, Plus, X, Bookmark, BookmarkCheck, Settings2, Share2 } from "lucide-react";
 import { executeQuery, fetchDatabases, fetchTables, fetchColumns } from "@/api/client";
+import { makeSqlCompletion, type SqlNs } from "./editor/sqlComplete";
 import type { QueryResult } from "@/api/types";
 import { useTheme } from "@/api/theme";
 import { ConfirmDialog } from "@/components/ui/dialog";
@@ -423,6 +424,16 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     });
   };
 
+  const expandAllDbs = () => {
+    for (const db of databases) if (!schemaData[db]?.tables) loadTables(db);
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      for (const db of databases) next.add(`db:${db}`);
+      return next;
+    });
+  };
+  const collapseAll = () => setExpanded(new Set());
+
   const insertAtCursor = (text: string) => {
     const view = (editorRef.current as { view?: { state: { selection: { main: { head: number } } }; dispatch: (args: { changes: { from: number; insert: string }; selection: { anchor: number } }) => void; focus: () => void } })?.view;
     if (view) {
@@ -692,6 +703,8 @@ export function QueryEditor({ connected }: { connected: boolean }) {
           schemaStale={schemaStale}
           expanded={expanded}
           onToggleExpand={toggleExpand}
+          onExpandAll={expandAllDbs}
+          onCollapseAll={collapseAll}
           onInsertAtCursor={insertAtCursor}
           onSetSQLText={setSQLText}
           onRefreshSchema={onRefreshSchema}
@@ -935,7 +948,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
               value={sqlText}
               onChange={setSQLText}
               theme={cmTheme}
-              extensions={[cmKeymap, sql({ schema: buildSQLNamespace() })]}
+              extensions={[cmKeymap, sql(), autocompletion({ override: [makeSqlCompletion(() => buildSQLNamespace() as unknown as SqlNs)] })]}
               basicSetup={{ lineNumbers: true, foldGutter: false }}
               className="h-full text-sm [&_.cm-editor]:h-full [&_.cm-scroller]:!font-mono [&_.cm-scroller]:text-[13px]"
             />

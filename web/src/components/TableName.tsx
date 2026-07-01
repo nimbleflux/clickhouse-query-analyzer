@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileCode, Send, Loader2, Copy } from "lucide-react";
+import { FileCode, Send, Loader2, Copy, ListFilter } from "lucide-react";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -20,10 +20,19 @@ import { ErrorState } from "@/components/ui/state";
  */
 export function TableName({ database, table, className }: { database: string; table: string; className?: string }) {
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
   return (
     <span className={className ?? ""}>
       <span className="text-[var(--color-text-secondary)]">{database}.</span>
       {table}
+      <button
+        type="button"
+        onClick={() => navigate(`/queries?database=${encodeURIComponent(database)}&table=${encodeURIComponent(table)}`)}
+        title={`Show queries touching ${database}.${table}`}
+        className="ml-1 inline-flex translate-y-[-1px] items-center rounded p-0.5 text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]"
+      >
+        <ListFilter className="h-3 w-3" />
+      </button>
       <DdlButton database={database} table={table} open={open} onOpenChange={setOpen} inline />
     </span>
   );
@@ -109,14 +118,18 @@ function DdlDialog({
     return () => controllerRef.current?.abort();
   }, [open, load]);
 
-  const formatted = useMemo(() => {
+  const { formatted, formatFailed } = useMemo(() => {
+    if (!stmt) return { formatted: "", formatFailed: false };
     try {
-      return formatSQL(stmt, { language: "postgresql", keywordCase: "upper" });
+      // mysql is the most tolerant dialect sql-formatter offers for ClickHouse
+      // DDL (CREATE TABLE … ENGINE = …). If it still can't parse, we fall back
+      // to raw so the toggle never silently shows identical text.
+      return { formatted: formatSQL(stmt, { language: "mysql", keywordCase: "upper" }), formatFailed: false };
     } catch {
-      return stmt;
+      return { formatted: stmt, formatFailed: true };
     }
   }, [stmt]);
-  const value = view === "formatted" ? formatted : stmt;
+  const value = formatFailed || view === "raw" ? stmt : formatted;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -136,10 +149,14 @@ function DdlDialog({
           ) : (
             <>
               <div className="mb-2 flex items-center justify-end gap-2">
-                <div className="flex items-center gap-1">
-                  <Button variant={view === "formatted" ? "secondary" : "ghost"} size="sm" onClick={() => setView("formatted")}>Formatted</Button>
-                  <Button variant={view === "raw" ? "secondary" : "ghost"} size="sm" onClick={() => setView("raw")}>Raw</Button>
-                </div>
+                {formatFailed ? (
+                  <span className="text-[10px] text-[var(--color-text-secondary)]" title="sql-formatter couldn't parse this statement">Raw only</span>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    <Button variant={view === "formatted" ? "secondary" : "ghost"} size="sm" onClick={() => setView("formatted")}>Formatted</Button>
+                    <Button variant={view === "raw" ? "secondary" : "ghost"} size="sm" onClick={() => setView("raw")}>Raw</Button>
+                  </div>
+                )}
                 <Button variant="ghost" size="icon-sm" onClick={() => copy(value, "DDL copied!")} title="Copy DDL">
                   <Copy className="h-3 w-3" />
                 </Button>

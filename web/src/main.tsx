@@ -19,6 +19,7 @@ import { Mutations } from "./pages/Mutations";
 import { Merges } from "./pages/Merges";
 import { UsersAccess } from "./pages/UsersAccess";
 import { SystemMetrics } from "./pages/SystemMetrics";
+import { Trends } from "./pages/Trends";
 import { loadConnection, saveConnection, setConnectionHeaders, clearConnectionHeaders, DEFAULT_CONNECTION } from "./api/connection";
 import type { ConnectionParams } from "./api/connection";
 import { testConnection, fetchServerConfig } from "./api/client";
@@ -127,6 +128,7 @@ function App() {
             <Route path="/merges" element={<Merges connected={connected} />} />
             <Route path="/access" element={<UsersAccess connected={connected} />} />
             <Route path="/system-metrics" element={<SystemMetrics connected={connected} />} />
+            <Route path="/trends" element={<Trends connected={connected} />} />
           </Route>
         </Routes>
       </BrowserRouter>

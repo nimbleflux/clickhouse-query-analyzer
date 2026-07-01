@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { RefreshCw, Users, KeyRound, ShieldAlert, Trash2, BadgeCheck, AlertTriangle, Search } from "lucide-react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Link } from "react-router-dom";
+import { RefreshCw, Users, KeyRound, ShieldAlert, Trash2, BadgeCheck, AlertTriangle, Search, ChevronRight } from "lucide-react";
 import { fetchAccess, dropUser, dropRole, revokeGrant } from "../api/client";
 import type { AccessOverview, UserRow, RoleRow, GrantRow, QuotaUsageRow, QuotaDef } from "../api/types";
 import { ApiError } from "../api/errors";
@@ -11,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Pagination } from "@/components/ui/Pagination";
@@ -158,14 +160,15 @@ export function UsersAccess({ connected }: { connected: boolean }) {
           </div>
 
           {(() => {
-            // Paginate the active tab client-side, after a case-insensitive
-            // search across the fields relevant to that tab.
+            // Paginate users/quota client-side; grants are grouped by grantee
+            // (collapsible) instead of paginated. A case-insensitive search
+            // applies to all tabs.
             const q = query.trim().toLowerCase();
             const usersF = q ? data.users.filter((u) => u.name.toLowerCase().includes(q) || (u.auth_type ?? []).some((a) => a.toLowerCase().includes(q)) || (u.default_roles ?? []).some((r) => r.toLowerCase().includes(q))) : data.users;
             const grantsF = q ? data.grants.filter((g) => (g.user_name || g.role_name || "").toLowerCase().includes(q) || g.access_type.toLowerCase().includes(q) || `${g.database}.${g.table}`.toLowerCase().includes(q)) : data.grants;
             const quotaF = q ? data.quota_usage.filter((k) => (k.quota_name || "").toLowerCase().includes(q) || (k.quota_key || "").toLowerCase().includes(q)) : data.quota_usage;
-            const list = tab === "users" ? usersF : tab === "grants" ? grantsF : quotaF;
-            const totalPages = Math.max(1, Math.ceil(list.length / pageSize));
+            const paged = tab === "grants" ? grantsF : tab === "users" ? usersF : quotaF;
+            const totalPages = Math.max(1, Math.ceil(paged.length / pageSize));
             const safePage = Math.min(page, totalPages);
             const start = (safePage - 1) * pageSize;
             return (
@@ -175,12 +178,12 @@ export function UsersAccess({ connected }: { connected: boolean }) {
                   <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-text-secondary)]" />
                   <Input value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} placeholder={`Search ${tab}…`} className="h-7 pl-8 text-xs" />
                 </div>
-                {list.length > pageSize && (
-                  <Pagination page={safePage} pageSize={pageSize} total={list.length} onPage={setPage} onPageSize={(s) => { setPageSize(s); setPage(1); }} />
+                {tab !== "grants" && paged.length > pageSize && (
+                  <Pagination page={safePage} pageSize={pageSize} total={paged.length} onPage={setPage} onPageSize={(s) => { setPageSize(s); setPage(1); }} />
                 )}
               </div>
               {tab === "users" && <UsersRolesTab users={usersF.slice(start, start + pageSize)} roles={data.roles} canManage={canManage} onDrop={setDropTarget} />}
-              {tab === "grants" && <GrantsTab grants={grantsF.slice(start, start + pageSize)} canManage={canManage} onRevoke={setRevokeTarget} />}
+              {tab === "grants" && <GrantsTab grants={grantsF} canManage={canManage} onRevoke={setRevokeTarget} />}
               {tab === "quota" && <QuotaTab rows={quotaF.slice(start, start + pageSize)} definitions={data.quotas} />}
             </>
             );
@@ -233,7 +236,10 @@ function UsersRolesTab({ users, roles, canManage, onDrop }: { users: UserRow[]; 
               <tr key={u.name} className="border-b border-[var(--color-border)] last:border-0">
                 <td className="whitespace-nowrap px-4 py-3">
                   <div className="flex items-center gap-1.5 font-mono text-xs text-[var(--color-text-primary)]">
-                    <Users className="h-3 w-3 text-[var(--color-text-secondary)]" /> {u.name}
+                    <Users className="h-3 w-3 text-[var(--color-text-secondary)]" />{" "}
+                    <Link to={`/queries?user=${encodeURIComponent(u.name)}`} className="text-[var(--color-accent)] hover:underline" title={`Show queries run by ${u.name}`}>
+                      {u.name}
+                    </Link>
                     {u.default_database && <span className="opacity-60">db: {u.default_database}</span>}
                   </div>
                 </td>
@@ -275,52 +281,116 @@ function UsersRolesTab({ users, roles, canManage, onDrop }: { users: UserRow[]; 
 }
 
 function GrantsTab({ grants, canManage, onRevoke }: { grants: GrantRow[]; canManage: boolean; onRevoke: (g: GrantRow) => void }) {
+  // Hooks must run before the empty-state early return.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggle = (name: string) => setCollapsed((prev) => {
+    const next = new Set(prev);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    return next;
+  });
+
   if (grants.length === 0) return <EmptyState icon={KeyRound} title="No grants visible" description="Your user may lack SELECT on system.grants." />;
+
+  // Group by grantee (user or role), preserving first-seen order.
+  const groups = new Map<string, { kind: "user" | "role"; rows: GrantRow[] }>();
+  for (const g of grants) {
+    const name = g.user_name || g.role_name || "";
+    const kind = g.user_name ? "user" : "role";
+    let entry = groups.get(name);
+    if (!entry) { entry = { kind, rows: [] }; groups.set(name, entry); }
+    entry.rows.push(g);
+  }
+  const names = [...groups.keys()];
+  const allCollapsed = names.length > 0 && names.every((n) => collapsed.has(n));
+
   return (
-    <Card className="overflow-hidden">
-      <table className="w-full text-sm">
-        <thead><tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
-          <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Grantee</th>
-          <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Access</th>
-          <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Object</th>
-          <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Flags</th>
-          <th className="px-4 py-2.5" />
-        </tr></thead>
-        <tbody>
-          {grants.map((g, i) => (
-            <tr key={`${g.user_name || g.role_name}-${g.access_type}-${g.database}-${g.table}-${i}`} className="border-b border-[var(--color-border)] last:border-0">
-              <td className="whitespace-nowrap px-4 py-3 font-mono text-xs">
-                <div className="flex items-center gap-1.5">
-                  {g.user_name ? <Users className="h-3 w-3 text-[var(--color-text-secondary)]" /> : <KeyRound className="h-3 w-3 text-[var(--color-text-secondary)]" />}
-                  {g.user_name || g.role_name}
-                </div>
-              </td>
-              <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-primary)]">{g.access_type}</td>
-              <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">
-                {g.database || "*"}{g.table ? `.${g.table}` : ".*"}{g.column ? ` (${g.column})` : ""}
-              </td>
-              <td className="px-4 py-3">
-                <div className="flex gap-1">
-                  {g.grant_option === 1 && <Badge variant="secondary"><BadgeCheck className="mr-0.5 h-3 w-3" />grant</Badge>}
-                  {g.is_partial_revoke === 1 && <Badge variant="warning">revoke</Badge>}
-                </div>
-              </td>
-              <td className="px-2 py-3 text-right">
-                {canManage && (
-                  <Button variant="ghost" size="sm" onClick={() => onRevoke(g)} className="text-[var(--color-error)] hover:bg-[var(--state-error)]" title="Revoke grant">
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Card>
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+        <button onClick={() => setCollapsed(new Set())} disabled={collapsed.size === 0} className="rounded px-2 py-1 hover:bg-[var(--surface-hover)] disabled:opacity-40" title="Expand all grantees">Expand all</button>
+        <span className="opacity-40">·</span>
+        <button onClick={() => setCollapsed(new Set(names))} disabled={allCollapsed} className="rounded px-2 py-1 hover:bg-[var(--surface-hover)] disabled:opacity-40" title="Collapse all grantees">Collapse all</button>
+        <span className="ml-auto">{names.length} grantee{names.length === 1 ? "" : "s"}</span>
+      </div>
+      {names.map((name) => {
+        const { kind, rows } = groups.get(name)!;
+        const open = !collapsed.has(name);
+        return (
+          <div key={name} className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)]">
+            <button onClick={() => toggle(name)} className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-[var(--surface-hover)]">
+              <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)] transition-transform ${open ? "rotate-90" : ""}`} />
+              {kind === "user" ? <Users className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)]" /> : <KeyRound className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)]" />}
+              <span className="font-mono text-xs text-[var(--color-text-primary)]">{name}</span>
+              <Badge variant="default">{kind}</Badge>
+              <span className="ml-auto text-xs text-[var(--color-text-secondary)]">{rows.length} grant{rows.length === 1 ? "" : "s"}</span>
+            </button>
+            {open && (
+              <div className="border-t border-[var(--color-border)]">
+                <table className="w-full text-sm">
+                  <thead><tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
+                    <th className="px-4 py-2 text-left font-medium text-[var(--color-text-secondary)]">Access</th>
+                    <th className="px-4 py-2 text-left font-medium text-[var(--color-text-secondary)]">Object</th>
+                    <th className="px-4 py-2 text-left font-medium text-[var(--color-text-secondary)]">Flags</th>
+                    <th className="px-4 py-2" />
+                  </tr></thead>
+                  <tbody>
+                    {rows.map((g, i) => (
+                      <tr key={`${g.access_type}-${g.database}-${g.table}-${i}`} className="border-b border-[var(--color-border)] last:border-0">
+                        <td className="whitespace-nowrap px-4 py-2 font-mono text-xs text-[var(--color-text-primary)]">{g.access_type}</td>
+                        <td className="px-4 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
+                          {g.database || "*"}{g.table ? `.${g.table}` : ".*"}{g.column ? ` (${g.column})` : ""}
+                        </td>
+                        <td className="px-4 py-2">
+                          <div className="flex gap-1">
+                            {g.grant_option === 1 && (
+                              <Badge variant="secondary">
+                                <span title="WITH GRANT OPTION — the grantee may re-grant this privilege to others">
+                                  <BadgeCheck className="mr-0.5 inline h-3 w-3" />grant option
+                                </span>
+                              </Badge>
+                            )}
+                            {g.is_partial_revoke === 1 && <Badge variant="warning">partial revoke</Badge>}
+                          </div>
+                        </td>
+                        <td className="px-2 py-2 text-right">
+                          {canManage && (
+                            <Button variant="ghost" size="sm" onClick={() => onRevoke(g)} className="text-[var(--color-error)] hover:bg-[var(--state-error)]" title="Revoke grant">
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
 function QuotaTab({ rows, definitions }: { rows: QuotaUsageRow[]; definitions: QuotaDef[] }) {
+  const sort = useTableSort<"quota" | "queries" | "errors" | "read" | "result">("queries", "desc");
+  const sorted = useMemo(() => {
+    if (!sort.field) return rows;
+    const dir = sort.dir === "asc" ? 1 : -1;
+    const by = (q: QuotaUsageRow): number | string => {
+      switch (sort.field) {
+        case "queries": return q.queries;
+        case "errors": return q.errors;
+        case "read": return q.read_rows;
+        case "result": return q.result_rows;
+        default: return q.quota_name || q.quota_key || "";
+      }
+    };
+    return [...rows].sort((a, b) => {
+      const va = by(a), vb = by(b);
+      return (va < vb ? -1 : va > vb ? 1 : 0) * dir;
+    });
+  }, [rows, sort.field, sort.dir]);
+
   if (rows.length === 0 && definitions.length === 0) return <EmptyState icon={KeyRound} title="No quota usage" description="No quotas configured or visible." />;
   return (
     <div className="space-y-3">
@@ -342,30 +412,32 @@ function QuotaTab({ rows, definitions }: { rows: QuotaUsageRow[]; definitions: Q
         <EmptyState icon={KeyRound} title="No quota usage recorded" />
       ) : (
       <Card className="overflow-hidden">
-        <table className="w-full text-sm">
-          <thead><tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
-            <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Quota</th>
-            <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Key</th>
-            <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Window</th>
-            <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Queries</th>
-            <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Errors</th>
-            <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Read</th>
-            <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Result</th>
-          </tr></thead>
-          <tbody>
-            {rows.map((q, i) => (
-              <tr key={`${q.quota_name}-${q.quota_key}-${q.start_time}-${i}`} className="border-b border-[var(--color-border)] last:border-0">
-                <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-primary)]">{q.quota_name || "-"}</td>
-                <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{q.quota_key}</td>
-                <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{q.start_time} → {q.end_time}</td>
-                <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]"><UsageBar used={q.queries} max={q.max_queries} /></td>
-                <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{formatNumber(q.errors)}</td>
-                <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{formatNumber(q.read_rows)} / {formatBytes(q.read_bytes)}</td>
-                <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{formatNumber(q.result_rows)} / {formatBytes(q.result_bytes)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="max-h-[65vh] overflow-auto">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 z-10"><tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
+              <SortableHeader field="quota" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Quota" className="px-4 py-2.5 text-xs" />
+              <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Key</th>
+              <th className="px-4 py-2.5 text-left font-medium text-[var(--color-text-secondary)]">Window</th>
+              <SortableHeader field="queries" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Queries" className="px-4 py-2.5 text-xs" />
+              <SortableHeader field="errors" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Errors" className="px-4 py-2.5 text-xs" />
+              <SortableHeader field="read" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Read" className="px-4 py-2.5 text-xs" />
+              <SortableHeader field="result" activeField={sort.field} dir={sort.dir} onToggle={sort.toggle} label="Result" className="px-4 py-2.5 text-xs" />
+            </tr></thead>
+            <tbody>
+              {sorted.map((q, i) => (
+                <tr key={`${q.quota_name}-${q.quota_key}-${q.start_time}-${i}`} className="border-b border-[var(--color-border)] last:border-0">
+                  <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-primary)]">{q.quota_name || "-"}</td>
+                  <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{q.quota_key}</td>
+                  <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{q.start_time} → {q.end_time}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]"><UsageBar used={q.queries} max={q.max_queries} /></td>
+                  <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{formatNumber(q.errors)}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{formatNumber(q.read_rows)} / {formatBytes(q.read_bytes)}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{formatNumber(q.result_rows)} / {formatBytes(q.result_bytes)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Card>
       )}
     </div>

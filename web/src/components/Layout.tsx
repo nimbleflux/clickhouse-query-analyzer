@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { Plug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge, Menu, X, Network, Layers, FlaskConical, ChevronRight, PanelLeft, PanelLeftClose, GitMerge, Users, BarChart3, type LucideIcon } from "lucide-react";
+import { Plug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge, Menu, X, Network, Layers, FlaskConical, ChevronRight, PanelLeft, PanelLeftClose, GitMerge, Users, BarChart3, TrendingUp, type LucideIcon } from "lucide-react";
 import type { ConnectionParams } from "../api/connection";
 import { setConnectionHeaders } from "../api/connection";
 import { testConnection } from "../api/client";
@@ -26,6 +26,7 @@ const NAV_SECTIONS: NavSectionDef[] = [
       { to: "/mutations", icon: FlaskConical, label: "Mutations" },
       { to: "/merges", icon: GitMerge, label: "Merges" },
       { to: "/system-metrics", icon: BarChart3, label: "System Metrics" },
+      { to: "/trends", icon: TrendingUp, label: "Trends" },
     ],
   },
   {
@@ -224,6 +225,13 @@ export function Layout({
             </div>
           );
         })}
+        {!rail && (
+          <div className="mt-2 flex items-center gap-1 px-2 text-[10px] text-[var(--color-text-secondary)]">
+            <button onClick={() => setCollapsedSections({})} className="rounded px-1.5 py-0.5 hover:bg-[var(--surface-hover)]" title="Expand all sections">Expand all</button>
+            <span className="opacity-40">·</span>
+            <button onClick={() => setCollapsedSections(Object.fromEntries(NAV_SECTIONS.map((s) => [s.label, true])))} className="rounded px-1.5 py-0.5 hover:bg-[var(--surface-hover)]" title="Collapse all sections">Collapse all</button>
+          </div>
+        )}
       </nav>
 
       {/* Bottom cluster: connection + collapse + theme + github */}
