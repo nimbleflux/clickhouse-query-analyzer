@@ -33,6 +33,12 @@ export function columnsOfResolved(ns: SqlNs, ref: { db: string; table: string })
   return [];
 }
 
+/** The single database owning `table`, or "" if absent/ambiguous. */
+function dbOfTable(ns: SqlNs, table: string): string {
+  const owners = Object.keys(ns).filter((d) => ns[d] && Object.prototype.hasOwnProperty.call(ns[d], table));
+  return owners.length === 1 ? owners[0] : "";
+}
+
 /**
  * Resolve table references from FROM/JOIN clauses anywhere in `text` (the whole
  * statement, so columns are offered even when the cursor sits before the FROM).
@@ -74,9 +80,16 @@ function allTables(ns: SqlNs): string[] {
  * This source resolves the statement's FROM table(s) and offers their columns
  * in projection/predicate positions, databases/tables after FROM, and columns
  * after a `db.table.` qualifier.
+ *
+ * `ensureColumns` lazily fetches a table's columns when they aren't already in
+ * the namespace (e.g. a table the user never expanded in the sidebar) — without
+ * it, columns are only offered for tables whose columns were pre-loaded.
  */
-export function makeSqlCompletion(getNs: () => SqlNs) {
-  return (ctx: CompletionContext): CompletionResult | null => {
+export function makeSqlCompletion(
+  getNs: () => SqlNs,
+  ensureColumns?: (db: string, table: string) => Promise<string[]>,
+) {
+  return async (ctx: CompletionContext): Promise<CompletionResult | null> => {
     const ns = getNs();
     const doc = ctx.state.doc.toString();
     const before = doc.slice(0, ctx.pos);
@@ -95,7 +108,11 @@ export function makeSqlCompletion(getNs: () => SqlNs) {
       if (ns[qual]) {
         options = Object.keys(ns[qual]).map((t) => ({ label: t, type: "type" }));
       } else {
-        const cols = columnsOfResolved(ns, { db: "", table: qual });
+        let cols = columnsOfResolved(ns, { db: "", table: qual });
+        if (cols.length === 0 && ensureColumns) {
+          const db = dbOfTable(ns, qual);
+          if (db) cols = await ensureColumns(db, qual);
+        }
         options = cols.map((c) => ({ label: c, type: "property" }));
       }
       return options.length ? { from, options, validFor: /^[A-Za-z_]\w*$/ } : null;
@@ -117,11 +134,16 @@ export function makeSqlCompletion(getNs: () => SqlNs) {
       ];
     } else if (COLUMN_KW.has(kw)) {
       // Column position: columns of the FROM table(s), plus the table names
-      // themselves (for qualified refs like table.col).
+      // themselves (for qualified refs like table.col). Columns are fetched
+      // on demand for tables not yet in the namespace.
       const cols = new Set<string>();
       for (const ref of resolveFromTables(doc, ns)) {
         cols.add(ref.table);
-        for (const c of columnsOfResolved(ns, ref)) cols.add(c);
+        let cs = columnsOfResolved(ns, ref);
+        if (cs.length === 0 && ensureColumns && ref.table && ref.db) {
+          cs = await ensureColumns(ref.db, ref.table);
+        }
+        for (const c of cs) cols.add(c);
       }
       options = [...cols].map((c) => ({ label: c, type: "property" }));
     } else {
