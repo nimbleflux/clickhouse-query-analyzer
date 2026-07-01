@@ -189,6 +189,16 @@ export function Layout({
           </svg>
           {!rail && <span className="text-lg font-semibold text-[var(--color-text-primary)]">ClickLens</span>}
         </NavLink>
+        {!rail && !isMobile && (
+          <div className="ml-auto flex items-center gap-0.5">
+            <button onClick={() => setCollapsedSections({})} title="Expand all sections" className="rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-text-primary)]">
+              <ChevronsUpDown className="h-3.5 w-3.5" />
+            </button>
+            <button onClick={() => setCollapsedSections(Object.fromEntries(NAV_SECTIONS.map((s) => [s.label, true])))} title="Collapse all sections" className="rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-text-primary)]">
+              <ChevronsDownUp className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
         {isMobile && (
           <button
             onClick={() => setMobileMenuOpen(false)}
@@ -202,16 +212,6 @@ export function Layout({
 
       {/* Nav sections */}
       <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 pb-2">
-        {!rail && (
-          <div className="flex justify-end gap-0.5 py-1">
-            <button onClick={() => setCollapsedSections({})} title="Expand all sections" className="rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-text-primary)]">
-              <ChevronsUpDown className="h-3.5 w-3.5" />
-            </button>
-            <button onClick={() => setCollapsedSections(Object.fromEntries(NAV_SECTIONS.map((s) => [s.label, true])))} title="Collapse all sections" className="rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-text-primary)]">
-              <ChevronsDownUp className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        )}
         {NAV_SECTIONS.map((section) => {
           const sectionCollapsed = rail ? false : !!collapsedSections[section.label];
           return (
