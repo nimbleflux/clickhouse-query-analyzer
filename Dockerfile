@@ -1,4 +1,4 @@
-FROM node:24-alpine AS frontend
+FROM node:24.16.0-alpine AS frontend
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
@@ -15,7 +15,7 @@ COPY --from=frontend /app/web/dist cmd/server/frontend/
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${VERSION}" -o /analyzer ./cmd/server
 
-FROM alpine:3.23
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates tzdata wget && \
     adduser -D -g '' appuser
 COPY --from=backend /analyzer /usr/local/bin/analyzer
