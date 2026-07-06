@@ -54,6 +54,7 @@ type QueryListParams struct {
 	MinMemory         uint64 `json:"min_memory"`
 	MinReadBytes      uint64 `json:"min_read_bytes"`
 	ErrorsOnly        bool   `json:"errors_only"`
+	LogComment        string `json:"log_comment"`
 	Search            string `json:"search"`
 	SortBy            string `json:"sort_by"`
 	SortDir           string `json:"sort_dir"`
@@ -162,6 +163,10 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 	}
 	if params.ErrorsOnly {
 		whereParts = append(whereParts, "exception_code != 0")
+	}
+	if params.LogComment != "" {
+		whereParts = append(whereParts, "log_comment ILIKE ?")
+		whereArgs = append(whereArgs, params.LogComment)
 	}
 
 	allowedSorts := map[string]bool{
@@ -408,6 +413,10 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 	if params.User != "" {
 		whereParts = append(whereParts, "user = ?")
 		whereArgs = append(whereArgs, params.User)
+	}
+	if params.LogComment != "" {
+		whereParts = append(whereParts, "log_comment ILIKE ?")
+		whereArgs = append(whereArgs, params.LogComment)
 	}
 
 	sortBy := "last_seen"

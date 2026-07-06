@@ -63,6 +63,7 @@ func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 		HideSystemQueries: r.URL.Query().Get("hide_system_queries") != "false",
 		IncludeCount:      r.URL.Query().Get("include_count") != "false",
 		ErrorsOnly:        r.URL.Query().Get("errors_only") == "true",
+		LogComment:        r.URL.Query().Get("log_comment"),
 	}
 	params.FromTime, _ = defaultQueryLogWindow(r)
 
@@ -536,6 +537,7 @@ func (a *API) ListFingerprints(w http.ResponseWriter, r *http.Request) {
 		SortDir:           strings.ToUpper(r.URL.Query().Get("sort_dir")),
 		HideSystemQueries: r.URL.Query().Get("hide_system_queries") != "false",
 		IncludeCount:      r.URL.Query().Get("include_count") != "false",
+		LogComment:        r.URL.Query().Get("log_comment"),
 	}
 	params.FromTime, _ = defaultQueryLogWindow(r)
 

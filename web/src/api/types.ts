@@ -172,6 +172,7 @@ export interface QueryListParams {
   min_memory?: number;
   min_read_bytes?: number;
   errors_only?: boolean;
+  log_comment?: string;
   search?: string;
   sort_by?: string;
   sort_dir?: string;
