@@ -35,7 +35,7 @@ function CellValue({ val }: { val: unknown }) {
     <span className="group/cell relative inline-flex max-w-full items-center">
       <span
         onDoubleClick={() => setExpanded((e) => !e)}
-        className={`${expanded ? "whitespace-pre-wrap break-all" : "truncate"} ${isNull ? "italic text-[var(--color-text-secondary)]" : isObj ? "text-[var(--color-accent)]" : ""}`}
+        className={`${expanded ? "block max-h-[300px] overflow-auto whitespace-pre" : "truncate"} ${isNull ? "italic text-[var(--color-text-secondary)]" : isObj ? "text-[var(--color-accent)]" : ""}`}
         title={expanded ? undefined : (isObj ? JSON.stringify(val, null, 2) : display)}
       >
         {display}

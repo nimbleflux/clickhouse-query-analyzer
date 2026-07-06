@@ -60,6 +60,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
   const [showFilters, setShowFilters] = useState(false);
   const [search, setSearch] = useState("");
   const [user, setUser] = useState("");
+  const [logComment, setLogComment] = useState("");
   const [sortBy, setSortBy] = useState<SortField>("last_seen");
   const [sortDir, setSortDir] = useState<"DESC" | "ASC">("DESC");
   const [currentPage, setCurrentPage] = useState(1);
@@ -84,6 +85,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
       const result = await fetchFingerprints({
         search: debouncedSearch || undefined,
         user: user || undefined,
+        log_comment: logComment || undefined,
         sort_by: sortBy,
         sort_dir: sortDir,
         limit: pageSize,
@@ -104,7 +106,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [debouncedSearch, user, sortBy, sortDir, currentPage, showSystem, fromTime, toTime, wantsCount]);
+  }, [debouncedSearch, user, logComment, sortBy, sortDir, currentPage, showSystem, fromTime, toTime, wantsCount]);
 
   const cancel = useCallback(() => {
     setCanceled(true);
@@ -215,6 +217,16 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
                 onChange={(e) => { setUser(e.target.value); setCurrentPage(1); }}
                 placeholder="Username"
                 className="w-full"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-xs text-[var(--color-text-secondary)]">Log Comment</label>
+              <Input
+                value={logComment}
+                onChange={(e) => { setLogComment(e.target.value); setCurrentPage(1); }}
+                placeholder="e.g. %nightly%"
+                title="SQL LIKE pattern on log_comment. % and _ are wildcards."
+                className="w-full font-mono"
               />
             </div>
           </div>

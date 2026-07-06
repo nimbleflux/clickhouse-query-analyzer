@@ -61,6 +61,7 @@ export function QueryList({ connected }: { connected: boolean }) {
     min_memory: Number(urlParam("min_memory")) || undefined,
     min_read_bytes: Number(urlParam("min_read_bytes")) || undefined,
     errors_only: urlParam("errors_only") === "true",
+    log_comment: urlParam("log_comment"),
   });
   const [search, setSearch] = useState(urlParam("q"));
   const [showFilters, setShowFilters] = useState(false);
@@ -82,6 +83,7 @@ export function QueryList({ connected }: { connected: boolean }) {
     if (params.min_memory) sp.set("min_memory", String(params.min_memory));
     if (params.min_read_bytes) sp.set("min_read_bytes", String(params.min_read_bytes));
     if (params.errors_only) sp.set("errors_only", "true");
+    if (params.log_comment) sp.set("log_comment", params.log_comment);
     if (!params.hide_system_queries) sp.set("hide_system", "false");
     setSearchParams(sp, { replace: true });
   }, [search, params, setSearchParams]);
@@ -207,7 +209,7 @@ export function QueryList({ connected }: { connected: boolean }) {
         </Button>
       </div>
 
-      {(params.user || params.database || params.table || params.errors_only) && (
+      {(params.user || params.database || params.table || params.errors_only || params.log_comment) && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           <span className="text-xs text-[var(--color-text-secondary)]">Filtered by:</span>
           {params.user && (
@@ -218,6 +220,9 @@ export function QueryList({ connected }: { connected: boolean }) {
           )}
           {params.table && (
             <Chip onClear={() => setParams((p) => ({ ...p, table: undefined, offset: 0 }))} label={`table: ${params.table}`} />
+          )}
+          {params.log_comment && (
+            <Chip onClear={() => setParams((p) => ({ ...p, log_comment: undefined, offset: 0 }))} label={`log_comment: ${params.log_comment}`} />
           )}
           {params.errors_only && (
             <Chip onClear={() => setParams((p) => ({ ...p, errors_only: false, offset: 0 }))} label="failed only" />
@@ -276,6 +281,16 @@ export function QueryList({ connected }: { connected: boolean }) {
                 onChange={(e) => setParams((p) => ({ ...p, user: e.target.value || undefined, offset: 0 }))}
                 placeholder="Username"
                 className="w-full"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-xs text-[var(--color-text-secondary)]">Log Comment</label>
+              <Input
+                value={params.log_comment || ""}
+                onChange={(e) => setParams((p) => ({ ...p, log_comment: e.target.value || undefined, offset: 0 }))}
+                placeholder="e.g. %nightly%"
+                title="SQL LIKE pattern on log_comment. % and _ are wildcards."
+                className="w-full font-mono"
               />
             </div>
             <div className="space-y-1">
