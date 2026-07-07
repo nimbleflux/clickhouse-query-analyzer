@@ -183,7 +183,7 @@ export function UsersAccess({ connected }: { connected: boolean }) {
             // (collapsible) instead of paginated. A case-insensitive search
             // applies to all tabs.
             const q = query.trim().toLowerCase();
-            const usersF = q ? data.users.filter((u) => u.name.toLowerCase().includes(q) || (u.auth_type ?? []).some((a) => a.toLowerCase().includes(q)) || (u.default_roles ?? []).some((r) => r.toLowerCase().includes(q))) : data.users;
+            const usersF = q ? data.users.filter((u) => u.name.toLowerCase().includes(q) || (u.auth_type ?? []).some((a) => a.toLowerCase().includes(q)) || data.role_grants.some((rg) => rg.user_name === u.name && rg.granted_role_name.toLowerCase().includes(q))) : data.users;
             const grantsF = q ? data.grants.filter((g) => (g.user_name || g.role_name || "").toLowerCase().includes(q) || g.access_type.toLowerCase().includes(q) || `${g.database}.${g.table}`.toLowerCase().includes(q)) : data.grants;
             const quotaF = q ? data.quota_usage.filter((k) => (k.quota_name || "").toLowerCase().includes(q) || (k.quota_key || "").toLowerCase().includes(q)) : data.quota_usage;
             const rolesF = q ? data.roles.filter((r) => r.name.toLowerCase().includes(q) || data.role_grants.some((rg) => rg.granted_role_name === r.name && rg.user_name.toLowerCase().includes(q))) : data.roles;
@@ -202,7 +202,7 @@ export function UsersAccess({ connected }: { connected: boolean }) {
                   <Pagination page={safePage} pageSize={pageSize} total={paged.length} onPage={setPage} onPageSize={(s) => { setPageSize(s); setPage(1); }} />
                 )}
               </div>
-              {tab === "users" && <UsersRolesTab users={usersF.slice(start, start + pageSize)} canManage={canManage} onDrop={setDropTarget} onRoleClick={showRole} onShowGrants={setGrantsTarget} />}
+              {tab === "users" && <UsersRolesTab users={usersF.slice(start, start + pageSize)} roleGrants={data.role_grants} canManage={canManage} onDrop={setDropTarget} onRoleClick={showRole} onShowGrants={setGrantsTarget} />}
               {tab === "roles" && <RolesTab roles={rolesF} grants={data.grants} roleGrants={data.role_grants} focusRole={roleFilter} canManage={canManage} onDrop={setDropTarget} onShowGrants={setGrantsTarget} />}
               {tab === "grants" && <GrantsTab grants={grantsF} canManage={canManage} onRevoke={setRevokeTarget} onRoleClick={showRole} />}
               {tab === "quota" && <QuotaTab rows={quotaF.slice(start, start + pageSize)} definitions={data.quotas} />}
@@ -252,7 +252,7 @@ export function UsersAccess({ connected }: { connected: boolean }) {
   );
 }
 
-function UsersRolesTab({ users, canManage, onDrop, onRoleClick, onShowGrants }: { users: UserRow[]; canManage: boolean; onDrop: (t: DropTarget) => void; onRoleClick: (role: string) => void; onShowGrants: (t: DropTarget) => void }) {
+function UsersRolesTab({ users, roleGrants, canManage, onDrop, onRoleClick, onShowGrants }: { users: UserRow[]; roleGrants: RoleGrant[]; canManage: boolean; onDrop: (t: DropTarget) => void; onRoleClick: (role: string) => void; onShowGrants: (t: DropTarget) => void }) {
   if (users.length === 0) {
     return <EmptyState icon={Users} title="No users visible" description="Your user may lack SELECT on system.users." />;
   }
@@ -267,7 +267,7 @@ function UsersRolesTab({ users, canManage, onDrop, onRoleClick, onShowGrants }: 
         </tr></thead>
         <tbody>
           {users.map((u: UserRow) => {
-            const rolesList = u.default_roles ?? [];
+            const userRoles = roleGrants.filter((rg) => rg.user_name === u.name);
             return (
               <tr key={u.name} className="border-b border-[var(--color-border)] last:border-0">
                 <td className="whitespace-nowrap px-4 py-3">
@@ -282,10 +282,11 @@ function UsersRolesTab({ users, canManage, onDrop, onRoleClick, onShowGrants }: 
                 <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[var(--color-text-secondary)]">{(u.auth_type ?? []).join(", ") || "-"}</td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-1">
-                    {rolesList.length === 0 && <span className="text-xs text-[var(--color-text-secondary)]">-</span>}
-                    {rolesList.map((r) => (
-                      <button key={r} onClick={() => onRoleClick(r)} title={`Show role ${r} (members + grants)`} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--surface-elevated)] px-2 py-0.5 text-[10px] font-mono text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]">
-                        <KeyRound className="h-2.5 w-2.5" />{r}
+                    {userRoles.length === 0 && <span className="text-xs text-[var(--color-text-secondary)]">-</span>}
+                    {userRoles.map((rg) => (
+                      <button key={rg.granted_role_name} onClick={() => onRoleClick(rg.granted_role_name)} title={rg.granted_role_is_default === 1 ? "Default role" : "Granted (not default)"} className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--surface-elevated)] px-2 py-0.5 text-[10px] font-mono text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]">
+                        <KeyRound className="h-2.5 w-2.5" />{rg.granted_role_name}
+                        {rg.granted_role_is_default === 1 && <span className="opacity-60" title="Default role">●</span>}
                       </button>
                     ))}
                   </div>
