@@ -235,7 +235,12 @@ export function UsersAccess({ connected }: { connected: boolean }) {
           <SqlStatementDialog
             open={!!grantsTarget}
             onOpenChange={(v) => !v && setGrantsTarget(null)}
-            title={grantsTarget ? <span className="font-mono text-sm">{grantsTarget.name}</span> : ""}
+            title={grantsTarget ? (
+              <span className="font-mono text-sm">
+                <span className="text-[var(--color-text-secondary)]">SHOW GRANTS FOR</span>{" "}
+                {grantsTarget.name}
+              </span>
+            ) : ""}
             load={loadGrants}
             loadingLabel="Loading grants…"
             copyLabel="Grants copied!"
