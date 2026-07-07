@@ -808,6 +808,36 @@ func (a *API) GetTableDDL(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"statement": stmt})
 }
 
+func (a *API) GetRoleGrants(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "role")
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	stmt, err := ch.ShowGrantsFor(r.Context(), "ROLE", name)
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"statement": stmt})
+}
+
+func (a *API) GetUserGrants(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "user")
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	stmt, err := ch.ShowGrantsFor(r.Context(), "USER", name)
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"statement": stmt})
+}
+
 func (a *API) ListAsyncMetrics(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {

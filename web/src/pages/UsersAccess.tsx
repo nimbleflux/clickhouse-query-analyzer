@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { RefreshCw, Users, KeyRound, ShieldAlert, Trash2, BadgeCheck, AlertTriangle, Search, ChevronRight, ChevronsUpDown, ChevronsDownUp } from "lucide-react";
-import { fetchAccess, dropUser, dropRole, revokeGrant } from "../api/client";
+import { RefreshCw, Users, KeyRound, ShieldAlert, Trash2, BadgeCheck, AlertTriangle, Search, ChevronRight, ChevronsUpDown, ChevronsDownUp, FileCode } from "lucide-react";
+import { fetchAccess, dropUser, dropRole, revokeGrant, fetchUserGrants, fetchRoleGrants } from "../api/client";
 import type { AccessOverview, UserRow, RoleRow, GrantRow, RoleGrant, QuotaUsageRow, QuotaDef } from "../api/types";
 import { ApiError } from "../api/errors";
 import { useToast } from "../components/Toast";
@@ -16,6 +16,7 @@ import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Pagination } from "@/components/ui/Pagination";
+import { SqlStatementDialog } from "@/components/ui/SqlStatementDialog";
 import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 import { formatBytes, formatNumber } from "../utils";
 
@@ -42,6 +43,7 @@ export function UsersAccess({ connected }: { connected: boolean }) {
   const showRole = (role: string) => { setRoleFilter(role); setTabRaw("roles"); setPage(1); syncTab("roles"); };
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<GrantRow | null>(null);
+  const [grantsTarget, setGrantsTarget] = useState<DropTarget | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const elapsed = useElapsedTimer(loading);
   const { toast } = useToast();
@@ -97,6 +99,13 @@ export function UsersAccess({ connected }: { connected: boolean }) {
       setRevokeTarget(null);
     }
   };
+
+  const loadGrants = useCallback((signal: AbortSignal) => {
+    if (!grantsTarget) return Promise.resolve("");
+    return grantsTarget.kind === "user"
+      ? fetchUserGrants(grantsTarget.name, signal).then((r) => r.statement)
+      : fetchRoleGrants(grantsTarget.name, signal).then((r) => r.statement);
+  }, [grantsTarget]);
 
   if (!connected) return <NotConnectedState />;
   if (error && !data) return <PageContainer><ErrorState error={error} onRetry={load} /></PageContainer>;
@@ -193,8 +202,8 @@ export function UsersAccess({ connected }: { connected: boolean }) {
                   <Pagination page={safePage} pageSize={pageSize} total={paged.length} onPage={setPage} onPageSize={(s) => { setPageSize(s); setPage(1); }} />
                 )}
               </div>
-              {tab === "users" && <UsersRolesTab users={usersF.slice(start, start + pageSize)} canManage={canManage} onDrop={setDropTarget} onRoleClick={showRole} />}
-              {tab === "roles" && <RolesTab roles={rolesF} grants={data.grants} roleGrants={data.role_grants} focusRole={roleFilter} canManage={canManage} onDrop={setDropTarget} />}
+              {tab === "users" && <UsersRolesTab users={usersF.slice(start, start + pageSize)} canManage={canManage} onDrop={setDropTarget} onRoleClick={showRole} onShowGrants={setGrantsTarget} />}
+              {tab === "roles" && <RolesTab roles={rolesF} grants={data.grants} roleGrants={data.role_grants} focusRole={roleFilter} canManage={canManage} onDrop={setDropTarget} onShowGrants={setGrantsTarget} />}
               {tab === "grants" && <GrantsTab grants={grantsF} canManage={canManage} onRevoke={setRevokeTarget} onRoleClick={showRole} />}
               {tab === "quota" && <QuotaTab rows={quotaF.slice(start, start + pageSize)} definitions={data.quotas} />}
             </>
@@ -223,13 +232,22 @@ export function UsersAccess({ connected }: { connected: boolean }) {
             onConfirm={handleRevoke}
             onCancel={() => setRevokeTarget(null)}
           />
+          <SqlStatementDialog
+            open={!!grantsTarget}
+            onOpenChange={(v) => !v && setGrantsTarget(null)}
+            title={grantsTarget ? <span className="font-mono text-sm">{grantsTarget.name}</span> : ""}
+            load={loadGrants}
+            loadingLabel="Loading grants…"
+            copyLabel="Grants copied!"
+            emptyLabel="No grants."
+          />
         </>
       ) : null}
     </PageContainer>
   );
 }
 
-function UsersRolesTab({ users, canManage, onDrop, onRoleClick }: { users: UserRow[]; canManage: boolean; onDrop: (t: DropTarget) => void; onRoleClick: (role: string) => void }) {
+function UsersRolesTab({ users, canManage, onDrop, onRoleClick, onShowGrants }: { users: UserRow[]; canManage: boolean; onDrop: (t: DropTarget) => void; onRoleClick: (role: string) => void; onShowGrants: (t: DropTarget) => void }) {
   if (users.length === 0) {
     return <EmptyState icon={Users} title="No users visible" description="Your user may lack SELECT on system.users." />;
   }
@@ -268,11 +286,16 @@ function UsersRolesTab({ users, canManage, onDrop, onRoleClick }: { users: UserR
                   </div>
                 </td>
                 <td className="px-2 py-3 text-right">
-                  {canManage && (
-                    <Button variant="ghost" size="sm" onClick={() => onDrop({ kind: "user", name: u.name })} className="text-[var(--color-error)] hover:bg-[var(--state-error)]" title="Drop user">
-                      <Trash2 className="h-3 w-3" />
+                  <div className="flex items-center justify-end gap-1">
+                    <Button variant="ghost" size="sm" onClick={() => onShowGrants({ kind: "user", name: u.name })} title={`SHOW GRANTS FOR ${u.name}`}>
+                      <FileCode className="h-3 w-3" />
                     </Button>
-                  )}
+                    {canManage && (
+                      <Button variant="ghost" size="sm" onClick={() => onDrop({ kind: "user", name: u.name })} className="text-[var(--color-error)] hover:bg-[var(--state-error)]" title="Drop user">
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    )}
+                  </div>
                 </td>
               </tr>
             );
@@ -283,7 +306,7 @@ function UsersRolesTab({ users, canManage, onDrop, onRoleClick }: { users: UserR
   );
 }
 
-function RolesTab({ roles, grants, roleGrants, focusRole, canManage, onDrop }: { roles: RoleRow[]; grants: GrantRow[]; roleGrants: RoleGrant[]; focusRole: string; canManage: boolean; onDrop: (t: DropTarget) => void }) {
+function RolesTab({ roles, grants, roleGrants, focusRole, canManage, onDrop, onShowGrants }: { roles: RoleRow[]; grants: GrantRow[]; roleGrants: RoleGrant[]; focusRole: string; canManage: boolean; onDrop: (t: DropTarget) => void; onShowGrants: (t: DropTarget) => void }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(focusRole ? [focusRole] : []));
   const toggle = (name: string) => setExpanded((prev) => { const n = new Set(prev); if (n.has(name)) n.delete(name); else n.add(name); return n; });
 
@@ -302,7 +325,10 @@ function RolesTab({ roles, grants, roleGrants, focusRole, canManage, onDrop }: {
               <span className="font-mono text-xs text-[var(--color-text-primary)]">{r.name}</span>
               <Badge variant="default">{members.length} member{members.length === 1 ? "" : "s"}</Badge>
               <Badge variant="default">{roleGrantRows.length} grant{roleGrantRows.length === 1 ? "" : "s"}</Badge>
-              <span className="ml-auto">
+              <span className="ml-auto flex items-center gap-1">
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); onShowGrants({ kind: "role", name: r.name }); }} title={`SHOW GRANTS FOR ${r.name}`}>
+                  <FileCode className="h-3 w-3" />
+                </Button>
                 {canManage && (
                   <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); onDrop({ kind: "role", name: r.name }); }} className="text-[var(--color-error)] hover:bg-[var(--state-error)]" title="Drop role">
                     <Trash2 className="h-3 w-3" />
