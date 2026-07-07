@@ -294,10 +294,13 @@ func (c *Client) DropRole(ctx context.Context, name string) error {
 
 // ShowGrantsFor runs `SHOW GRANTS FOR {USER|ROLE} <name>` and returns the
 // grant statements joined with newlines (ClickHouse returns one row per
-// grant). kind must be "USER" or "ROLE". Privileges are re-checked by the
-// server; an unauthorized caller gets a CH_EXCEPTION that surfaces as-is.
+// grant). kind must be "USER" or "ROLE". The name is passed as a SQL string
+// literal, not a backtick-quoted identifier — SHOW GRANTS parses the grantee
+// as a bare token or string, and backticks trigger SYNTAX_ERROR. Privileges
+// are re-checked by the server; an unauthorized caller gets a CH_EXCEPTION
+// that surfaces as-is.
 func (c *Client) ShowGrantsFor(ctx context.Context, kind, name string) (string, error) {
-	rows, err := c.conn.Query(ctx, fmt.Sprintf("SHOW GRANTS FOR %s %s", kind, quoteIdent(name)))
+	rows, err := c.conn.Query(ctx, fmt.Sprintf("SHOW GRANTS FOR %s %s", kind, quoteStr(name)))
 	if err != nil {
 		return "", err
 	}
