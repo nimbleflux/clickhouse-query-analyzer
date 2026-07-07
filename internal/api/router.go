@@ -117,6 +117,8 @@ func apiRoutes(api *API) http.Handler {
 	r.Post("/access/users/{user}/drop", api.DropUser)
 	r.Post("/access/roles/{role}/drop", api.DropRole)
 	r.Post("/access/grants/revoke", api.RevokeGrant)
+	r.Get("/access/users/{user}/grants", api.GetUserGrants)
+	r.Get("/access/roles/{role}/grants", api.GetRoleGrants)
 	r.Get("/system-metrics", api.ListAsyncMetrics)
 
 	return r

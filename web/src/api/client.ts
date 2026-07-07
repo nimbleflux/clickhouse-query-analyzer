@@ -300,6 +300,14 @@ export async function fetchTableDDL(database: string, table: string, signal?: Ab
   return fetchJSON<{ statement: string }>(`${BASE}/schema/${encodeURIComponent(database)}/${encodeURIComponent(table)}/ddl`, { signal });
 }
 
+export async function fetchUserGrants(name: string, signal?: AbortSignal): Promise<{ statement: string }> {
+  return fetchJSON<{ statement: string }>(`${BASE}/access/users/${encodeURIComponent(name)}/grants`, { signal });
+}
+
+export async function fetchRoleGrants(name: string, signal?: AbortSignal): Promise<{ statement: string }> {
+  return fetchJSON<{ statement: string }>(`${BASE}/access/roles/${encodeURIComponent(name)}/grants`, { signal });
+}
+
 export async function fetchQueryHealthTrend(hours: number, signal?: AbortSignal): Promise<QueryHealthPoint[]> {
   return fetchJSON<QueryHealthPoint[]>(`${BASE}/queries/health-trend?hours=${hours}`, { signal });
 }

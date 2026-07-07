@@ -292,6 +292,30 @@ func (c *Client) DropRole(ctx context.Context, name string) error {
 	return c.conn.Exec(ctx, fmt.Sprintf("DROP ROLE IF EXISTS %s", quoteIdent(name)))
 }
 
+// ShowGrantsFor runs `SHOW GRANTS FOR {USER|ROLE} <name>` and returns the
+// grant statements joined with newlines (ClickHouse returns one row per
+// grant). kind must be "USER" or "ROLE". Privileges are re-checked by the
+// server; an unauthorized caller gets a CH_EXCEPTION that surfaces as-is.
+func (c *Client) ShowGrantsFor(ctx context.Context, kind, name string) (string, error) {
+	rows, err := c.conn.Query(ctx, fmt.Sprintf("SHOW GRANTS FOR %s %s", kind, quoteIdent(name)))
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var g string
+		if err := rows.Scan(&g); err != nil {
+			return "", err
+		}
+		lines = append(lines, g)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
 // RevokeGrant revokes a grant described by a system.grants row. granteeKind is
 // "user" or "role". The ON clause is reconstructed from database/table/column;
 // column-level and grant-option nuances are best-effort.
