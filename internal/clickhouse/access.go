@@ -292,15 +292,20 @@ func (c *Client) DropRole(ctx context.Context, name string) error {
 	return c.conn.Exec(ctx, fmt.Sprintf("DROP ROLE IF EXISTS %s", quoteIdent(name)))
 }
 
-// ShowGrantsFor runs `SHOW GRANTS FOR {USER|ROLE} <name>` and returns the
-// grant statements joined with newlines (ClickHouse returns one row per
-// grant). kind must be "USER" or "ROLE". The name is passed as a SQL string
-// literal, not a backtick-quoted identifier — SHOW GRANTS parses the grantee
-// as a bare token or string, and backticks trigger SYNTAX_ERROR. Privileges
-// are re-checked by the server; an unauthorized caller gets a CH_EXCEPTION
-// that surfaces as-is.
-func (c *Client) ShowGrantsFor(ctx context.Context, kind, name string) (string, error) {
-	rows, err := c.conn.Query(ctx, fmt.Sprintf("SHOW GRANTS FOR %s %s", kind, quoteStr(name)))
+// ShowGrantsFor runs `SHOW GRANTS FOR <name> FINAL` and returns the grant
+// statements joined with newlines (ClickHouse returns one row per grant).
+// FINAL merges in grants inherited via granted roles.
+//
+// ClickHouse grammar: `SHOW GRANTS [FOR user1 [, user2 ...]] [WITH IMPLICIT] [FINAL]`.
+// Two traps: there is no USER/ROLE keyword (it would be parsed as the
+// grantee name), and the grantee must be a bare identifier — backtick- and
+// string-quoting both fail in this position. Names come from system.users /
+// system.roles (trusted); any name that isn't a valid identifier fails with
+// a graceful SYNTAX_ERROR rather than enabling injection.
+// Privileges are re-checked by the server; an unauthorized caller gets a
+// CH_EXCEPTION that surfaces as-is.
+func (c *Client) ShowGrantsFor(ctx context.Context, name string) (string, error) {
+	rows, err := c.conn.Query(ctx, fmt.Sprintf("SHOW GRANTS FOR %s FINAL", name))
 	if err != nil {
 		return "", err
 	}

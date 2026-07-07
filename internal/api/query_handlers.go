@@ -815,7 +815,7 @@ func (a *API) GetRoleGrants(w http.ResponseWriter, r *http.Request) {
 		CHUnreachable(w, false, err)
 		return
 	}
-	stmt, err := ch.ShowGrantsFor(r.Context(), "ROLE", name)
+	stmt, err := ch.ShowGrantsFor(r.Context(), name)
 	if err != nil {
 		respondErr(w, err, false)
 		return
@@ -830,7 +830,7 @@ func (a *API) GetUserGrants(w http.ResponseWriter, r *http.Request) {
 		CHUnreachable(w, false, err)
 		return
 	}
-	stmt, err := ch.ShowGrantsFor(r.Context(), "USER", name)
+	stmt, err := ch.ShowGrantsFor(r.Context(), name)
 	if err != nil {
 		respondErr(w, err, false)
 		return
