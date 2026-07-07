@@ -177,7 +177,7 @@ export function UsersAccess({ connected }: { connected: boolean }) {
             const usersF = q ? data.users.filter((u) => u.name.toLowerCase().includes(q) || (u.auth_type ?? []).some((a) => a.toLowerCase().includes(q)) || (u.default_roles ?? []).some((r) => r.toLowerCase().includes(q))) : data.users;
             const grantsF = q ? data.grants.filter((g) => (g.user_name || g.role_name || "").toLowerCase().includes(q) || g.access_type.toLowerCase().includes(q) || `${g.database}.${g.table}`.toLowerCase().includes(q)) : data.grants;
             const quotaF = q ? data.quota_usage.filter((k) => (k.quota_name || "").toLowerCase().includes(q) || (k.quota_key || "").toLowerCase().includes(q)) : data.quota_usage;
-            const rolesF = q ? data.roles.filter((r) => r.name.toLowerCase().includes(q)) : data.roles;
+            const rolesF = q ? data.roles.filter((r) => r.name.toLowerCase().includes(q) || data.role_grants.some((rg) => rg.granted_role_name === r.name && rg.user_name.toLowerCase().includes(q))) : data.roles;
             const paged = tab === "grants" ? grantsF : tab === "users" ? usersF : tab === "roles" ? rolesF : quotaF;
             const totalPages = Math.max(1, Math.ceil(paged.length / pageSize));
             const safePage = Math.min(page, totalPages);
