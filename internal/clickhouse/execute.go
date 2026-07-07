@@ -105,12 +105,18 @@ func (c *Client) ExecuteQuery(ctx context.Context, query string, limit, offset i
 	defer cancel()
 
 	selectLike := isSelectLike(query)
+	// SHOW GRANTS can't be used as a subquery source — ClickHouse's FROM-clause
+	// parser rejects it with SYNTAX_ERROR. Skip the wrapping (and the count
+	// query below) for SHOW GRANTS and execute it verbatim. Result sets are
+	// small enough that pagination isn't useful anyway.
+	upper := strings.ToUpper(strings.TrimSpace(query))
+	isShowGrants := strings.HasPrefix(upper, "SHOW GRANTS")
 
 	// For SELECT-like queries, wrap in a subquery to apply a deterministic
 	// LIMIT/OFFSET window. For everything else (DDL/DML), execute verbatim
 	// with a max_result_rows ceiling as defense-in-depth.
 	var executedQuery string
-	if selectLike && !hasFormatClause(query) {
+	if selectLike && !hasFormatClause(query) && !isShowGrants {
 		executedQuery = fmt.Sprintf("SELECT * FROM (%s) LIMIT %d OFFSET %d", query, limit, offset)
 	} else {
 		executedQuery = query
@@ -254,7 +260,7 @@ func (c *Client) ExecuteQuery(ctx context.Context, query string, limit, offset i
 	// first page (offset 0) to amortize the cost. Cached client-side thereafter.
 	// Returns -1 (unknown) if the count query fails or the query isn't SELECT-like.
 	totalRows := int64(-1)
-	if selectLike && offset == 0 {
+	if selectLike && !isShowGrants && offset == 0 {
 		countQuery := fmt.Sprintf("SELECT count() FROM (%s)", query)
 		var n uint64
 		if err := c.conn.QueryRow(ctx, countQuery).Scan(&n); err == nil {
