@@ -177,7 +177,8 @@ export function UsersAccess({ connected }: { connected: boolean }) {
             const usersF = q ? data.users.filter((u) => u.name.toLowerCase().includes(q) || (u.auth_type ?? []).some((a) => a.toLowerCase().includes(q)) || (u.default_roles ?? []).some((r) => r.toLowerCase().includes(q))) : data.users;
             const grantsF = q ? data.grants.filter((g) => (g.user_name || g.role_name || "").toLowerCase().includes(q) || g.access_type.toLowerCase().includes(q) || `${g.database}.${g.table}`.toLowerCase().includes(q)) : data.grants;
             const quotaF = q ? data.quota_usage.filter((k) => (k.quota_name || "").toLowerCase().includes(q) || (k.quota_key || "").toLowerCase().includes(q)) : data.quota_usage;
-            const paged = tab === "grants" ? grantsF : tab === "users" ? usersF : quotaF;
+            const rolesF = q ? data.roles.filter((r) => r.name.toLowerCase().includes(q)) : data.roles;
+            const paged = tab === "grants" ? grantsF : tab === "users" ? usersF : tab === "roles" ? rolesF : quotaF;
             const totalPages = Math.max(1, Math.ceil(paged.length / pageSize));
             const safePage = Math.min(page, totalPages);
             const start = (safePage - 1) * pageSize;
@@ -188,12 +189,12 @@ export function UsersAccess({ connected }: { connected: boolean }) {
                   <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-text-secondary)]" />
                   <Input value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} placeholder={`Search ${tab}…`} className="h-7 pl-8 text-xs" />
                 </div>
-                {tab !== "grants" && paged.length > pageSize && (
+                {tab !== "grants" && tab !== "roles" && paged.length > pageSize && (
                   <Pagination page={safePage} pageSize={pageSize} total={paged.length} onPage={setPage} onPageSize={(s) => { setPageSize(s); setPage(1); }} />
                 )}
               </div>
               {tab === "users" && <UsersRolesTab users={usersF.slice(start, start + pageSize)} canManage={canManage} onDrop={setDropTarget} onRoleClick={showRole} />}
-              {tab === "roles" && <RolesTab roles={data.roles} grants={data.grants} roleGrants={data.role_grants} focusRole={roleFilter} canManage={canManage} onDrop={setDropTarget} />}
+              {tab === "roles" && <RolesTab roles={rolesF} grants={data.grants} roleGrants={data.role_grants} focusRole={roleFilter} canManage={canManage} onDrop={setDropTarget} />}
               {tab === "grants" && <GrantsTab grants={grantsF} canManage={canManage} onRevoke={setRevokeTarget} onRoleClick={showRole} />}
               {tab === "quota" && <QuotaTab rows={quotaF.slice(start, start + pageSize)} definitions={data.quotas} />}
             </>
