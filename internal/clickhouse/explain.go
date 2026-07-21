@@ -26,6 +26,17 @@ type ExplainEstimate struct {
 }
 
 func (c *Client) GetExplain(ctx context.Context, query string) (*ExplainResult, error) {
+	// EXPLAIN PLAN/PIPELINE/ESTIMATE only parse SELECT-like statements.
+	// Running them on DDL/DML produces five SYNTAX_ERRORs in the ClickHouse
+	// log per view, so short-circuit before touching the connection.
+	if !isSelectLike(query) {
+		return &ExplainResult{
+			Errors: map[string]string{
+				"skipped": "EXPLAIN only applies to SELECT-like queries; this query is not explainable",
+			},
+		}, nil
+	}
+
 	result := &ExplainResult{Errors: map[string]string{}}
 
 	plan, err := c.runExplain(ctx, "EXPLAIN PLAN", query)

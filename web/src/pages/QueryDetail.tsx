@@ -74,14 +74,12 @@ export function QueryDetail({ connected }: { connected: boolean }) {
       fetchQueryMetrics(queryId, controller.signal).catch(() => []),
       fetchQueryThreads(queryId, controller.signal).catch(() => []),
       fetchQueryViews(queryId, controller.signal).catch(() => []),
-      fetchExplain(queryId, controller.signal).catch(() => null),
-    ]).then(([q, m, t, v, e]) => {
+    ]).then(([q, m, t, v]) => {
       if (aborted) return;
       setQuery(q);
       setMetrics(m || []);
       setThreads(t || []);
       setViews(v || []);
-      if (e) setExplain(e);
     }).catch((e) => {
       if (aborted) return;
       setError(e instanceof ApiError ? e : ApiError.wrap(e));
@@ -143,6 +141,13 @@ export function QueryDetail({ connected }: { connected: boolean }) {
   useEffect(() => {
     if (tab === "flamegraph" && queryId && flameData.length === 0 && !flameLoading) {
       loadFlameGraph();
+    }
+    // Lazy-load EXPLAIN only when the user actually opens a tab that needs it
+    // (Explain, or Threads which renders the pipeline). Auto-loading on every
+    // QueryDetail mount fired 5 EXPLAIN queries per page view, polluting
+    // system.processes and the error log when the underlying query was DDL.
+    if ((tab === "explain" || tab === "threads") && queryId && !explain) {
+      loadExplain();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryId, tab]);
@@ -271,7 +276,6 @@ export function QueryDetail({ connected }: { connected: boolean }) {
                 else prev.set("tab", t.key);
                 return prev;
               }, { replace: true });
-              if (t.key === "explain") loadExplain();
               if (t.key === "flamegraph") loadFlameGraph();
             }}
             className={`px-4 py-2 text-sm capitalize transition-colors ${

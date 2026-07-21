@@ -1,4 +1,4 @@
-import { Play, AlertCircle } from "lucide-react";
+import { Play, AlertCircle, Ban } from "lucide-react";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -52,10 +52,19 @@ export function ExplainTab({ explain }: ExplainTabProps) {
 
   const hasContent = !!(explain && (explain.plan || explain.pipeline || explain.pipeline_graph || explain.syntax || explain.estimate));
   const errorEntries = explain?.errors ? Object.entries(explain.errors) : [];
+  const skipped = !!explain?.errors?.skipped;
 
   return (
     <div className="space-y-4">
-      {hasContent ? (
+      {skipped ? (
+        <div className="flex flex-col items-center gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)] px-6 py-10 text-center">
+          <Ban className="h-8 w-8 text-[var(--color-text-secondary)]" />
+          <div className="text-sm font-medium text-[var(--color-text-primary)]">EXPLAIN not available for this query</div>
+          <p className="max-w-md text-xs text-[var(--color-text-secondary)]">
+            {explain?.errors?.skipped}
+          </p>
+        </div>
+      ) : hasContent ? (
         <>
           {explain && explain.estimate && <EstimateCard estimate={explain.estimate} />}
           {explain && explain.plan && (
