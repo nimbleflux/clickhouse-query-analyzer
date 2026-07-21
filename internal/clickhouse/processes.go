@@ -24,9 +24,10 @@ type ProcessEntry struct {
 	NormalizedQueryHash string    `json:"normalized_query_hash"`
 	QueryKind           string    `json:"query_kind"`
 	Database            string    `json:"current_database"`
-	// LogComment is the value of the log_comment setting for this query.
-	// ClickLens stamps its own queries with managedLogComment; the frontend
-	// uses this (and only this) to identify internal queries.
+	// LogComment is the value of the log_comment setting for this query,
+	// read from the Settings map. ClickLens stamps its own queries with
+	// managedLogComment; the frontend uses this (and only this) to identify
+	// internal queries.
 	LogComment     string `json:"log_comment"`
 	IsInitialQuery uint8  `json:"is_initial_query"`
 	InitialQueryID string `json:"initial_query_id"`
@@ -36,6 +37,10 @@ type ProcessEntry struct {
 // ListProcesses and GetProcess so the two scans cannot drift. now()-elapsed
 // derives a start time (system.processes exposes only elapsed, not a native
 // start timestamp).
+//
+// system.processes has no native log_comment column, but the Settings Map
+// exposes every changed setting — `Settings['log_comment']` returns the tag
+// ClickLens stamps on its own queries (empty string for user queries).
 const processColumns = `query_id, query, user,
 	elapsed * 1000 AS query_duration_ms,
 	now() - elapsed AS query_start_time,
@@ -45,7 +50,7 @@ const processColumns = `query_id, query, user,
 	toString(normalized_query_hash) AS normalized_query_hash,
 	query_kind,
 	current_database,
-	log_comment,
+	Settings['log_comment'] AS log_comment,
 	is_initial_query, initial_query_id`
 
 func (p *ProcessEntry) scanTargets() []any {
