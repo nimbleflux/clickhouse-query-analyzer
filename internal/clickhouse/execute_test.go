@@ -90,3 +90,38 @@ func TestIsProbablyJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestIsSelectLike(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  bool
+	}{
+		{"plain select", "SELECT 1", true},
+		{"select lowercase", "select * from t", true},
+		{"with clause", "WITH x AS (SELECT 1) SELECT * FROM x", true},
+		{"show", "SHOW TABLES", true},
+		{"describe", "DESCRIBE TABLE t", true},
+		{"leading line comment", "-- hello\nSELECT 1", true},
+		{"leading block comment", "/* tag */ SELECT 1", true},
+		{"ddl_entry block comment on select", "/* ddl_entry=q-1 */ SELECT 1", true},
+		{"block then line comment", "/* a */\n-- b\nSELECT 1", true},
+		{"unterminated block comment", "/* never ends SELECT 1", false},
+		{"unterminated line comment", "-- never ends", false},
+		{"drop table", "DROP TABLE t", false},
+		{"ddl_entry block comment on drop", "/* ddl_entry=query-0000389051 */ DROP TABLE IF EXISTS analytics.events SYNC", false},
+		{"create", "CREATE TABLE t (x Int32)", false},
+		{"insert select", "INSERT INTO t SELECT * FROM s", false},
+		{"alter", "ALTER TABLE t ADD COLUMN x Int32", false},
+		{"empty", "", false},
+		{"whitespace only", "   \n\t  ", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSelectLike(tt.query); got != tt.want {
+				t.Errorf("isSelectLike(%q) = %v, want %v", tt.query, got, tt.want)
+			}
+		})
+	}
+}

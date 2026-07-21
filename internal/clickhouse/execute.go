@@ -71,13 +71,27 @@ func hasFormatClause(query string) bool {
 
 func isSelectLike(query string) bool {
 	trimmed := strings.TrimSpace(query)
-	// strip a leading SQL line comment
-	for strings.HasPrefix(trimmed, "--") {
-		nl := strings.IndexByte(trimmed, '\n')
-		if nl < 0 {
-			return false
+	// strip leading SQL comments (line `-- ...` and block `/* ... */`) so a
+	// query like `/* ddl_entry=... */ DROP TABLE ...` is classified correctly.
+	for {
+		trimmed = strings.TrimSpace(trimmed)
+		switch {
+		case strings.HasPrefix(trimmed, "--"):
+			nl := strings.IndexByte(trimmed, '\n')
+			if nl < 0 {
+				return false
+			}
+			trimmed = trimmed[nl+1:]
+			continue
+		case strings.HasPrefix(trimmed, "/*"):
+			end := strings.Index(trimmed, "*/")
+			if end < 0 {
+				return false
+			}
+			trimmed = trimmed[end+2:]
+			continue
 		}
-		trimmed = strings.TrimSpace(trimmed[nl+1:])
+		break
 	}
 	upper := strings.ToUpper(trimmed)
 	switch {
