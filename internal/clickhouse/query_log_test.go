@@ -34,13 +34,16 @@ func TestQueryListParams_Defaults(t *testing.T) {
 func TestHideSystemQueriesClause(t *testing.T) {
 	clause := hideSystemQueriesClause()
 
-	for _, want := range []string{
-		"lower(query_kind) NOT IN",
-		"log_comment != 'clicklens'",
-	} {
-		if !strings.Contains(clause, want) {
-			t.Errorf("hideSystemQueriesClause() = %q, expected to contain %q", clause, want)
-		}
+	if !strings.Contains(clause, "log_comment != 'clicklens'") {
+		t.Errorf("hideSystemQueriesClause() = %q, expected to contain %q", clause, "log_comment != 'clicklens'")
+	}
+
+	// "Internal" means only ClickLens-issued queries (log_comment tag).
+	// Earlier versions also excluded by query_kind (CREATE/DROP/ALTER/...),
+	// which hid real user workload like dbt's DDL — that regression must
+	// not come back.
+	if strings.Contains(clause, "query_kind") {
+		t.Errorf("hideSystemQueriesClause() = %q, should not filter by query_kind (hides user DDL like dbt)", clause)
 	}
 
 	// A user's own SELECT ... FROM system.* is real workload and must remain
