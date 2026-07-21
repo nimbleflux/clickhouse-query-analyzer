@@ -24,8 +24,12 @@ type ProcessEntry struct {
 	NormalizedQueryHash string    `json:"normalized_query_hash"`
 	QueryKind           string    `json:"query_kind"`
 	Database            string    `json:"current_database"`
-	IsInitialQuery      uint8     `json:"is_initial_query"`
-	InitialQueryID      string    `json:"initial_query_id"`
+	// LogComment is the value of the log_comment setting for this query.
+	// ClickLens stamps its own queries with managedLogComment; the frontend
+	// uses this (and only this) to identify internal queries.
+	LogComment     string `json:"log_comment"`
+	IsInitialQuery uint8  `json:"is_initial_query"`
+	InitialQueryID string `json:"initial_query_id"`
 }
 
 // processColumns is the shared column list for system.processes, used by both
@@ -41,6 +45,7 @@ const processColumns = `query_id, query, user,
 	toString(normalized_query_hash) AS normalized_query_hash,
 	query_kind,
 	current_database,
+	log_comment,
 	is_initial_query, initial_query_id`
 
 func (p *ProcessEntry) scanTargets() []any {
@@ -52,6 +57,7 @@ func (p *ProcessEntry) scanTargets() []any {
 		&p.ThreadCount,
 		&p.NormalizedQueryHash, &p.QueryKind,
 		&p.Database,
+		&p.LogComment,
 		&p.IsInitialQuery, &p.InitialQueryID,
 	}
 }

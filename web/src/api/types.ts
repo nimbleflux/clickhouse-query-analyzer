@@ -292,6 +292,7 @@ export interface ProcessEntry {
   normalized_query_hash: string;
   query_kind: string;
   current_database: string;
+  log_comment: string;
   is_initial_query: number;
   initial_query_id: string;
 }

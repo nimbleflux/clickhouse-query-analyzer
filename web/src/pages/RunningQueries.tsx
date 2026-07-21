@@ -20,7 +20,6 @@ import { ApiError } from "@/api/errors";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 
 const QUERY_KINDS = ["Select", "Insert", "Create", "Alter", "Drop", "Explain", "System", "Other"] as const;
-const INTERNAL_PREFIXES = ["SYSTEM", "KILL", "SET", "SHOW", "EXISTS", "USE"];
 
 function queryKind(query: string): string {
   const upper = query.trim().toUpperCase();
@@ -143,9 +142,10 @@ export function RunningQueries({ connected }: { connected: boolean }) {
         if (filterKind !== "Other" && kind !== filterKind) return false;
       }
       if (!showSystem) {
-        const upper = p.query.trim().toUpperCase();
-        if (INTERNAL_PREFIXES.some((p) => upper.startsWith(p))) return false;
-        if (p.query.includes("system.") || p.query.includes("INFORMATION_SCHEMA")) return false;
+        // "Internal" means only queries ClickLens itself issued (tagged with
+        // log_comment='clicklens'). Don't guess by query_kind or prefix — that
+        // hid real user workload like dbt's CREATE/DROP/ALTER.
+        if (p.log_comment === "clicklens") return false;
       }
       return true;
     });
