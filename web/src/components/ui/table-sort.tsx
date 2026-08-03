@@ -38,19 +38,31 @@ export function SortableHeader<K extends string>({
   className,
 }: SortableHeaderProps<K>) {
   const active = activeField === field;
+  // `aria-sort` lives on the <th>; the actual toggle is a real <button> so it's
+  // keyboard-activatable and announced as a control to assistive tech.
+  const ariaSort = active ? (dir === "asc" ? "ascending" : "descending") : "none";
   return (
     <th
+      aria-sort={ariaSort}
+      scope="col"
       className={cn(
-        "cursor-pointer select-none font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
+        "select-none font-medium text-[var(--color-text-secondary)]",
         align === "right" ? "text-right" : "text-left",
         className,
       )}
-      onClick={() => onToggle(field)}
     >
-      <span className={cn("inline-flex items-center gap-1", align === "right" && "flex-row-reverse")}>
+      <button
+        type="button"
+        onClick={() => onToggle(field)}
+        aria-pressed={active}
+        className={cn(
+          "inline-flex cursor-pointer items-center gap-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]",
+          align === "right" && "flex-row-reverse",
+        )}
+      >
         {label}
         {active && (dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
-      </span>
+      </button>
     </th>
   );
 }

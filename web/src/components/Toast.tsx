@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, createContext, useContext, type ReactNode } from "react";
+import { useState, useCallback, useRef, useEffect, createContext, useContext, type ReactNode } from "react";
 import { X } from "lucide-react";
 
 export interface Toast {
@@ -33,16 +33,36 @@ const TOAST_STYLES: Record<Toast["type"], string> = {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const idRef = useRef(0);
+  // Map of toast id -> timer handle, so timers can be cleared on dismiss/unmount.
+  const timersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
   const dismiss = useCallback((id: number) => {
+    const timer = timersRef.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      timersRef.current.delete(id);
+    }
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
   const toast = useCallback((message: string, type: Toast["type"] = "info") => {
     const id = ++idRef.current;
     setToasts((prev) => [...prev.slice(-(MAX_TOASTS - 1)), { id, message, type }]);
-    setTimeout(() => dismiss(id), TOAST_DURATION[type]);
+    const timer = setTimeout(() => {
+      timersRef.current.delete(id);
+      dismiss(id);
+    }, TOAST_DURATION[type]);
+    timersRef.current.set(id, timer);
   }, [dismiss]);
+
+  // Clear any pending timers when the provider unmounts to avoid leaks.
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach((t) => clearTimeout(t));
+      timers.clear();
+    };
+  }, []);
 
   return (
     <ToastContext.Provider value={{ toast }}>
@@ -51,7 +71,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`animate-[slideIn_0.2s_ease-out] flex items-start gap-2 rounded-lg border px-4 py-2.5 pr-8 text-sm shadow-[var(--shadow-md)] ${TOAST_STYLES[t.type]}`}
+            className={`relative animate-[slideIn_0.2s_ease-out] flex items-start gap-2 rounded-lg border px-4 py-2.5 pr-8 text-sm shadow-[var(--shadow-md)] ${TOAST_STYLES[t.type]}`}
           >
             {t.message}
             <button

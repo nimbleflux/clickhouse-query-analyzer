@@ -1,19 +1,19 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import CodeMirror from "@uiw/react-codemirror";
-import { sql, type SQLNamespace } from "@codemirror/lang-sql";
+import { type SQLNamespace } from "@codemirror/lang-sql";
+import { clickhouseSql } from "./editor/clickhouseDialect";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { keymap } from "@codemirror/view";
 import { Prec } from "@codemirror/state";
-import { acceptCompletion, autocompletion } from "@codemirror/autocomplete";
+import { acceptCompletion } from "@codemirror/autocomplete";
 import { format as sqlFormat } from "sql-formatter";
 import { Play, Loader2, Square, Plus, X, Bookmark, BookmarkCheck, Settings2, Share2 } from "lucide-react";
 import { executeQuery, fetchDatabases, fetchTables, fetchColumns } from "@/api/client";
-import { makeSqlCompletion, type SqlNs } from "./editor/sqlComplete";
 import type { QueryResult } from "@/api/types";
 import { useTheme } from "@/api/theme";
 import { ConfirmDialog } from "@/components/ui/dialog";
-import { NotConnectedState } from "@/components/ui/state";
+import { NotConnectedState, ErrorState } from "@/components/ui/state";
 import { buildShareableUrl, readSnapshotFromLocation } from "@/lib/snapshot";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import {
@@ -189,25 +189,6 @@ export function QueryEditor({ connected }: { connected: boolean }) {
       });
     } catch {}
   }, []);
-
-  // Autocomplete column loader: returns a table's column names, fetching + caching
-  // on demand so columns are offered even for tables never expanded in the sidebar.
-  const colCacheRef = useRef<Map<string, string[]>>(new Map());
-  const ensureColumns = useCallback(async (db: string, table: string): Promise<string[]> => {
-    const key = `${db}.${table}`;
-    const cached = colCacheRef.current.get(key);
-    if (cached) return cached;
-    const existing = schemaData[db]?.tables?.find((t) => t.name === table)?.columns?.map((c) => c.name);
-    if (existing) { colCacheRef.current.set(key, existing); return existing; }
-    try {
-      const res = await fetchColumns(db, table);
-      const names = (res.columns || []).map((c) => c.name);
-      colCacheRef.current.set(key, names);
-      return names;
-    } catch {
-      return [];
-    }
-  }, [schemaData]);
 
   useEffect(() => {
     saveTabs(tabs);
@@ -467,18 +448,6 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     }
   };
 
-  const buildSQLNamespace = (): SQLNamespace => {
-    const ns: SQLNamespace = {};
-    for (const db of databases) {
-      const tables: { [table: string]: string[] } = {};
-      for (const t of schemaData[db]?.tables || []) {
-        tables[t.name] = (t.columns || []).map((c) => c.name);
-      }
-      ns[db] = tables;
-    }
-    return ns;
-  };
-
   const addTab = () => {
     const newTab = { ...makeEmptyTab(`Query ${tabs.length + 1}`) };
     setTabs((prev) => [...prev, newTab]);
@@ -631,6 +600,27 @@ export function QueryEditor({ connected }: { connected: boolean }) {
   const activeSavedId = savedQueries.find((q) => q.sql === sqlText)?.id;
 
   const cmTheme = theme === "dark" ? oneDark : undefined;
+
+  // Build the schema namespace once per schema change, not per render.
+  const namespace = useMemo<SQLNamespace>(() => {
+    const ns: Record<string, Record<string, string[]>> = {};
+    for (const db of databases) {
+      const tables: Record<string, string[]> = {};
+      for (const t of schemaData[db]?.tables || []) {
+        tables[t.name] = (t.columns || []).map((c) => c.name);
+      }
+      ns[db] = tables;
+    }
+    return ns;
+  }, [databases, schemaData]);
+
+  // Editor extensions: the ClickHouse dialect with the live schema, so lang-sql
+  // handles keyword + table/dotted-column completion natively. Memoized on the
+  // schema namespace so the editor isn't reconfigured on every keystroke.
+  const cmExtensions = useMemo(
+    () => [cmKeymap, clickhouseSql({ schema: namespace })],
+    [namespace, cmKeymap],
+  );
 
   const openCount = Object.values(sidebarSections).filter(Boolean).length;
 
@@ -815,7 +805,16 @@ export function QueryEditor({ connected }: { connected: boolean }) {
       </div>
 
       <div
-        className="w-1 shrink-0 cursor-col-resize bg-[var(--color-border)] hover:bg-[var(--color-accent)]"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize sidebar"
+        tabIndex={0}
+        title="Drag to resize"
+        className="w-1 shrink-0 cursor-col-resize bg-[var(--color-border)] hover:bg-[var(--color-accent)] focus-visible:outline-none focus-visible:bg-[var(--color-accent)]"
+        onKeyDown={(e) => {
+          if (e.key === "ArrowLeft") { e.preventDefault(); setSidebarWidth((w) => Math.max(180, w - 24)); }
+          else if (e.key === "ArrowRight") { e.preventDefault(); setSidebarWidth((w) => Math.min(600, w + 24)); }
+        }}
         onMouseDown={(e) => {
           e.preventDefault();
           const startX = e.clientX;
@@ -857,7 +856,8 @@ export function QueryEditor({ connected }: { connected: boolean }) {
                 {tabs.length > 1 && (
                   <button
                     onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
-                    className="ml-0.5 rounded p-0.5 opacity-0 hover:bg-[var(--surface-hover)] group-hover/tab:opacity-100"
+                    aria-label={`Close tab ${tab.name}`}
+                    className="ml-0.5 rounded p-0.5 opacity-0 hover:bg-[var(--surface-hover)] focus-visible:opacity-100 group-hover/tab:opacity-100"
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -967,7 +967,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
               value={sqlText}
               onChange={setSQLText}
               theme={cmTheme}
-              extensions={[cmKeymap, sql(), autocompletion({ override: [makeSqlCompletion(() => buildSQLNamespace() as unknown as SqlNs, ensureColumns)] })]}
+              extensions={cmExtensions}
               basicSetup={{ lineNumbers: true, foldGutter: false }}
               className="h-full text-sm [&_.cm-editor]:h-full [&_.cm-scroller]:!font-mono [&_.cm-scroller]:text-[13px]"
             />
@@ -975,8 +975,16 @@ export function QueryEditor({ connected }: { connected: boolean }) {
         </div>
 
         <div
-          className="h-1 shrink-0 cursor-row-resize hover:bg-[var(--color-accent)]"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize editor and results"
+          tabIndex={0}
+          className="h-1 shrink-0 cursor-row-resize hover:bg-[var(--color-accent)] focus-visible:outline-none focus-visible:bg-[var(--color-accent)]"
           title="Drag to resize"
+          onKeyDown={(e) => {
+            if (e.key === "ArrowUp") { e.preventDefault(); setEditorHeight((h) => Math.max(120, h - 32)); }
+            else if (e.key === "ArrowDown") { e.preventDefault(); setEditorHeight((h) => Math.min(window.innerHeight - 280, h + 32)); }
+          }}
           onMouseDown={(e) => {
             e.preventDefault();
             const startY = e.clientY;
@@ -1019,9 +1027,11 @@ export function QueryEditor({ connected }: { connected: boolean }) {
                     </div>
                   )}
                   {activeTab.errors[i] ? (
-                    <div className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--state-error)] px-4 py-3 text-sm text-[var(--color-error)]">
-                      {activeTab.errors[i]}
-                    </div>
+                    <ErrorState
+                      error={activeTab.errors[i]}
+                      title="Query failed"
+                      onRetry={() => runAllQueries()}
+                    />
                   ) : (
                     <ResultTable
                       result={result}
