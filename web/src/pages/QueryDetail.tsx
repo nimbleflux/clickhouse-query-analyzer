@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom";
 import CodeMirror from "@uiw/react-codemirror";
-import { sql } from "@codemirror/lang-sql";
+import { clickhouseSql } from "./editor/clickhouseDialect";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { Clock, MemoryStick, HardDrive, Database, Cpu, Layers, Fingerprint, Copy, ChevronRight as ChevronSep, Code } from "lucide-react";
 import { useTheme } from "@/api/theme";
@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { ErrorState, NotConnectedState } from "@/components/ui/state";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { sendToEditor } from "@/lib/send-to-editor";
 import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor, queryStatus } from "@/utils";
@@ -256,7 +257,7 @@ export function QueryDetail({ connected }: { connected: boolean }) {
         </div>
         <CodeMirror
           value={query.query}
-          extensions={[sql()]}
+          extensions={[clickhouseSql()]}
           theme={cmTheme}
           readOnly={true}
           editable={false}
@@ -265,48 +266,47 @@ export function QueryDetail({ connected }: { connected: boolean }) {
         />
       </div>
 
-      <div className="mb-4 flex gap-1 border-b border-[var(--color-border)]">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => {
-              setTab(t.key);
-              setSearchParams((prev) => {
-                if (t.key === "overview") prev.delete("tab");
-                else prev.set("tab", t.key);
-                return prev;
-              }, { replace: true });
-              if (t.key === "flamegraph") loadFlameGraph();
-            }}
-            className={`px-4 py-2 text-sm capitalize transition-colors ${
-              tab === t.key
-                ? "border-b-2 border-[var(--color-accent)] text-[var(--color-accent)]"
-                : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        value={tab}
+        onValueChange={(value) => {
+          const key = value as Tab;
+          setTab(key);
+          setSearchParams((prev) => {
+            if (key === "overview") prev.delete("tab");
+            else prev.set("tab", key);
+            return prev;
+          }, { replace: true });
+          if (key === "flamegraph") loadFlameGraph();
+        }}
+        className="mb-4"
+      >
+        <TabsList>
+          {TABS.map((t) => (
+            <TabsTrigger key={t.key} value={t.key}>{t.label}</TabsTrigger>
+          ))}
+        </TabsList>
 
-      {tab === "overview" && <OverviewTab query={query} metrics={metrics} />}
-      {tab === "memory" && <MemoryTab query={query} metrics={metrics} />}
-      {tab === "threads" && <ThreadsTab queryId={query.query_id} threads={threads} pipelineStr={explain?.pipeline} querySettings={query.settings} />}
-      {tab === "storage" && <StorageTab events={query.profile_events} />}
-      {tab === "flamegraph" && (
-        <FlamegraphTab
-          flameData={flameData}
-          flameError={flameError}
-          flameLoading={flameLoading}
-          flameAttempted={flameAttempted}
-          query={query}
-          onSelectType={loadFlameGraphWithType}
-          activeType={activeFlameType}
-        />
-      )}
-      {tab === "explain" && <ExplainTab explain={explain} />}
-      {tab === "views" && <ViewsTab views={views} />}
-      {tab === "settings" && <SettingsTab settings={query.settings} />}
+        <TabsContent value="overview"><OverviewTab query={query} metrics={metrics} /></TabsContent>
+        <TabsContent value="memory"><MemoryTab query={query} metrics={metrics} /></TabsContent>
+        <TabsContent value="threads">
+          <ThreadsTab queryId={query.query_id} threads={threads} pipelineStr={explain?.pipeline} querySettings={query.settings} />
+        </TabsContent>
+        <TabsContent value="storage"><StorageTab events={query.profile_events} /></TabsContent>
+        <TabsContent value="flamegraph">
+          <FlamegraphTab
+            flameData={flameData}
+            flameError={flameError}
+            flameLoading={flameLoading}
+            flameAttempted={flameAttempted}
+            query={query}
+            onSelectType={loadFlameGraphWithType}
+            activeType={activeFlameType}
+          />
+        </TabsContent>
+        <TabsContent value="explain"><ExplainTab explain={explain} /></TabsContent>
+        <TabsContent value="views"><ViewsTab views={views} /></TabsContent>
+        <TabsContent value="settings"><SettingsTab settings={query.settings} /></TabsContent>
+      </Tabs>
     </PageContainer>
   );
 }

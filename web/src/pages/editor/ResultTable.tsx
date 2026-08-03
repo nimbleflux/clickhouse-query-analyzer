@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useMemo, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Copy, Check, ExternalLink, Download, ArrowUp, ArrowDown, ChevronLeft, ChevronRightIcon, Loader2 } from "lucide-react";
 import { formatNumber } from "@/utils";
 import type { QueryResult } from "@/api/types";
@@ -42,7 +43,8 @@ function CellValue({ val }: { val: unknown }) {
       </span>
       <button
         onClick={copy}
-        className="ml-1 shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-[var(--surface-elevated)] group-hover/cell:opacity-100"
+        className="ml-1 shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-[var(--surface-elevated)] group-hover/cell:opacity-100 focus-visible:opacity-100"
+        aria-label={copied ? "Copied" : "Copy cell value"}
         title="Copy"
       >
         {copied ? (
@@ -69,31 +71,31 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
   const [sortCol, setSortCol] = useState<string>("");
   const [sortAsc, setSortAsc] = useState(true);
 
-  const filteredRows = result.rows.filter((row) => {
-    for (const [col, filter] of Object.entries(colFilters)) {
-      if (!filter) continue;
-      const val = row[col];
-      const str = val === null || val === undefined ? "null" : String(val).toLowerCase();
-      if (!str.includes(filter.toLowerCase())) return false;
-    }
-    return true;
-  });
-
-  const sortedRows = sortCol
-    ? [...filteredRows].sort((a, b) => {
-        const va = a[sortCol];
-        const vb = b[sortCol];
-        let cmp = 0;
-        if (va === null || va === undefined) cmp = vb === null || vb === undefined ? 0 : -1;
-        else if (vb === null || vb === undefined) cmp = 1;
-        else if (typeof va === "number" && typeof vb === "number") cmp = va - vb;
-        else cmp = String(va).localeCompare(String(vb));
-        return sortAsc ? cmp : -cmp;
-      })
-    : filteredRows;
+  // Memoized filter+sort so it isn't recomputed on every keystroke/render.
+  const sortedRows = useMemo(() => {
+    const filtered = result.rows.filter((row) => {
+      for (const [col, filter] of Object.entries(colFilters)) {
+        if (!filter) continue;
+        const val = row[col];
+        const str = val === null || val === undefined ? "null" : String(val).toLowerCase();
+        if (!str.includes(filter.toLowerCase())) return false;
+      }
+      return true;
+    });
+    if (!sortCol) return filtered;
+    return filtered.sort((a, b) => {
+      const va = a[sortCol];
+      const vb = b[sortCol];
+      let cmp = 0;
+      if (va === null || va === undefined) cmp = vb === null || vb === undefined ? 0 : -1;
+      else if (vb === null || vb === undefined) cmp = 1;
+      else if (typeof va === "number" && typeof vb === "number") cmp = va - vb;
+      else cmp = String(va).localeCompare(String(vb));
+      return sortAsc ? cmp : -cmp;
+    });
+  }, [result.rows, colFilters, sortCol, sortAsc]);
 
   // Rows received from the server are already the current page (no client-side slicing).
-  const pageRows = sortedRows;
   const hasFilters = Object.values(colFilters).some((v) => v);
 
   // total_rows >= 0 means the server computed a real total. -1 means unknown
@@ -116,6 +118,21 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
     }
   };
 
+  // Virtualize the body so large result pages don't render thousands of DOM
+  // nodes. The scroll element is the table wrapper; the header is sticky.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowHeight = 32;
+  const virtualizer = useVirtualizer({
+    count: sortedRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => rowHeight,
+    overscan: 12,
+  });
+  const virtualRows = virtualizer.getVirtualItems();
+  const totalHeight = virtualizer.getTotalSize();
+  const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+  const paddingBottom = virtualRows.length > 0 ? totalHeight - virtualRows[virtualRows.length - 1].end : 0;
+
   return (
     <div>
       {result.query_id && (
@@ -132,6 +149,7 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
             <button
               onClick={() => { navigator.clipboard.writeText(result.query_id); }}
               className="rounded p-0.5 hover:bg-[var(--surface-elevated)]"
+              aria-label="Copy Query ID"
               title="Copy Query ID"
             >
               <Copy className="h-3 w-3" />
@@ -183,25 +201,32 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
         </pre>
       ) : result.columns.length > 0 ? (
         <>
-          <div className="overflow-auto rounded-lg border border-[var(--color-border)]">
+          <div ref={scrollRef} className="max-h-[60vh] overflow-auto rounded-lg border border-[var(--color-border)]">
             <table className="w-full text-sm">
-              <thead>
+              <thead className="sticky top-0 z-10">
                 <tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
-                  {result.columns.map((c) => (
-                    <th
-                      key={c.name}
-                      onClick={() => toggleSort(c.name)}
-                      className="cursor-pointer select-none px-3 py-2 text-left text-xs font-medium text-[var(--color-text-secondary)] whitespace-nowrap hover:text-[var(--color-text-primary)]"
-                    >
-                      <span className="inline-flex items-center gap-1">
-                        {c.name}
-                        {sortCol === c.name && (
-                          sortAsc ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                        )}
-                      </span>
-                      <div className="text-[9px] font-normal opacity-60">{c.type}</div>
-                    </th>
-                  ))}
+                  {result.columns.map((c) => {
+                    const active = sortCol === c.name;
+                    return (
+                      <th
+                        key={c.name}
+                        scope="col"
+                        aria-sort={active ? (sortAsc ? "ascending" : "descending") : "none"}
+                        className="select-none px-3 py-2 text-left text-xs font-medium text-[var(--color-text-secondary)] whitespace-nowrap"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleSort(c.name)}
+                          aria-pressed={active}
+                          className="inline-flex cursor-pointer items-center gap-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]"
+                        >
+                          {c.name}
+                          {active && (sortAsc ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
+                        </button>
+                        <div className="text-[9px] font-normal opacity-60">{c.type}</div>
+                      </th>
+                    );
+                  })}
                 </tr>
                 {result.rows.length > 1 && (
                   <tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
@@ -223,20 +248,33 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
                 )}
               </thead>
               <tbody>
-                {pageRows.map((row, i) => (
-                  <tr key={i} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)]">
-                    {result.columns.map((c) => (
-                      <td key={c.name} className="max-w-sm px-3 py-1.5 font-mono text-xs text-[var(--color-text-primary)]">
-                        <CellValue val={row[c.name]} />
-                      </td>
-                    ))}
+                {paddingTop > 0 && (
+                  <tr aria-hidden="true" style={{ height: paddingTop }}>
+                    <td colSpan={result.columns.length} />
                   </tr>
-                ))}
+                )}
+                {virtualRows.map((virtualRow) => {
+                  const row = sortedRows[virtualRow.index];
+                  return (
+                    <tr key={virtualRow.key} style={{ height: virtualRow.size }} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)]">
+                      {result.columns.map((c) => (
+                        <td key={c.name} className="max-w-sm px-3 py-1.5 font-mono text-xs text-[var(--color-text-primary)]">
+                          <CellValue val={row[c.name]} />
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
                 {sortedRows.length === 0 && hasFilters && (
                   <tr>
                     <td colSpan={result.columns.length} className="px-4 py-4 text-center text-xs text-[var(--color-text-secondary)]">
                       No rows match filters
                     </td>
+                  </tr>
+                )}
+                {paddingBottom > 0 && (
+                  <tr aria-hidden="true" style={{ height: paddingBottom }}>
+                    <td colSpan={result.columns.length} />
                   </tr>
                 )}
               </tbody>
@@ -252,6 +290,7 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
               <button
                 onClick={() => setResultPage((p) => Math.max(0, p - 1))}
                 disabled={resultPage === 0 || pageLoading}
+                aria-label="Previous page"
                 className="rounded p-1 hover:bg-[var(--surface-elevated)] disabled:opacity-30"
               >
                 <ChevronLeft className="h-4 w-4" />
@@ -259,6 +298,7 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
               <button
                 onClick={() => setResultPage((p) => p + 1)}
                 disabled={!hasMore || pageLoading}
+                aria-label="Next page"
                 className="rounded p-1 hover:bg-[var(--surface-elevated)] disabled:opacity-30"
               >
                 <ChevronRightIcon className="h-4 w-4" />
