@@ -24,7 +24,6 @@ func Router(cfg *config.Config, api *API, frontendFS fs.FS) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(chiMW.RequestID)
-	r.Use(chiMW.RealIP)
 	r.Use(chiMW.Recoverer)
 	r.Use(securityHeadersMiddleware)
 	r.Use(bodyLimitMiddleware)
