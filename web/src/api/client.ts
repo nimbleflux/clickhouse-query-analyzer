@@ -7,6 +7,7 @@ import type {
   TraceEntry,
   ViewLogEntry,
   ExplainResult,
+  ExplainAnalyze,
   FlameGraphData,
   ThreadSummary,
   ThreadProfile,
@@ -117,6 +118,28 @@ export async function fetchExplain(queryId: string, signal?: AbortSignal): Promi
   let res: Response;
   try {
     res = await fetch(`${BASE}/queries/${encodeURIComponent(queryId)}/explain`, {
+      method: "POST",
+      headers: getConnectionHeaders(),
+      signal,
+    });
+  } catch (e) {
+    throw ApiError.wrap(e);
+  }
+  if (!res.ok) {
+    throw await ApiError.fromResponse(res);
+  }
+  return res.json();
+}
+
+export async function fetchExplainAnalyze(
+  queryId: string,
+  processors = false,
+  signal?: AbortSignal,
+): Promise<ExplainAnalyze> {
+  const sp = processors ? "?processors=1" : "";
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/queries/${encodeURIComponent(queryId)}/explain-analyze${sp}`, {
       method: "POST",
       headers: getConnectionHeaders(),
       signal,

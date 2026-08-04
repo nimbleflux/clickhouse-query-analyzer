@@ -1,4 +1,15 @@
 services:
+  # ---------------------------------------------------------------------------
+  # Default stack: a single ClickHouse node + MinIO. This is what `make dev`
+  # starts. ClickHouse validates the S3 disk (disk_s3, declared in config.xml)
+  # at startup, so minio must be present — hence it stays in the default stack
+  # rather than behind a profile. MinIO is light at idle (~100–200 MB); the
+  # big saving is dropping the *second* full ClickHouse server + Keeper.
+  #
+  # The replication stack (a 2nd ClickHouse node + Keeper) is opt-in — see
+  # `make dev-clickhouse-repl` / `make seed-replication`.
+  # ---------------------------------------------------------------------------
+
   minio:
     image: minio/minio:latest
     ports:
@@ -32,22 +43,10 @@ services:
       echo 'Bucket created successfully'
       "
 
-  clickhouse-keeper:
-    image: clickhouse/clickhouse-keeper:latest
-    ports:
-      - "19181:9181"
-    volumes:
-      - keeper-data:/var/lib/clickhouse-keeper
-      - ./keeper_config.xml:/etc/clickhouse-keeper/keeper_config.xml
-    networks:
-      - ch-net
-
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     hostname: clickhouse
     depends_on:
-      clickhouse-keeper:
-        condition: service_started
       minio-init:
         condition: service_completed_successfully
     ports:
@@ -69,9 +68,26 @@ services:
     networks:
       - ch-net
 
+  # ---------------------------------------------------------------------------
+  # `repl` profile: a 2nd ClickHouse node + Keeper, for the Replication / DDL
+  # dashboards and the ReplicatedMergeTree demo (see `make seed-replication`).
+  # ---------------------------------------------------------------------------
+
+  clickhouse-keeper:
+    image: clickhouse/clickhouse-keeper:latest
+    profiles: ["repl"]
+    ports:
+      - "19181:9181"
+    volumes:
+      - keeper-data:/var/lib/clickhouse-keeper
+      - ./keeper_config.xml:/etc/clickhouse-keeper/keeper_config.xml
+    networks:
+      - ch-net
+
   clickhouse-2:
     image: clickhouse/clickhouse-server:latest
     hostname: clickhouse-2
+    profiles: ["repl"]
     depends_on:
       clickhouse-keeper:
         condition: service_started

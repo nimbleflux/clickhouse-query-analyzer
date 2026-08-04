@@ -42,8 +42,13 @@ type Client struct {
 	isCluster        bool
 	cluster          string
 	clusterDetectErr error
-	createdAt        time.Time
-	lastUsedAt       time.Time
+	// version is detected once at connect (see detectVersion) and treated as
+	// immutable afterwards, so reads need no synchronization. Empty string
+	// means detection failed or hasn't run; callers should check versionErr.
+	version    string
+	versionErr error
+	createdAt  time.Time
+	lastUsedAt time.Time
 }
 
 type ConnParams struct {
@@ -253,6 +258,7 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 	}
 
 	isCluster, cluster, clusterErr := detectCluster(ctx, conn)
+	version, versionErr := detectVersion(ctx, conn)
 
 	var httpCl *http.Client
 	if params.SkipTLS {
@@ -277,6 +283,8 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 		isCluster:        isCluster,
 		cluster:          cluster,
 		clusterDetectErr: clusterErr,
+		version:          version,
+		versionErr:       versionErr,
 		createdAt:        time.Now(),
 		lastUsedAt:       time.Now(),
 	}
@@ -343,6 +351,20 @@ func (c *Client) ClusterDetectErr() error {
 	return c.clusterDetectErr
 }
 
+// Version returns the cached server version string (e.g. "26.7.2.59"),
+// detected once at connect time. Returns "" if detection failed — check
+// VersionErr for the cause. Safe for concurrent reads: the field is written
+// once during connect and read-only afterwards.
+func (c *Client) Version() string {
+	return c.version
+}
+
+// VersionErr returns the error from version detection, if any. Non-nil only
+// when the SELECT version() query itself failed at connect.
+func (c *Client) VersionErr() error {
+	return c.versionErr
+}
+
 // ClusterNote returns a human explanation when cluster-wide queries couldn't
 // be set up, or "" otherwise. Centralized so every page reports the same
 // message instead of each re-deriving it.
@@ -381,6 +403,18 @@ func detectCluster(ctx context.Context, conn driver.Conn) (bool, string, error) 
 		return true, cluster, nil
 	}
 	return false, "", nil
+}
+
+// detectVersion reads the server version once at connect time so feature
+// gates (e.g. EXPLAIN ANALYZE, available 26.7+) don't re-query version() on
+// every invocation. The result is cached on the Client and never changes for
+// the life of the connection.
+func detectVersion(ctx context.Context, conn driver.Conn) (string, error) {
+	var version string
+	if err := conn.QueryRow(ctx, "SELECT version()").Scan(&version); err != nil {
+		return "", err
+	}
+	return version, nil
 }
 
 func mustPort(port string) int {

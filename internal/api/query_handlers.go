@@ -322,6 +322,47 @@ func (a *API) GetExplain(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// GetExplainAnalyze runs EXPLAIN ANALYZE, which re-executes the query to
+// measure real per-step runtime metrics. It is deliberately a separate
+// endpoint from GetExplain (which runs only planner-only variants) because
+// the re-execution is potentially expensive and must be opt-in.
+func (a *API) GetExplainAnalyze(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+
+	queryID := chi.URLParam(r, "queryID")
+	if queryID == "" {
+		MissingParam(w, "query_id")
+		return
+	}
+
+	query, err := ch.GetQuery(r.Context(), queryID)
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+
+	// Defence-in-depth: the clickhouse layer's isSelectLike guard is the
+	// primary barrier, but since EXPLAIN ANALYZE re-executes the query we
+	// also honour read-only mode here, mirroring ExecuteQuery.
+	if isReadonly(r) && rejectWriteQuery(w, query.Query) {
+		return
+	}
+
+	processors := r.URL.Query().Get("processors") == "1"
+
+	result, err := ch.GetExplainAnalyze(r.Context(), query.Query, processors)
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (a *API) CompareQueries(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {

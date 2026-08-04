@@ -132,19 +132,25 @@ ClickLens connects to ClickHouse from the browser, so TLS certificates must be t
 ## Dev Environment
 
 ```bash
-# Start ClickHouse (2-replica cluster + ClickHouse Keeper) with sample data
+# Start a single ClickHouse node with sample data (the default — lightest setup)
 make dev-clickhouse
 make seed
-
-# Optionally seed the ReplicatedMergeTree tables across both nodes so the
-# Replication and DDL dashboards have real data to render
-make seed-replication
 
 # Run with hot-reload frontend
 make dev
 ```
 
-The dev ClickHouse runs on ports 18123 (HTTP) and 19000 (native) to avoid conflicts with existing instances. Connect using `clickhouse://localhost:19000` or `http://localhost:18123`. The second replica has no host ports — it's reached over the internal Docker network for replication only.
+The dev ClickHouse runs on ports 18123 (HTTP) and 19000 (native) to avoid conflicts with existing instances. Connect using `clickhouse://localhost:19000` or `http://localhost:18123`.
+
+The default `make dev-clickhouse` starts a single ClickHouse node plus MinIO (the S3 disk in `config.xml` is validated at startup, so MinIO must be present). That's all most query-analysis work needs. The replication demo stack is opt-in to avoid holding CPU and memory for a second full ClickHouse server + Keeper while idle:
+
+```bash
+# Replication + DDL dashboards: a 2nd node + Keeper, then seed ReplicatedMergeTree
+make dev-clickhouse-repl
+make seed-replication
+```
+
+`make seed-replication` auto-starts the replication stack, so it also works as a one-shot. The second replica has no host ports — it's reached over the internal Docker network for replication only.
 
 ## Setup & Diagnostics
 

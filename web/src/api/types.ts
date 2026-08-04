@@ -116,6 +116,23 @@ export interface ExplainResult {
   errors?: Record<string, string>;
 }
 
+export interface ExplainAnalyzeSummary {
+  total_ms?: number;
+  planning_ms?: number;
+  execution_ms?: number;
+  read_rows?: number;
+  read_bytes?: number;
+  rows_per_sec?: number;
+  bytes_per_sec?: number;
+  peak_memory?: number;
+}
+
+export interface ExplainAnalyze {
+  raw: string;
+  summary: ExplainAnalyzeSummary;
+  errors?: Record<string, string>;
+}
+
 export interface FlameGraphData {
   name: string;
   value: number;
