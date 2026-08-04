@@ -303,7 +303,7 @@ export function QueryDetail({ connected }: { connected: boolean }) {
             activeType={activeFlameType}
           />
         </TabsContent>
-        <TabsContent value="explain"><ExplainTab explain={explain} /></TabsContent>
+        <TabsContent value="explain"><ExplainTab queryId={query.query_id} explain={explain} /></TabsContent>
         <TabsContent value="views"><ViewsTab views={views} /></TabsContent>
         <TabsContent value="settings"><SettingsTab settings={query.settings} /></TabsContent>
       </Tabs>

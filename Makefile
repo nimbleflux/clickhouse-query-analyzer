@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend build clean docker dev-clickhouse seed seed-replication test test-unit test-integration lint vulncheck fmt-check tidy-check
+.PHONY: dev dev-backend dev-frontend build clean docker dev-clickhouse dev-clickhouse-repl seed seed-replication test test-unit test-integration lint vulncheck fmt-check tidy-check
 
 BINARY := clickhouse-query-analyzer
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -12,14 +12,26 @@ dev:
 	wait
 
 dev-frontend:
-	cd web && npm ci --quiet 2>/dev/null; npm run dev
+	# Only reinstall deps on a cold start; skip the multi-second npm ci on warm
+	# runs. Tradeoff: this won't catch lockfile drift on warm starts — run
+	# `npm ci` manually if node_modules looks stale. Note: this is a launch-speed
+	# nit, not a steady-state CPU fix (Vite is the only long-running process here).
+	@if [ ! -d web/node_modules ]; then cd web && npm ci --quiet 2>/dev/null; fi
+	cd web && npm run dev
 
 dev-backend:
-	mkdir -p cmd/server/frontend
-	go run ./cmd/server -dev -port 8080
+	# -tags noembed skips embedding the 38 MB frontend build into the dev
+	# binary (dev mode reverse-proxies to Vite and never serves the embed).
+	# This makes each `go run` restart faster; it does not affect prod builds.
+	go run -tags noembed ./cmd/server -dev -port 8080
 
 dev-clickhouse:
-	cd dev && docker compose up -d
+	cd dev && docker compose up -d clickhouse
+
+# Replication demo stack: adds a 2nd ClickHouse node + Keeper. Use this before
+# `make seed-replication` (which the target does automatically).
+dev-clickhouse-repl:
+	cd dev && COMPOSE_PROFILES=repl docker compose up -d
 
 dev-clickhouse-wait: dev-clickhouse
 	@echo "Waiting for ClickHouse to be ready..."
@@ -57,7 +69,7 @@ seed:
 	done
 	docker exec -i dev-clickhouse-1 clickhouse-client < dev/seed.sql
 
-seed-replication:
+seed-replication: dev-clickhouse-repl
 	@for i in $$(seq 1 30); do \
 		if docker exec dev-clickhouse-1 clickhouse-client --query "SELECT 1" >/dev/null 2>&1 && \
 		   docker exec dev-clickhouse-2-1 clickhouse-client --query "SELECT 1" >/dev/null 2>&1; then \

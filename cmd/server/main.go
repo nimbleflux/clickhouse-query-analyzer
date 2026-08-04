@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"embed"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,13 +19,11 @@ import (
 
 var version = "dev"
 
-//go:embed all:frontend
-var frontendEmbed embed.FS
-
-func getFrontendFS() fs.FS {
-	sub, _ := fs.Sub(frontendEmbed, "frontend")
-	return sub
-}
+// getFrontendFS returns the embedded production frontend assets. In dev mode
+// (the `-tags noembed` build) it returns a tiny stub — see embed_dev.go —
+// because dev mode reverse-proxies to the Vite dev server and never serves
+// the embed (internal/api/router.go). The stub skips the 38 MB embed on
+// every `go run`, which is pure waste in dev.
 
 func main() {
 	cfg := config.Parse()
