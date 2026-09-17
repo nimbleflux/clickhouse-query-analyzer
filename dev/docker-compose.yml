@@ -11,7 +11,9 @@ services:
   # ---------------------------------------------------------------------------
 
   minio:
-    image: minio/minio:latest
+    # MinIO's Docker Hub repos deny anonymous pulls; quay.io is the
+    # officially maintained public registry.
+    image: quay.io/minio/minio:latest
     ports:
       - "19001:9000"
       - "19002:9001"
@@ -30,7 +32,7 @@ services:
       - ch-net
 
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     depends_on:
       minio:
         condition: service_healthy
