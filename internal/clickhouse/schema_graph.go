@@ -36,12 +36,10 @@ type SchemaGraphNode struct {
 	Comment      string     `json:"comment,omitempty"`
 
 	// Read during edge building, not exposed over the API.
-	engineFull   string
-	createQuery  string
-	targetDB     string
-	targetTable  string
-	dependencies [][2]string // downstream dependents ("views that read from me")
-	loadingDeps  [][2]string // upstream sources this node reads FROM
+	engineFull  string
+	createQuery string
+	targetDB    string
+	targetTable string
 }
 
 // Key is the graph-wide unique identifier ("database.name"). Table names
