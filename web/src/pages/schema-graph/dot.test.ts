@@ -24,7 +24,12 @@ const theme: GraphTheme = {
 
 const fixture: SchemaGraphData = {
   nodes: [
-    { database: "analytics", name: "events", engine: "MergeTree", kind: "mergetree", total_rows: 10000, total_bytes: 450322 },
+    { database: "analytics", name: "events", engine: "MergeTree", kind: "mergetree", total_rows: 10000, total_bytes: 450322,
+      columns: [
+        { name: "event_id", type: "UUID", in_key: true },
+        { name: "event_time", type: "DateTime", in_key: true },
+        { name: "country", type: "LowCardinality(String)" },
+      ] },
     { database: "analytics", name: "events_daily_mv", engine: "MaterializedView", kind: "mv", total_rows: 30, total_bytes: 1024 },
     { database: "analytics", name: "events_daily", engine: "SummingMergeTree", kind: "mergetree", total_rows: 30, total_bytes: 2048 },
   ],
@@ -128,6 +133,37 @@ describe("buildDot", () => {
     expect(dot).not.toContain("events_daily_mv");
   });
 
+  it("renders column summaries inside node labels", () => {
+    const dot = buildDot(fixture, {
+      theme,
+      visibleKinds: new Set(["mergetree", "mv", "rmv", "dictionary", "distributed", "view", "remote", "other"]),
+      dbFilter: null,
+      heat: new Map(),
+    });
+    expect(dot).toContain("event_id");
+    expect(dot).toContain("DateTime");
+    expect(dot).toContain("LowCardinality(String)");
+    // Key columns are visually distinguished (colored + bold).
+    expect(dot).toContain("<B>");
+  });
+
+  it("marks truncated column lists with a more-row", () => {
+    const many: SchemaGraphData = {
+      nodes: [{
+        database: "db", name: "wide", engine: "MergeTree", kind: "mergetree", total_rows: 1, total_bytes: 1,
+        columns_truncated: true,
+        columns: Array.from({ length: 15 }, (_, i) => ({ name: `c${i}`, type: "String" })),
+      }],
+      edges: [],
+      databases: [{ database: "db", tables: 1 }],
+      truncated: false,
+    };
+    const dot = buildDot(many, { theme, visibleKinds: new Set(["mergetree"]), dbFilter: null, heat: new Map() });
+    expect(dot).toContain("c11"); // first 12 shown
+    expect(dot).not.toContain("c12"); // beyond the cap
+    expect(dot).toContain("more"); // … N more row
+  });
+
   it("escapes quotes coming from table names", () => {
     const weird: SchemaGraphData = {
       nodes: [{ database: "db", name: 'we"ird', engine: "Memory", kind: "other", total_rows: 0, total_bytes: 0 }],
@@ -152,16 +188,31 @@ describe("buildAdjacency", () => {
 });
 
 describe("computeHeat", () => {
+  const load = {
+    view: "events_daily_mv",
+    executions: 10,
+    total_duration_ms: 5000,
+    total_written_rows: 30,
+    total_written_bytes: 1024,
+    total_read_rows: 10000,
+    total_read_bytes: 450322,
+    peak_memory_usage: 4096,
+  };
+
   it("normalizes durations log-scaled into 0..1", () => {
-    const heat = computeHeat({
-      nodes: fixture.nodes,
-      load: [{ view: "events_daily_mv", executions: 10, total_duration_ms: 5000 }],
-    });
+    const heat = computeHeat({ nodes: fixture.nodes, load: [load] });
     expect(heat.get("analytics.events_daily_mv")).toBeGreaterThan(0);
     expect(heat.get("analytics.events_daily_mv")).toBeLessThanOrEqual(1);
   });
+  it("switches field with the metric", () => {
+    const a = computeHeat({ nodes: fixture.nodes, load: [load] }, "duration");
+    const b = computeHeat({ nodes: fixture.nodes, load: [load] }, "peak_memory");
+    // Different metrics normalize to different relative values.
+    expect(a.get("analytics.events_daily_mv")).not.toBeNaN();
+    expect(b.get("analytics.events_daily_mv")).toBe(1); // single row → max
+  });
   it("ignores views with no matching node", () => {
-    const heat = computeHeat({ nodes: fixture.nodes, load: [{ view: "ghost", executions: 1, total_duration_ms: 10 }] });
+    const heat = computeHeat({ nodes: fixture.nodes, load: [{ ...load, view: "ghost" }] });
     expect(heat.size).toBe(0);
   });
 });

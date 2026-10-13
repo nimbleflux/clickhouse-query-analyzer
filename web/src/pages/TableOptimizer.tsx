@@ -184,7 +184,6 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
       />
 
       <PageHeader
-        heading="h1"
         title="Table Optimizer"
         description="Analyze tables for ClickHouse optimization opportunities."
         actions={

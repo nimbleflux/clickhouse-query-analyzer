@@ -138,7 +138,6 @@ export function Mutations({ connected }: { connected: boolean }) {
   return (
     <PageContainer>
       <PageHeader
-        heading="h2"
         title="Mutations"
         description="Active ALTER … UPDATE/DELETE/TTL mutations (system.mutations)"
         actions={

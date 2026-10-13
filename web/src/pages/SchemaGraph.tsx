@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, type NavigateFunction } from "react-router-dom";
 import { Search, RefreshCw, X, ExternalLink, ArrowRight, Wrench } from "lucide-react";
 import { fetchSchemaGraph, fetchColumns } from "@/api/client";
-import type { SchemaGraphData, SchemaGraphNode, SchemaKind } from "@/api/types";
+import type { SchemaGraphData, SchemaGraphNode, SchemaKind, HeatMetric } from "@/api/types";
 import { SchemaGraphView } from "@/components/SchemaGraphView";
 import { KIND_HUES, KIND_LABELS, nodeKey } from "./schema-graph/dot";
 import { PageContainer, PageHeader } from "@/components/ui/page";
@@ -19,10 +19,20 @@ import type { ApiError } from "@/api/errors";
 
 const ALL_KINDS = Object.keys(KIND_HUES) as SchemaKind[];
 const LOAD_OPTIONS = [
-  { value: "0", label: "No load" },
+  { value: "0", label: "Off" },
   { value: "1", label: "1 day" },
   { value: "7", label: "7 days" },
   { value: "30", label: "30 days" },
+];
+
+const HEAT_METRICS: { value: HeatMetric; label: string }[] = [
+  { value: "duration", label: "View duration" },
+  { value: "written_rows", label: "Rows written" },
+  { value: "written_bytes", label: "Bytes written" },
+  { value: "read_rows", label: "Rows read" },
+  { value: "read_bytes", label: "Bytes read" },
+  { value: "peak_memory", label: "Peak memory" },
+  { value: "executions", label: "Executions" },
 ];
 
 export function SchemaGraph({ connected }: { connected: boolean }) {
@@ -31,6 +41,7 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [loadDays, setLoadDays] = useState(0);
+  const [heatMetric, setHeatMetric] = useState<HeatMetric>("duration");
   // One database at a time by default — unfiltered graphs don't scale past a
   // handful of tables. "All databases" is an explicit choice (the backend
   // caps it and says so).
@@ -121,11 +132,22 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
             <Select
               value={String(loadDays)}
               onChange={(e) => setLoadDays(Number(e.target.value))}
-              title="Overlay materialized view INSERT load from query_views_log"
-              className="w-36"
+              title="Lookback window for the materialized view INSERT load overlay (from query_views_log)"
+              className="w-44"
             >
               {LOAD_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>MV load: {o.label}</option>
+                <option key={o.value} value={o.value}>Lookback: {o.label}</option>
+              ))}
+            </Select>
+            <Select
+              value={heatMetric}
+              onChange={(e) => setHeatMetric(e.target.value as HeatMetric)}
+              disabled={loadDays === 0}
+              title="Which query_views_log metric the heat-map colors by"
+              className="w-48"
+            >
+              {HEAT_METRICS.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
               ))}
             </Select>
             <Button variant="secondary" onClick={load} disabled={loading}>
@@ -223,6 +245,7 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
                 selectedKey={selectedKey}
                 onSelect={setSelectedKey}
                 fitSignal={fitSignal}
+                heatMetric={heatMetric}
               />
             </div>
             {selected && (

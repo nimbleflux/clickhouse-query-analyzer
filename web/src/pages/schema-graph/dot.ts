@@ -1,4 +1,4 @@
-import type { SchemaGraphData, SchemaGraphEdge, SchemaGraphNode, SchemaKind } from "@/api/types";
+import type { SchemaGraphData, SchemaGraphEdge, SchemaGraphNode, SchemaKind, HeatMetric } from "@/api/types";
 
 /**
  * Pure DOT generation for the schema graph. No DOM access — colors arrive as
@@ -118,24 +118,44 @@ export interface DotOptions {
   heat: Map<string, number>;
 }
 
-/** Normalize raw load rows into a 0..1 heat per node key (log-scaled duration). */
+/** Which query_views_log metric the heat-map colors by. */
+export function loadValue(
+  l: { executions: number; total_duration_ms: number; total_written_rows: number; total_written_bytes: number; total_read_rows: number; total_read_bytes: number; peak_memory_usage: number },
+  metric: HeatMetric,
+): number {
+  switch (metric) {
+    case "executions": return l.executions;
+    case "written_rows": return l.total_written_rows;
+    case "written_bytes": return l.total_written_bytes;
+    case "read_rows": return l.total_read_rows;
+    case "read_bytes": return l.total_read_bytes;
+    case "peak_memory": return l.peak_memory_usage;
+    default: return l.total_duration_ms;
+  }
+}
+
+/** Normalize raw load rows into a 0..1 heat per node key (log-scaled) for the chosen metric. */
 export function computeHeat(
   graph: Pick<SchemaGraphData, "load" | "nodes">,
+  metric: HeatMetric = "duration",
 ): Map<string, number> {
   const out = new Map<string, number>();
   if (!graph.load || graph.load.length === 0) return out;
-  const max = Math.max(...graph.load.map((l) => Math.max(1, l.total_duration_ms)));
+  const max = Math.max(...graph.load.map((l) => Math.max(1, loadValue(l, metric))));
   for (const l of graph.load) {
     // view_name in query_views_log may be qualified or bare; match on suffix.
     const node = graph.nodes.find(
       (n) => n.name === l.view || `${n.database}.${n.name}` === l.view,
     );
     if (!node) continue;
-    const t = Math.log1p(Math.max(0, l.total_duration_ms)) / Math.log1p(max);
+    const t = Math.log1p(Math.max(0, loadValue(l, metric))) / Math.log1p(max);
     out.set(nodeKey(node), Math.max(0, Math.min(1, t)));
   }
   return out;
 }
+
+/** Max column rows rendered inside a node card (ClickHouse's uses 14). */
+export const MAX_NODE_LABEL_COLUMNS = 12;
 
 function nodeLabel(node: SchemaGraphNode, opts: DotOptions): string {
   const { theme } = opts;
@@ -147,20 +167,49 @@ function nodeLabel(node: SchemaGraphNode, opts: DotOptions): string {
   const name = escapeHtmlLabel(node.name);
   const kindLabel = escapeHtmlLabel(KIND_LABELS[node.kind] ?? node.kind);
   const stats = [
-    node.total_rows > 0 ? `${fmtCompact(node.total_rows)} rows` : "",
+    node.total_rows > 0 ? `${fmtCompact(node.total_rows)} row${node.total_rows === 1 ? "" : "s"}` : "",
     node.total_bytes > 0 ? fmtBytesCompact(node.total_bytes) : "",
   ].filter(Boolean).join(" · ");
 
+  const keyColor = mixHex(theme.light ? "#000000" : "#ffffff", "#ef4444", 0.75);
+  const cols = (node.columns ?? []).slice(0, MAX_NODE_LABEL_COLUMNS);
+  const hidden = (node.columns?.length ?? 0) - cols.length + (node.columns_truncated ? 1 : 0);
+
+  const columnRows = cols
+    .map((c) => {
+      const nameColor = c.in_key ? keyColor : theme.textPrimary;
+      const nameWeight = c.in_key ? "<B>" : "";
+      const nameEnd = c.in_key ? "</B>" : "";
+      return `<TR>
+    <TD BGCOLOR="${rowBg}" WIDTH="3"></TD>
+    <TD BGCOLOR="${rowBg}" ALIGN="LEFT"><FONT COLOR="${nameColor}" POINT-SIZE="9">${nameWeight} ${escapeHtmlLabel(c.name)} ${nameEnd}</FONT></TD>
+    <TD BGCOLOR="${rowBg}" ALIGN="RIGHT"><FONT COLOR="${theme.textSecondary}" POINT-SIZE="8"><I> ${escapeHtmlLabel(c.type)} </I></FONT></TD>
+  </TR>`;
+    })
+    .join("\n");
+  const moreRow =
+    hidden > 0
+      ? `<TR>
+    <TD BGCOLOR="${rowBg}" WIDTH="3"></TD>
+    <TD BGCOLOR="${rowBg}" COLSPAN="2" ALIGN="LEFT"><FONT POINT-SIZE="8" COLOR="${theme.textSecondary}"><I> … ${hidden} more </I></FONT></TD>
+  </TR>`
+      : "";
+  const columnsBlock =
+    cols.length > 0
+      ? `<HR/>${columnRows}${moreRow ? moreRow : ""}`
+      : "";
+
   const statsRow = stats
-    ? `<TR><TD COLSPAN="3" ALIGN="LEFT" BGCOLOR="${rowBg}"><FONT POINT-SIZE="9" COLOR="${theme.textSecondary}"> ${escapeHtmlLabel(stats)} </FONT></TD></TR>`
+    ? `<TR><TD BGCOLOR="${rowBg}" WIDTH="3"></TD><TD COLSPAN="2" ALIGN="LEFT" BGCOLOR="${rowBg}"><FONT POINT-SIZE="9" COLOR="${theme.textSecondary}"> ${escapeHtmlLabel(stats)} </FONT></TD></TR>`
     : "";
 
   return `<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4">
   <TR>
-    <TD BGCOLOR="${hue}" WIDTH="3"></TD>
+    <TD BGCOLOR="${hue}" WIDTH="3" VALIGN="MIDDLE"></TD>
     <TD BGCOLOR="${headerBg}" ALIGN="LEFT"><FONT COLOR="${theme.textPrimary}" POINT-SIZE="11"><B> ${name} </B></FONT></TD>
     <TD BGCOLOR="${headerBg}" ALIGN="RIGHT"><FONT COLOR="${theme.textSecondary}" POINT-SIZE="9"><I> ${kindLabel} </I></FONT></TD>
   </TR>
+  ${columnsBlock}
   ${statsRow}
 </TABLE>>`;
 }

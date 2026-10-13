@@ -146,7 +146,6 @@ export function DDL({ connected }: { connected: boolean }) {
   return (
     <PageContainer>
       <PageHeader
-        heading="h2"
         title="DDL"
         description="Distributed DDL queue and recent schema operations"
         actions={

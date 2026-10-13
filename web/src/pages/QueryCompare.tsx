@@ -81,7 +81,6 @@ export function QueryCompare({ connected }: { connected: boolean }) {
   return (
     <PageContainer>
       <PageHeader
-        heading="h1"
         title="Compare Queries"
         description="Side-by-side diff of two query executions."
       />

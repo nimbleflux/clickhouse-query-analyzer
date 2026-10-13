@@ -106,7 +106,6 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
   return (
     <PageContainer>
       <PageHeader
-        heading="h2"
         title="System Metrics"
         description="Live asynchronous gauges (system.asynchronous_metrics)"
         actions={

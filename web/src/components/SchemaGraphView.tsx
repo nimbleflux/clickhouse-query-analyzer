@@ -4,11 +4,12 @@ import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
 import { AlertCircle, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
 import { buildDot, buildAdjacency, computeHeat, type GraphTheme } from "../pages/schema-graph/dot";
 import { renderGraphvizSVG } from "../pages/schema-graph/render";
-import type { SchemaGraphData, SchemaKind } from "@/api/types";
+import type { SchemaGraphData, SchemaKind, HeatMetric } from "@/api/types";
 import { useTheme } from "@/api/theme";
 
 const MIN_SCALE = 0.08;
 const MAX_SCALE = 8;
+const MAX_FIT_SCALE = 1.5;
 const FIT_PADDING = 0.92;
 
 interface SchemaGraphViewProps {
@@ -20,6 +21,8 @@ interface SchemaGraphViewProps {
   onSelect: (key: string | null) => void;
   /** Bumped by the parent to re-fit the view (e.g. after data reload). */
   fitSignal: number;
+  /** Which query_views_log metric the heat overlay colors by. */
+  heatMetric: HeatMetric;
 }
 
 /** Resolve the CSS variables the DOT builder needs into concrete colors. */
@@ -44,6 +47,7 @@ export function SchemaGraphView({
   selectedKey,
   onSelect,
   fitSignal,
+  heatMetric,
 }: SchemaGraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -54,7 +58,7 @@ export function SchemaGraphView({
   const theme = useTheme();
 
   const adjacency = useMemo(() => buildAdjacency(graph.edges), [graph.edges]);
-  const heat = useMemo(() => computeHeat(graph), [graph]);
+  const heat = useMemo(() => computeHeat(graph, heatMetric), [graph, heatMetric]);
   const query = search.trim().toLowerCase();
 
   const fitInView = useCallback(() => {
@@ -67,7 +71,13 @@ export function SchemaGraphView({
     const naturalHeight = naturalSize.current.h || svg.getBoundingClientRect().height;
     if (!naturalWidth || !naturalHeight) return;
 
-    const scale = Math.min(container.clientWidth / naturalWidth, container.clientHeight / naturalHeight) * FIT_PADDING;
+    // Small graphs must not blow up to fill the viewport — clamp the fit so
+    // a single table stays at a readable size instead of zooming to 8x.
+    const scale = Math.min(
+      container.clientWidth / naturalWidth,
+      container.clientHeight / naturalHeight,
+      MAX_FIT_SCALE,
+    ) * FIT_PADDING;
     const panX = (container.clientWidth - naturalWidth * scale) / (2 * scale);
     const panY = (container.clientHeight - naturalHeight * scale) / (2 * scale);
     pz.zoom(scale, { animate: false });
@@ -124,9 +134,12 @@ export function SchemaGraphView({
         });
 
         // Keep the design colors baked into the HTML-like labels; only drop
-        // the white canvas polygon graphviz adds behind everything.
+        // the white canvas polygon graphviz adds behind everything, and the
+        // font-family attributes (graphviz resolves --font-sans to a serif
+        // fallback in-render — CSS below reapplies the UI font).
         const outerBg = svg.querySelector("g > polygon[fill='white']");
         if (outerBg) outerBg.remove();
+        svg.querySelectorAll("text").forEach((t) => t.removeAttribute("font-family"));
 
         if (wrapperRef.current) {
           wrapperRef.current.replaceChildren(svg);
@@ -234,6 +247,9 @@ export function SchemaGraphView({
     <div className="relative h-full">
       <style>{`
         .schema-graph {
+          font-family: var(--font-sans);
+        }
+        .schema-graph text {
           font-family: var(--font-sans);
         }
         .schema-graph g.node {

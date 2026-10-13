@@ -23,6 +23,13 @@ const (
 	KindOther       SchemaKind = "other"
 )
 
+// SchemaGraphColumn is one column summary rendered inside a graph node.
+type SchemaGraphColumn struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	InKey bool   `json:"in_key,omitempty"`
+}
+
 // SchemaGraphNode is one table/view/dictionary on the graph.
 type SchemaGraphNode struct {
 	Database     string     `json:"database"`
@@ -34,6 +41,11 @@ type SchemaGraphNode struct {
 	SortingKey   string     `json:"sorting_key,omitempty"`
 	PartitionKey string     `json:"partition_key,omitempty"`
 	Comment      string     `json:"comment,omitempty"`
+
+	// Column summary (position order), shown inside the node card. Capped at
+	// maxSchemaGraphNodeColumns per node; ColumnsTruncated says when.
+	Columns          []SchemaGraphColumn `json:"columns,omitempty"`
+	ColumnsTruncated bool                `json:"columns_truncated,omitempty"`
 
 	// Read during edge building, not exposed over the API.
 	engineFull  string
@@ -55,11 +67,17 @@ type SchemaGraphEdge struct {
 }
 
 // SchemaGraphLoad is the INSERT load of one materialized view, aggregated
-// from system.query_views_log — the heat-map overlay.
+// from system.query_views_log — the heat-map overlay. All metrics are
+// fetched at once; the UI picks which one to color by.
 type SchemaGraphLoad struct {
-	View            string `json:"view"`
-	Executions      uint64 `json:"executions"`
-	TotalDurationMs uint64 `json:"total_duration_ms"`
+	View              string `json:"view"`
+	Executions        uint64 `json:"executions"`
+	TotalDurationMs   uint64 `json:"total_duration_ms"`
+	TotalWrittenRows  uint64 `json:"total_written_rows"`
+	TotalWrittenBytes uint64 `json:"total_written_bytes"`
+	TotalReadRows     uint64 `json:"total_read_rows"`
+	TotalReadBytes    uint64 `json:"total_read_bytes"`
+	PeakMemoryUsage   uint64 `json:"peak_memory_usage"`
 }
 
 // SchemaGraphDbCount is one database's table count — the picker's options,
@@ -83,6 +101,14 @@ type SchemaGraph struct {
 // maxSchemaGraphNodes caps the rendered graph; beyond this the layout is
 // unreadable and the endpoint slow. The UI tells the user to filter.
 const maxSchemaGraphNodes = 400
+
+// maxSchemaGraphNodeColumns caps the column summary carried per node; the
+// renderer shows the first slice and a "N more" row.
+const maxSchemaGraphNodeColumns = 16
+
+// maxSchemaGraphColumnRows caps the total system.columns rows scanned for
+// one graph response (payload guard for the All-databases view).
+const maxSchemaGraphColumnRows = 12000
 
 // classifySchemaEngine maps an engine name (plus engine_full for the
 // refreshable-MV distinction) to a SchemaKind.
@@ -154,6 +180,8 @@ func (c *Client) GetSchemaGraph(ctx context.Context, loadDays int, dbFilter stri
 		graph.Nodes = append(graph.Nodes, t.node)
 		byKey[t.node.Key()] = t.node
 	}
+
+	c.attachSchemaColumns(ctx, graph, dbFilter)
 
 	graph.Edges = buildSchemaEdges(tables, byKey)
 	c.attachDictionaryEdges(ctx, graph, byKey)
@@ -421,12 +449,64 @@ func unquoteIdent(s string) string {
 	return s
 }
 
+// attachSchemaColumns fills each node's column summary (position order,
+// capped per node and overall). Best-effort: a failure leaves nodes without
+// columns rather than failing the graph.
+func (c *Client) attachSchemaColumns(ctx context.Context, graph *SchemaGraph, dbFilter string) {
+	q := `
+		SELECT database, table, name, type, (is_in_primary_key OR is_in_sorting_key) AS in_key
+		FROM system.columns
+		WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')`
+	args := []any{}
+	if dbFilter != "" {
+		q += " AND database = ?"
+		args = append(args, dbFilter)
+	}
+	q += fmt.Sprintf(" ORDER BY database, table, position LIMIT %d", maxSchemaGraphColumnRows)
+
+	rows, err := c.conn.Query(ctx, q, args...)
+	if err != nil {
+		graph.PartialErrors = append(graph.PartialErrors, "column summaries unavailable: "+err.Error())
+		return
+	}
+	defer rows.Close()
+
+	byKey := make(map[string]*SchemaGraphNode, len(graph.Nodes))
+	for i := range graph.Nodes {
+		byKey[graph.Nodes[i].Key()] = &graph.Nodes[i]
+	}
+	for rows.Next() {
+		var db, table, name, typ string
+		var inKey bool
+		if rows.Scan(&db, &table, &name, &typ, &inKey) != nil {
+			continue
+		}
+		node, ok := byKey[db+"."+table]
+		if !ok {
+			continue
+		}
+		if len(node.Columns) >= maxSchemaGraphNodeColumns {
+			node.ColumnsTruncated = true
+			continue
+		}
+		node.Columns = append(node.Columns, SchemaGraphColumn{Name: name, Type: typ, InKey: inKey})
+	}
+}
+
 // schemaViewLoad aggregates system.query_views_log per view for the
 // heat-map. Missing table / access denied → nil (the overlay just doesn't
 // render).
 func (c *Client) schemaViewLoad(ctx context.Context, days int) []SchemaGraphLoad {
 	q := fmt.Sprintf(`
-		SELECT view_name, count() AS executions, coalesce(sum(view_duration_ms), 0) AS duration
+		SELECT
+			view_name,
+			count()                AS executions,
+			sum(view_duration_ms)  AS duration_ms,
+			sum(written_rows)      AS written_rows,
+			sum(written_bytes)     AS written_bytes,
+			sum(read_rows)         AS read_rows,
+			sum(read_bytes)        AS read_bytes,
+			max(peak_memory_usage) AS peak_memory
 		FROM %s
 		WHERE event_time >= now() - INTERVAL ? DAY
 		  AND status IN ('QueryFinish', 'ExceptionWhileProcessing')
@@ -439,8 +519,15 @@ func (c *Client) schemaViewLoad(ctx context.Context, days int) []SchemaGraphLoad
 	var out []SchemaGraphLoad
 	for rows.Next() {
 		var l SchemaGraphLoad
-		if err := rows.Scan(&l.View, &l.Executions, &l.TotalDurationMs); err != nil {
+		// peak_memory_usage is Int64 in system.query_views_log; scan through
+		// int64 so a type mismatch doesn't kill the whole overlay.
+		var peak int64
+		if err := rows.Scan(&l.View, &l.Executions, &l.TotalDurationMs,
+			&l.TotalWrittenRows, &l.TotalWrittenBytes, &l.TotalReadRows, &l.TotalReadBytes, &peak); err != nil {
 			return out
+		}
+		if peak > 0 {
+			l.PeakMemoryUsage = uint64(peak)
 		}
 		if l.View != "" {
 			out = append(out, l)

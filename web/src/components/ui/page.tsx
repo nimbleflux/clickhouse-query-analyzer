@@ -8,13 +8,15 @@ interface PageHeaderProps extends HTMLAttributes<HTMLDivElement> {
   actions?: ReactNode;
   /** Optional breadcrumb rendered above the title. */
   breadcrumb?: ReactNode;
-  /** Heading level — defaults to h1. Use h2 for sub-pages. */
-  heading?: "h1" | "h2";
 }
 
+/**
+ * Uniform page header: every page renders the same h1 (semantically the page's
+ * main heading) at the same size — pages differ in content below, not in
+ * chrome.
+ */
 export const PageHeader = forwardRef<HTMLDivElement, PageHeaderProps>(
-  ({ title, description, actions, breadcrumb, heading = "h1", className, ...props }, ref) => {
-    const Heading = heading;
+  ({ title, description, actions, breadcrumb, className, ...props }, ref) => {
     return (
       <div
         ref={ref}
@@ -28,14 +30,9 @@ export const PageHeader = forwardRef<HTMLDivElement, PageHeaderProps>(
           {breadcrumb && (
             <div className="text-xs text-[var(--color-text-secondary)]">{breadcrumb}</div>
           )}
-          <Heading
-            className={cn(
-              "font-bold tracking-tight text-[var(--color-text-primary)]",
-              heading === "h1" ? "text-2xl" : "text-lg font-semibold"
-            )}
-          >
+          <h1 className="text-lg font-semibold tracking-tight text-[var(--color-text-primary)]">
             {title}
-          </Heading>
+          </h1>
           {description && (
             <p className="text-sm text-[var(--color-text-secondary)]">{description}</p>
           )}

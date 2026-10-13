@@ -157,7 +157,6 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
   return (
     <PageContainer>
       <PageHeader
-        heading="h2"
         title="Query Fingerprints"
         description={displayTotal > 0 ? `${formatNumber(displayTotal)} unique queries` : undefined}
         actions={loading && data ? <RefreshIndicator elapsed={elapsed} /> : undefined}

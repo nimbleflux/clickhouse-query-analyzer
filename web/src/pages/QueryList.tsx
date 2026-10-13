@@ -178,7 +178,6 @@ export function QueryList({ connected }: { connected: boolean }) {
   return (
     <PageContainer>
       <PageHeader
-        heading="h1"
         title="Queries"
         description={
           total > 0 ? `${formatNumber(total)} queries found` : undefined

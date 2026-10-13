@@ -144,7 +144,6 @@ export function Replication({ connected }: { connected: boolean }) {
   return (
     <PageContainer>
       <PageHeader
-        heading="h2"
         title="Replication"
         description="Replica status, queue depth, and pending mutations"
         actions={
