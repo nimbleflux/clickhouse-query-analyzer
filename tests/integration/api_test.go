@@ -431,6 +431,45 @@ func TestIntegration_SchemaGraphDbFilter(t *testing.T) {
 	}
 }
 
+// Native-protocol edge cases for the editor path: the driver can't scan into
+// *any, so typed targets + value normalization are load-bearing.
+func TestIntegration_ExecuteNativeEdgeCases(t *testing.T) {
+	_, router := setupIntegrationAPI(t)
+
+	body := `{"query": "SELECT [1,2,3] AS arr, map('a',1) AS m, toUUID('00000000-0000-0000-0000-000000000000') AS u, NULL AS n", "max_rows": 5}`
+	w := makeReq(t, router, "POST", "/api/execute", chJSONHeaders(), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var last map[string]interface{}
+	for _, line := range strings.Split(strings.TrimSpace(w.Body.String()), "\n") {
+		var evt map[string]interface{}
+		json.Unmarshal([]byte(line), &evt)
+		if evt["type"] == "result" {
+			last = evt["result"].(map[string]interface{})
+		} else if evt["type"] == "error" {
+			t.Fatalf("native execution failed: %v", evt["error"])
+		}
+	}
+	if last == nil {
+		t.Fatal("no result event")
+	}
+	row := last["rows"].([]interface{})[0].(map[string]interface{})
+	// Array(UInt8) must render as numbers, not base64 ([]byte).
+	if arr, ok := row["arr"].([]interface{}); !ok || len(arr) != 3 || arr[0].(float64) != 1 {
+		t.Errorf("array column: got %v (%T)", row["arr"], row["arr"])
+	}
+	if m, ok := row["m"].(map[string]interface{}); !ok || m["a"].(float64) != 1 {
+		t.Errorf("map column: got %v", row["m"])
+	}
+	if u, ok := row["u"].(string); !ok || len(u) != 36 {
+		t.Errorf("uuid column: got %v", row["u"])
+	}
+	if row["n"] != nil {
+		t.Errorf("nullable NULL: got %v", row["n"])
+	}
+}
+
 // Auto mode: no database param and no all=1 → the server picks the first
 // database and scopes the whole graph to it in a single response, so the UI
 // never loads every database at once.
