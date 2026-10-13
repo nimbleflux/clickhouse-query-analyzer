@@ -371,7 +371,7 @@ func (c *Client) executeQueryNative(ctx context.Context, opts *ExecuteOptions) (
 			continue
 		}
 		if nullables[i] {
-			scanVals[i] = reflect.New(reflect.PtrTo(st)).Interface()
+			scanVals[i] = reflect.New(reflect.PointerTo(st)).Interface()
 		} else {
 			scanVals[i] = reflect.New(st).Interface()
 		}
@@ -389,7 +389,7 @@ func (c *Client) executeQueryNative(ctx context.Context, opts *ExecuteOptions) (
 			if nullables[i] {
 				if pv, ok := v.(*uint64); ok && pv == nil {
 					v = nil
-				} else if pr := reflect.ValueOf(v); pr.Kind() == reflect.Ptr {
+				} else if pr := reflect.ValueOf(v); pr.Kind() == reflect.Pointer {
 					if pr.IsNil() {
 						v = nil
 					} else {
