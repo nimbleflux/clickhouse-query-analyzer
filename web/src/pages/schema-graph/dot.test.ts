@@ -24,7 +24,12 @@ const theme: GraphTheme = {
 
 const fixture: SchemaGraphData = {
   nodes: [
-    { database: "analytics", name: "events", engine: "MergeTree", kind: "mergetree", total_rows: 10000, total_bytes: 450322 },
+    { database: "analytics", name: "events", engine: "MergeTree", kind: "mergetree", total_rows: 10000, total_bytes: 450322,
+      columns: [
+        { name: "event_id", type: "UUID", in_key: true },
+        { name: "event_time", type: "DateTime", in_key: true },
+        { name: "country", type: "LowCardinality(String)" },
+      ] },
     { database: "analytics", name: "events_daily_mv", engine: "MaterializedView", kind: "mv", total_rows: 30, total_bytes: 1024 },
     { database: "analytics", name: "events_daily", engine: "SummingMergeTree", kind: "mergetree", total_rows: 30, total_bytes: 2048 },
   ],
@@ -126,6 +131,37 @@ describe("buildDot", () => {
     const dot = buildDot(wide, { theme, visibleKinds: new Set(["mergetree", "mv"]), dbFilter: "shop", heat: new Map() });
     expect(dot).toContain("shop");
     expect(dot).not.toContain("events_daily_mv");
+  });
+
+  it("renders column summaries inside node labels", () => {
+    const dot = buildDot(fixture, {
+      theme,
+      visibleKinds: new Set(["mergetree", "mv", "rmv", "dictionary", "distributed", "view", "remote", "other"]),
+      dbFilter: null,
+      heat: new Map(),
+    });
+    expect(dot).toContain("event_id");
+    expect(dot).toContain("DateTime");
+    expect(dot).toContain("LowCardinality(String)");
+    // Key columns are visually distinguished (colored + bold).
+    expect(dot).toContain("<B>");
+  });
+
+  it("marks truncated column lists with a more-row", () => {
+    const many: SchemaGraphData = {
+      nodes: [{
+        database: "db", name: "wide", engine: "MergeTree", kind: "mergetree", total_rows: 1, total_bytes: 1,
+        columns_truncated: true,
+        columns: Array.from({ length: 15 }, (_, i) => ({ name: `c${i}`, type: "String" })),
+      }],
+      edges: [],
+      databases: [{ database: "db", tables: 1 }],
+      truncated: false,
+    };
+    const dot = buildDot(many, { theme, visibleKinds: new Set(["mergetree"]), dbFilter: null, heat: new Map() });
+    expect(dot).toContain("c11"); // first 12 shown
+    expect(dot).not.toContain("c12"); // beyond the cap
+    expect(dot).toContain("more"); // … N more row
   });
 
   it("escapes quotes coming from table names", () => {

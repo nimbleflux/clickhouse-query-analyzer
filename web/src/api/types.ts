@@ -289,6 +289,9 @@ export interface SchemaGraphNode {
   sorting_key?: string;
   partition_key?: string;
   comment?: string;
+  /** Column summary (position order, capped) rendered inside the node card. */
+  columns?: { name: string; type: string; in_key?: boolean }[];
+  columns_truncated?: boolean;
 }
 
 export interface SchemaGraphEdge {

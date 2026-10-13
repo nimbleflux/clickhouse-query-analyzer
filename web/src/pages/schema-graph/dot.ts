@@ -154,6 +154,9 @@ export function computeHeat(
   return out;
 }
 
+/** Max column rows rendered inside a node card (ClickHouse's uses 14). */
+export const MAX_NODE_LABEL_COLUMNS = 12;
+
 function nodeLabel(node: SchemaGraphNode, opts: DotOptions): string {
   const { theme } = opts;
   const hue = KIND_HUES[node.kind] ?? KIND_HUES.other;
@@ -164,20 +167,49 @@ function nodeLabel(node: SchemaGraphNode, opts: DotOptions): string {
   const name = escapeHtmlLabel(node.name);
   const kindLabel = escapeHtmlLabel(KIND_LABELS[node.kind] ?? node.kind);
   const stats = [
-    node.total_rows > 0 ? `${fmtCompact(node.total_rows)} rows` : "",
+    node.total_rows > 0 ? `${fmtCompact(node.total_rows)} row${node.total_rows === 1 ? "" : "s"}` : "",
     node.total_bytes > 0 ? fmtBytesCompact(node.total_bytes) : "",
   ].filter(Boolean).join(" · ");
 
+  const keyColor = mixHex(theme.light ? "#000000" : "#ffffff", "#ef4444", 0.75);
+  const cols = (node.columns ?? []).slice(0, MAX_NODE_LABEL_COLUMNS);
+  const hidden = (node.columns?.length ?? 0) - cols.length + (node.columns_truncated ? 1 : 0);
+
+  const columnRows = cols
+    .map((c) => {
+      const nameColor = c.in_key ? keyColor : theme.textPrimary;
+      const nameWeight = c.in_key ? "<B>" : "";
+      const nameEnd = c.in_key ? "</B>" : "";
+      return `<TR>
+    <TD BGCOLOR="${rowBg}" WIDTH="3"></TD>
+    <TD BGCOLOR="${rowBg}" ALIGN="LEFT"><FONT COLOR="${nameColor}" POINT-SIZE="9">${nameWeight} ${escapeHtmlLabel(c.name)} ${nameEnd}</FONT></TD>
+    <TD BGCOLOR="${rowBg}" ALIGN="RIGHT"><FONT COLOR="${theme.textSecondary}" POINT-SIZE="8"><I> ${escapeHtmlLabel(c.type)} </I></FONT></TD>
+  </TR>`;
+    })
+    .join("\n");
+  const moreRow =
+    hidden > 0
+      ? `<TR>
+    <TD BGCOLOR="${rowBg}" WIDTH="3"></TD>
+    <TD BGCOLOR="${rowBg}" COLSPAN="2" ALIGN="LEFT"><FONT POINT-SIZE="8" COLOR="${theme.textSecondary}"><I> … ${hidden} more </I></FONT></TD>
+  </TR>`
+      : "";
+  const columnsBlock =
+    cols.length > 0
+      ? `<HR/>${columnRows}${moreRow ? moreRow : ""}`
+      : "";
+
   const statsRow = stats
-    ? `<TR><TD COLSPAN="3" ALIGN="LEFT" BGCOLOR="${rowBg}"><FONT POINT-SIZE="9" COLOR="${theme.textSecondary}"> ${escapeHtmlLabel(stats)} </FONT></TD></TR>`
+    ? `<TR><TD BGCOLOR="${rowBg}" WIDTH="3"></TD><TD COLSPAN="2" ALIGN="LEFT" BGCOLOR="${rowBg}"><FONT POINT-SIZE="9" COLOR="${theme.textSecondary}"> ${escapeHtmlLabel(stats)} </FONT></TD></TR>`
     : "";
 
   return `<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4">
   <TR>
-    <TD BGCOLOR="${hue}" WIDTH="3"></TD>
+    <TD BGCOLOR="${hue}" WIDTH="3" VALIGN="MIDDLE"></TD>
     <TD BGCOLOR="${headerBg}" ALIGN="LEFT"><FONT COLOR="${theme.textPrimary}" POINT-SIZE="11"><B> ${name} </B></FONT></TD>
     <TD BGCOLOR="${headerBg}" ALIGN="RIGHT"><FONT COLOR="${theme.textSecondary}" POINT-SIZE="9"><I> ${kindLabel} </I></FONT></TD>
   </TR>
+  ${columnsBlock}
   ${statsRow}
 </TABLE>>`;
 }
