@@ -12,10 +12,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	ch "github.com/ClickHouse/clickhouse-go/v2"
 )
 
 type ColumnInfo struct {
@@ -286,6 +289,11 @@ func FilterSettings(in map[string]string) map[string]string {
 	return out
 }
 
+// ExecuteQuery runs one ad-hoc editor statement over the protocol the
+// connection actually uses: clickhouse(s):// connections speak the native
+// protocol (production environments often expose only port 9000 — the old
+// behavior of dialing the HTTP interface on 8123 broke there), and
+// http(s):// connections use ClickHouse's HTTP interface.
 func (c *Client) ExecuteQuery(ctx context.Context, opts ExecuteOptions) (*QueryResult, error) {
 	if opts.Limit <= 0 {
 		opts.Limit = 100
@@ -296,6 +304,173 @@ func (c *Client) ExecuteQuery(ctx context.Context, opts ExecuteOptions) (*QueryR
 	if opts.QueryID == "" {
 		opts.QueryID = NewQueryID()
 	}
+	if c.isHTTP {
+		return c.executeQueryHTTP(ctx, &opts)
+	}
+	return c.executeQueryNative(ctx, &opts)
+}
+
+// executeQueryNative runs the statement over the native protocol connection.
+// Progress polling and KILL QUERY target opts.QueryID, which is bound to the
+// query via the driver's WithQueryID so system.processes sees it.
+func (c *Client) executeQueryNative(ctx context.Context, opts *ExecuteOptions) (*QueryResult, error) {
+	start := time.Now()
+
+	query := opts.Query
+	if len(opts.Params) > 0 {
+		rewritten, _ := rewritePlaceholders(query, opts.Params)
+		query = rewritten
+	}
+	executedQuery, wrapped, hasFormat := prepareExecutedQuery(query, opts.Limit, opts.Offset)
+
+	queryOpts := []ch.QueryOption{ch.WithQueryID(opts.QueryID)}
+
+	settings := ch.Settings{}
+	for k, v := range FilterSettings(opts.Settings) {
+		settings[k] = v
+	}
+	// Defense-in-depth row cap on wrapped SELECTs (mirrors the HTTP path).
+	if wrapped {
+		settings["max_result_rows"] = opts.Limit
+		settings["result_overflow_mode"] = "break"
+	}
+	if len(settings) > 0 {
+		queryOpts = append(queryOpts, ch.WithSettings(settings))
+	}
+	if len(opts.Params) > 0 {
+		params := ch.Parameters{}
+		for name, v := range opts.Params {
+			params[name] = v
+		}
+		queryOpts = append(queryOpts, ch.WithParameters(params))
+	}
+
+	queryCtx := ch.Context(ctx, queryOpts...)
+
+	rows, err := c.conn.Query(queryCtx, executedQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	colTypes := rows.ColumnTypes()
+	columns := make([]ColumnInfo, 0, len(colTypes))
+	for _, ct := range colTypes {
+		columns = append(columns, ColumnInfo{Name: ct.Name(), Type: ct.DatabaseTypeName()})
+	}
+
+	// The driver can't Scan into *any — allocate correctly typed targets
+	// from ScanType (pointer targets for nullable columns).
+	scanVals := make([]any, len(colTypes))
+	nullables := make([]bool, len(colTypes))
+	for i, ct := range colTypes {
+		nullables[i] = ct.Nullable()
+		st := ct.ScanType()
+		if st == nil {
+			scanVals[i] = new(any)
+			continue
+		}
+		if nullables[i] {
+			scanVals[i] = reflect.New(reflect.PtrTo(st)).Interface()
+		} else {
+			scanVals[i] = reflect.New(st).Interface()
+		}
+	}
+
+	result := make([]map[string]any, 0, min(opts.Limit, 64))
+	count := 0
+	for rows.Next() && count < opts.Limit {
+		if err := rows.Scan(scanVals...); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		row := make(map[string]any, len(colTypes))
+		for i, ct := range colTypes {
+			v := reflect.Indirect(reflect.ValueOf(scanVals[i])).Interface()
+			if nullables[i] {
+				if pv, ok := v.(*uint64); ok && pv == nil {
+					v = nil
+				} else if pr := reflect.ValueOf(v); pr.Kind() == reflect.Ptr {
+					if pr.IsNil() {
+						v = nil
+					} else {
+						v = pr.Elem().Interface()
+					}
+				}
+			}
+			row[ct.Name()] = normalizeNativeValue(v)
+		}
+		result = append(result, row)
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating rows: %w", err)
+	}
+
+	// On the native protocol there are no text formats — a FORMAT clause is
+	// honored as regular query text by the server and the typed result set
+	// comes back as usual, so we render it as a table.
+	_ = hasFormat
+
+	return &QueryResult{
+		Columns:   columns,
+		Rows:      result,
+		RowCount:  len(result),
+		TotalRows: -1,
+		TimingMs:  time.Since(start).Milliseconds(),
+		QueryID:   opts.QueryID,
+	}, nil
+}
+
+// normalizeNativeValue makes driver-scanned values JSON-safe: the driver
+// returns typed Go values (time.Time, decimal.Decimal, uuid.UUID, …) and a
+// few of them don't marshal to the shapes the editor expects.
+func normalizeNativeValue(v any) any {
+	switch val := v.(type) {
+	case nil:
+		return nil
+	case string, bool,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64,
+		[]any, map[string]any:
+		return val
+	case time.Time:
+		return val.Format("2006-01-02 15:04:05")
+	case fmt.Stringer:
+		return val.String()
+	}
+	// Composites (Array/Tuple/Map columns) render as JSON, matching what the
+	// HTTP interface produced.
+	if b, ok := v.([]byte); ok {
+		// Array(UInt8) scans as []byte — Go would base64-encode it; emit the
+		// numbers instead, matching the HTTP path.
+		nums := make([]int, len(b))
+		for i, c := range b {
+			nums[i] = int(c)
+		}
+		v = nums
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Slice, reflect.Array, reflect.Map, reflect.Struct:
+		if b, err := json.Marshal(v); err == nil {
+			return json.RawMessage(b)
+		}
+	}
+	// Fallback: stringify exotic types (Decimal, UUID, enums, …).
+	return fmt.Sprintf("%v", v)
+}
+
+// executeQueryHTTP runs the statement over ClickHouse's HTTP interface —
+// used when the connection URL is http(s)://. The native path above is the
+// default for clickhouse(s):// connections.
+func (c *Client) executeQueryHTTP(ctx context.Context, opts *ExecuteOptions) (*QueryResult, error) {
+	httpURL, err := c.httpURL()
+	if err != nil {
+		return nil, err
+	}
+
+	start := time.Now()
 
 	query := opts.Query
 	if len(opts.Params) > 0 {
@@ -303,13 +478,6 @@ func (c *Client) ExecuteQuery(ctx context.Context, opts ExecuteOptions) (*QueryR
 		query = rewritten
 	}
 	executedQuery, _, hasFormat := prepareExecutedQuery(query, opts.Limit, opts.Offset)
-
-	httpURL, err := c.httpURL()
-	if err != nil {
-		return nil, err
-	}
-
-	start := time.Now()
 
 	u, _ := url.Parse(httpURL)
 	q := u.Query()
@@ -483,8 +651,15 @@ func (c *Client) CountQueryRows(ctx context.Context, query string) (int64, error
 	}
 	first := result.Rows[0]
 	for _, v := range first {
+		// HTTP results carry numbers as float64; native results as uint64.
 		switch n := v.(type) {
 		case float64:
+			return int64(n), nil
+		case uint64:
+			return int64(n), nil
+		case int64:
+			return n, nil
+		case int:
 			return int64(n), nil
 		case string:
 			if parsed, perr := strconv.ParseInt(n, 10, 64); perr == nil {
