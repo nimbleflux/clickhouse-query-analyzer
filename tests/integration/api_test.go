@@ -309,3 +309,123 @@ func TestIntegration_VersionAndHealth(t *testing.T) {
 		t.Errorf("version: expected 200, got %d", w.Code)
 	}
 }
+
+func TestIntegration_SchemaGraph(t *testing.T) {
+	_, router := setupIntegrationAPI(t)
+
+	// Idempotent demo chain: source → MV → target, plus a plain view.
+	ddl := []string{
+		`CREATE DATABASE IF NOT EXISTS graph_demo`,
+		`CREATE TABLE IF NOT EXISTS graph_demo.source_events (id UInt64, day Date) ENGINE = MergeTree ORDER BY id`,
+		`CREATE TABLE IF NOT EXISTS graph_demo.source_events_target (day Date, n UInt64) ENGINE = SummingMergeTree ORDER BY day`,
+		`CREATE MATERIALIZED VIEW IF NOT EXISTS graph_demo.source_events_mv TO graph_demo.source_events_target AS SELECT day, count() AS n FROM graph_demo.source_events GROUP BY day`,
+		`DROP VIEW IF EXISTS graph_demo.source_events_view`,
+		`CREATE VIEW IF NOT EXISTS graph_demo.source_events_view AS SELECT * FROM graph_demo.source_events`,
+	}
+	for _, stmt := range ddl {
+		w := makeReq(t, router, "POST", "/api/execute", chJSONHeaders(), `{"query": `+quoteJSON(stmt)+`, "max_rows": 1}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("setup stmt failed: %s -> %d %s", stmt, w.Code, w.Body.String())
+		}
+	}
+
+	w := makeReq(t, router, "GET", "/api/schema/graph", chHeaders(), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var graph struct {
+		Nodes []struct {
+			Database string `json:"database"`
+			Name     string `json:"name"`
+			Kind     string `json:"kind"`
+		} `json:"nodes"`
+		Edges []struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+			Kind string `json:"kind"`
+		} `json:"edges"`
+		Truncated bool `json:"truncated"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&graph); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	kinds := map[string]string{}
+	for _, n := range graph.Nodes {
+		if n.Database == "graph_demo" {
+			kinds[n.Name] = n.Kind
+		}
+	}
+	for name, wantKind := range map[string]string{
+		"source_events":        "mergetree",
+		"source_events_target": "mergetree",
+		"source_events_mv":     "mv",
+		"source_events_view":   "view",
+	} {
+		if kinds[name] != wantKind {
+			t.Errorf("graph_demo.%s kind = %q, want %q", name, kinds[name], wantKind)
+		}
+	}
+
+	edgeSet := map[string]bool{}
+	for _, e := range graph.Edges {
+		edgeSet[e.From+"->"+e.To+"("+e.Kind+")"] = true
+	}
+	for _, want := range []string{
+		"graph_demo.source_events->graph_demo.source_events_mv(mv)",
+		"graph_demo.source_events_mv->graph_demo.source_events_target(mv)",
+		"graph_demo.source_events->graph_demo.source_events_view(view)",
+	} {
+		if !edgeSet[want] {
+			t.Errorf("missing edge %s; got %v", want, edgeSet)
+		}
+	}
+}
+
+func quoteJSON(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// The UI defaults to a single database (unfiltered graphs don't scale); the
+// filter must apply server-side while the databases summary stays complete.
+func TestIntegration_SchemaGraphDbFilter(t *testing.T) {
+	_, router := setupIntegrationAPI(t)
+
+	w := makeReq(t, router, "GET", "/api/schema/graph?database=graph_demo", chHeaders(), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var graph struct {
+		Nodes []struct {
+			Database string `json:"database"`
+			Name     string `json:"name"`
+		} `json:"nodes"`
+		Databases []struct {
+			Database string `json:"database"`
+			Tables   int    `json:"tables"`
+		} `json:"databases"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&graph); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(graph.Nodes) == 0 {
+		t.Fatal("expected filtered nodes")
+	}
+	for _, n := range graph.Nodes {
+		if n.Database != "graph_demo" {
+			t.Errorf("filter leaked: got table in %s", n.Database)
+		}
+	}
+	// The picker summary must still cover the whole instance.
+	dbs := map[string]int{}
+	for _, d := range graph.Databases {
+		dbs[d.Database] = d.Tables
+	}
+	if _, ok := dbs["graph_demo"]; !ok {
+		t.Errorf("databases summary missing graph_demo: %v", dbs)
+	}
+	if _, ok := dbs["analytics"]; !ok {
+		t.Errorf("databases summary must be unfiltered; missing analytics: %v", dbs)
+	}
+}

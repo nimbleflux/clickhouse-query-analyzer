@@ -1,4 +1,5 @@
 import type {
+  SchemaGraphData,
   QueryListParams,
   QueryListResponse,
   QueryLogEntry,
@@ -309,6 +310,18 @@ export async function cancelJob(jobId: string, signal?: AbortSignal): Promise<{ 
     headers: { "Content-Type": "application/json" },
     signal,
   });
+}
+
+export async function fetchSchemaGraph(
+  loadDays: number,
+  database: string | null,
+  signal?: AbortSignal,
+): Promise<SchemaGraphData> {
+  const sp = new URLSearchParams();
+  if (loadDays > 0) sp.set("load_days", String(loadDays));
+  if (database) sp.set("database", database);
+  const qs = sp.toString();
+  return fetchJSON(`${BASE}/schema/graph${qs ? `?${qs}` : ""}`, { signal });
 }
 
 export async function fetchDatabases(signal?: AbortSignal): Promise<{ databases: string[] }> {

@@ -106,6 +106,7 @@ func apiRoutes(api *API, cfg *config.Config) http.Handler {
 	fast.Post("/connect", api.ConnectWithInfo)
 	fast.Get("/config", api.GetConfig)
 	fast.Get("/schema", api.GetSchema)
+	fast.Get("/schema/graph", api.SchemaGraph)
 	fast.Get("/schema/{db}/tables", api.GetTables)
 	fast.Get("/schema/{db}/{table}/columns", api.GetColumns)
 	fast.Get("/schema/{db}/{table}/ddl", api.GetTableDDL)

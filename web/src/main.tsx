@@ -9,6 +9,7 @@ import { QueryDetail } from "./pages/QueryDetail";
 import { QueryCompare } from "./pages/QueryCompare";
 import { QueryEditor } from "./pages/QueryEditor";
 import { TableOptimizer } from "./pages/TableOptimizer";
+import { SchemaGraph } from "./pages/SchemaGraph";
 import { RunningQueries } from "./pages/RunningQueries";
 import { QueryFingerprints } from "./pages/QueryFingerprints";
 import { FingerprintDetail } from "./pages/FingerprintDetail";
@@ -118,6 +119,7 @@ function App() {
             <Route path="/query/:queryId" element={<QueryDetail connected={connected} />} />
             <Route path="/compare" element={<QueryCompare connected={connected} />} />
             <Route path="/optimizer" element={<TableOptimizer connected={connected} />} />
+        <Route path="/schema/graph" element={<SchemaGraph connected={connected} />} />
             <Route path="/optimizer/:db/:table" element={<TableOptimizer connected={connected} />} />
             <Route path="/running" element={<RunningQueries connected={connected} />} />
             <Route path="/fingerprints" element={<QueryFingerprints connected={connected} />} />

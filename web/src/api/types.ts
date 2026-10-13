@@ -268,6 +268,57 @@ export interface DetachedJob {
   finished_at?: string;
 }
 
+/** Engine-kind classification for the schema graph (mirrors the backend). */
+export type SchemaKind =
+  | "mergetree"
+  | "mv"
+  | "rmv"
+  | "dictionary"
+  | "distributed"
+  | "view"
+  | "remote"
+  | "other";
+
+export interface SchemaGraphNode {
+  database: string;
+  name: string;
+  engine: string;
+  kind: SchemaKind;
+  total_rows: number;
+  total_bytes: number;
+  sorting_key?: string;
+  partition_key?: string;
+  comment?: string;
+}
+
+export interface SchemaGraphEdge {
+  from: string;
+  to: string;
+  kind: "mv" | "dict" | "distributed" | "view";
+}
+
+export interface SchemaGraphLoad {
+  view: string;
+  executions: number;
+  total_duration_ms: number;
+}
+
+export interface SchemaGraphDbCount {
+  database: string;
+  tables: number;
+}
+
+export interface SchemaGraphData {
+  nodes: SchemaGraphNode[];
+  edges: SchemaGraphEdge[];
+  /** Every user database with table counts — unfiltered picker options. */
+  databases: SchemaGraphDbCount[];
+  load?: SchemaGraphLoad[];
+  partial_errors?: string[];
+  note?: string;
+  truncated: boolean;
+}
+
 export interface OptColumn {
   name: string;
   type: string;

@@ -21,6 +21,8 @@ import (
 type ColumnInfo struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
+	// InKey: the column is in the primary/sorting key (schema graph highlighting).
+	InKey bool `json:"in_key,omitempty"`
 }
 
 // extractHTTPCode pulls the leading "Code: N" out of a ClickHouse HTTP
@@ -656,19 +658,38 @@ func (c *Client) GetTables(ctx context.Context, database string) ([]TableInfo, e
 }
 
 func (c *Client) GetColumns(ctx context.Context, database, table string) ([]ColumnInfo, error) {
-	cRows, err := c.conn.Query(ctx, "SELECT name, type FROM system.columns WHERE database = ? AND table = ? ORDER BY position", database, table)
+	// in_key: in the primary/sorting key — the schema graph highlights these.
+	withKeys := true
+	cRows, err := c.conn.Query(ctx, `
+		SELECT name, type, (is_in_primary_key OR is_in_sorting_key) AS in_key
+		FROM system.columns
+		WHERE database = ? AND table = ?
+		ORDER BY position`, database, table)
 	if err != nil {
-		return nil, err
+		// in_key flags are additive niceties; older servers get the base shape.
+		withKeys = false
+		cRows, err = c.conn.Query(ctx, "SELECT name, type FROM system.columns WHERE database = ? AND table = ? ORDER BY position", database, table)
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer cRows.Close()
 
 	var columns []ColumnInfo
 	for cRows.Next() {
-		var name, typ string
-		if err := cRows.Scan(&name, &typ); err != nil {
-			return nil, err
+		var col ColumnInfo
+		if withKeys {
+			var inKey bool
+			if err := cRows.Scan(&col.Name, &col.Type, &inKey); err != nil {
+				return nil, err
+			}
+			col.InKey = inKey
+		} else {
+			if err := cRows.Scan(&col.Name, &col.Type); err != nil {
+				return nil, err
+			}
 		}
-		columns = append(columns, ColumnInfo{Name: name, Type: typ})
+		columns = append(columns, col)
 	}
 	return columns, nil
 }
