@@ -315,11 +315,13 @@ export async function cancelJob(jobId: string, signal?: AbortSignal): Promise<{ 
 export async function fetchSchemaGraph(
   loadDays: number,
   database: string | null,
+  all: boolean,
   signal?: AbortSignal,
 ): Promise<SchemaGraphData> {
   const sp = new URLSearchParams();
   if (loadDays > 0) sp.set("load_days", String(loadDays));
   if (database) sp.set("database", database);
+  if (all) sp.set("all", "1");
   const qs = sp.toString();
   return fetchJSON(`${BASE}/schema/graph${qs ? `?${qs}` : ""}`, { signal });
 }

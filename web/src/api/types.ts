@@ -327,6 +327,8 @@ export interface SchemaGraphDbCount {
 }
 
 export interface SchemaGraphData {
+  /** Resolved selection: explicit filter, or the auto-picked first database. */
+  database?: string;
   nodes: SchemaGraphNode[];
   edges: SchemaGraphEdge[];
   /** Every user database with table counts — unfiltered picker options. */
