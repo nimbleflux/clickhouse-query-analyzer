@@ -134,9 +134,12 @@ export function SchemaGraphView({
         });
 
         // Keep the design colors baked into the HTML-like labels; only drop
-        // the white canvas polygon graphviz adds behind everything.
+        // the white canvas polygon graphviz adds behind everything, and the
+        // font-family attributes (graphviz resolves --font-sans to a serif
+        // fallback in-render — CSS below reapplies the UI font).
         const outerBg = svg.querySelector("g > polygon[fill='white']");
         if (outerBg) outerBg.remove();
+        svg.querySelectorAll("text").forEach((t) => t.removeAttribute("font-family"));
 
         if (wrapperRef.current) {
           wrapperRef.current.replaceChildren(svg);
@@ -244,6 +247,9 @@ export function SchemaGraphView({
     <div className="relative h-full">
       <style>{`
         .schema-graph {
+          font-family: var(--font-sans);
+        }
+        .schema-graph text {
           font-family: var(--font-sans);
         }
         .schema-graph g.node {
