@@ -29,7 +29,7 @@ jobs:
         run: cd web && npm ci
 
       - name: Lint frontend
-        run: cd web && npx tsc --noEmit
+        run: cd web && npm run lint
 
       - name: Go fmt check
         run: test -z "$(gofmt -l .)"
@@ -41,6 +41,25 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: latest
+
+  frontend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.20.0"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend deps
+        run: cd web && npm ci
+
+      # The vitest suite existed for a while without ever running in CI —
+      # this job is what makes it count.
+      - name: Frontend unit tests
+        run: cd web && npm run test
 
   unit-test:
     runs-on: ubuntu-latest
@@ -140,7 +159,7 @@ jobs:
         run: cd dev && docker compose down -v
 
   build:
-    needs: [lint, unit-test, vulncheck]
+    needs: [lint, unit-test, frontend-test, vulncheck]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

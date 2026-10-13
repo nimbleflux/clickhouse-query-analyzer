@@ -17,6 +17,8 @@ func TestExecuteQuery_NoServer(t *testing.T) {
 	router := Router(cfg, api, nil)
 
 	req := httptest.NewRequest("POST", "/api/execute", nil)
+	// POST endpoints require application/json (anti-CSRF middleware).
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-CH-URL", "clickhouse://localhost:9000")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)

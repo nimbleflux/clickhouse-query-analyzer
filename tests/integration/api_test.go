@@ -34,6 +34,45 @@ func chHeaders() map[string]string {
 	}
 }
 
+func chJSONHeaders() map[string]string {
+	h := chHeaders()
+	h["Content-Type"] = "application/json"
+	return h
+}
+
+// executeAndParseStream runs /api/execute and returns the parsed NDJSON
+// events (started, progress*, result|error).
+func executeAndParseStream(t *testing.T, router http.Handler, body string) []map[string]interface{} {
+	t.Helper()
+	w := makeReq(t, router, "POST", "/api/execute", chJSONHeaders(), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var events []map[string]interface{}
+	for _, line := range strings.Split(strings.TrimSpace(w.Body.String()), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var evt map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &evt); err != nil {
+			t.Fatalf("bad NDJSON line %q: %v", line, err)
+		}
+		events = append(events, evt)
+	}
+	return events
+}
+
+func streamEventOfType(t *testing.T, events []map[string]interface{}, typ string) map[string]interface{} {
+	t.Helper()
+	for _, e := range events {
+		if e["type"] == typ {
+			return e
+		}
+	}
+	t.Fatalf("no %q event in stream (%d events)", typ, len(events))
+	return nil
+}
+
 func makeReq(t *testing.T, router http.Handler, method, path string, headers map[string]string, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var bodyReader io.Reader
@@ -94,16 +133,122 @@ func TestIntegration_ListQueries(t *testing.T) {
 func TestIntegration_ExecuteQuery(t *testing.T) {
 	_, router := setupIntegrationAPI(t)
 
-	body := `{"query": "SELECT 1 AS value", "max_rows": 10}`
-	w := makeReq(t, router, "POST", "/api/execute", chHeaders(), body)
+	events := executeAndParseStream(t, router, `{"query": "SELECT 1 AS value", "max_rows": 10}`)
+
+	started := streamEventOfType(t, events, "started")
+	if started["query_id"] == "" {
+		t.Error("started event must carry a query_id (targets progress polling and KILL)")
+	}
+	result := streamEventOfType(t, events, "result")["result"].(map[string]interface{})
+	if result["row_count"].(float64) != 1 {
+		t.Errorf("expected 1 row, got %v", result["row_count"])
+	}
+	// The hidden count() query is gone: totals are unknown until the user
+	// explicitly asks for a count.
+	if result["total_rows"].(float64) != -1 {
+		t.Errorf("expected total_rows -1 (no implicit count), got %v", result["total_rows"])
+	}
+}
+
+func TestIntegration_ExecuteCount(t *testing.T) {
+	_, router := setupIntegrationAPI(t)
+
+	body := `{"query": "SELECT number FROM system.numbers LIMIT 50"}`
+	w := makeReq(t, router, "POST", "/api/execute/count", chJSONHeaders(), body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
 	var result map[string]interface{}
 	json.NewDecoder(w.Body).Decode(&result)
-	if result["row_count"].(float64) != 1 {
-		t.Errorf("expected 1 row, got %v", result["row_count"])
+	if result["count"].(float64) != 50 {
+		t.Errorf("expected count 50, got %v", result["count"])
+	}
+}
+
+func TestIntegration_ExecuteCancel(t *testing.T) {
+	_, router := setupIntegrationAPI(t)
+
+	// Cancel for a query_id that never existed: KILL QUERY is a no-op that
+	// must still answer 200.
+	w := makeReq(t, router, "POST", "/api/execute/cancel", chJSONHeaders(), `{"query_id": "does-not-exist"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for no-op cancel, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestIntegration_DetachedJob(t *testing.T) {
+	_, router := setupIntegrationAPI(t)
+
+	body := `{"query": "SELECT number, number % 7 AS m FROM system.numbers LIMIT 100", "detached": true, "max_rows": 10}`
+	w := makeReq(t, router, "POST", "/api/execute", chJSONHeaders(), body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var started map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&started)
+	jobID, _ := started["job_id"].(string)
+	if jobID == "" {
+		t.Fatalf("expected job_id, got %v", started)
+	}
+
+	// Poll until done (fast query — should be immediate).
+	var job map[string]interface{}
+	for i := 0; i < 20; i++ {
+		w = makeReq(t, router, "GET", "/api/jobs/"+jobID, chHeaders(), "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("job poll: expected 200, got %d", w.Code)
+		}
+		job = map[string]interface{}{}
+		json.NewDecoder(w.Body).Decode(&job)
+		if job["status"] == "done" {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if job["status"] != "done" {
+		t.Fatalf("expected job done, got %v", job["status"])
+	}
+	result := job["result"].(map[string]interface{})
+	if result["row_count"].(float64) != 10 {
+		t.Errorf("expected 10 buffered rows (page size), got %v", result["row_count"])
+	}
+
+	// Cancel after completion is a benign no-op.
+	w = makeReq(t, router, "POST", "/api/jobs/"+jobID+"/cancel", chJSONHeaders(), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("cancel after finish: expected 200, got %d", w.Code)
+	}
+}
+
+func TestIntegration_Advisor(t *testing.T) {
+	_, router := setupIntegrationAPI(t)
+
+	// The advisor is best-effort: the assertion is that a query touching a
+	// remote-engine table (the dev stack seeds one on MinIO) succeeds and the
+	// stream carries a result. When the seeded table exists, the result
+	// carries advisor warnings.
+	w := makeReq(t, router, "GET", "/api/advisor/remote-tables", chHeaders(), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("remote-tables: expected 200, got %d", w.Code)
+	}
+
+	events := executeAndParseStream(t, router, `{"query": "SELECT 1", "max_rows": 1}`)
+	streamEventOfType(t, events, "result")
+}
+
+func TestIntegration_ParamBinding(t *testing.T) {
+	_, router := setupIntegrationAPI(t)
+
+	body := `{"query": "SELECT {{n}} AS v", "params": {"n": "42"}, "max_rows": 5}`
+	events := executeAndParseStream(t, router, body)
+	result := streamEventOfType(t, events, "result")["result"].(map[string]interface{})
+	rows := result["rows"].([]interface{})
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	first := rows[0].(map[string]interface{})
+	if v, ok := first["v"].(float64); !ok || v != 42 {
+		t.Errorf("param should bind as Int64 42, got %v (%T)", first["v"], first["v"])
 	}
 }
 

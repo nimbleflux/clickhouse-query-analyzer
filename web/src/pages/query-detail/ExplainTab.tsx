@@ -17,6 +17,8 @@ import { Button } from "@/components/ui/button";
 interface ExplainTabProps {
   queryId?: string;
   explain: ExplainResult | null;
+  /** Refetch the plan with the human-readable pretty output (CH ≥ 26.3). */
+  onLoadPretty?: () => void;
 }
 
 function EstimateCard({ estimate }: { estimate: NonNullable<ExplainResult["estimate"]> }) {
@@ -48,7 +50,7 @@ function EstimateCard({ estimate }: { estimate: NonNullable<ExplainResult["estim
   );
 }
 
-export function ExplainTab({ queryId, explain }: ExplainTabProps) {
+export function ExplainTab({ queryId, explain, onLoadPretty }: ExplainTabProps) {
   const theme = useTheme();
   const cmTheme = theme === "dark" ? oneDark : undefined;
 
@@ -100,6 +102,13 @@ export function ExplainTab({ queryId, explain }: ExplainTabProps) {
             onRun={runAnalyze}
           />
           {explain && explain.estimate && <EstimateCard estimate={explain.estimate} />}
+          {onLoadPretty && (
+            <div className="flex items-center justify-end">
+              <Button variant="ghost" size="sm" onClick={onLoadPretty} title="Refetch the plan with ClickHouse's human-readable output (pretty=1, compact=1, requires 26.3+)">
+                Pretty plan
+              </Button>
+            </div>
+          )}
           {explain && explain.plan && (
             <VisualExplain plan={explain.plan} />
           )}

@@ -12,6 +12,8 @@ import type {
   ThreadSummary,
   ThreadProfile,
   QueryResult,
+  QueryProgress,
+  ExecuteStreamEvent,
   TableAnalysis,
   BulkEvent,
   ProcessEntry,
@@ -28,7 +30,7 @@ import type {
   DDLStatus,
 } from "./types";
 import { getConnectionHeaders } from "./connection";
-import { ApiError } from "./errors";
+import { ApiError, type ApiErrorCode } from "./errors";
 
 const BASE = "/api";
 
@@ -114,12 +116,12 @@ export async function fetchComparison(idA: string, idB: string, signal?: AbortSi
   return fetchJSON<{ a: QueryLogEntry; b: QueryLogEntry }>(`${BASE}/compare?a=${encodeURIComponent(idA)}&b=${encodeURIComponent(idB)}`, { signal });
 }
 
-export async function fetchExplain(queryId: string, signal?: AbortSignal): Promise<ExplainResult> {
+export async function fetchExplain(queryId: string, pretty = false, signal?: AbortSignal): Promise<ExplainResult> {
   let res: Response;
   try {
-    res = await fetch(`${BASE}/queries/${encodeURIComponent(queryId)}/explain`, {
+    res = await fetch(`${BASE}/queries/${encodeURIComponent(queryId)}/explain${pretty ? "?pretty=1" : ""}`, {
       method: "POST",
-      headers: getConnectionHeaders(),
+      headers: { ...getConnectionHeaders(), "Content-Type": "application/json" },
       signal,
     });
   } catch (e) {
@@ -141,7 +143,7 @@ export async function fetchExplainAnalyze(
   try {
     res = await fetch(`${BASE}/queries/${encodeURIComponent(queryId)}/explain-analyze${sp}`, {
       method: "POST",
-      headers: getConnectionHeaders(),
+      headers: { ...getConnectionHeaders(), "Content-Type": "application/json" },
       signal,
     });
   } catch (e) {
@@ -168,6 +170,9 @@ export async function executeQuery(
   settings?: Record<string, string>,
   readonly = false,
   signal?: AbortSignal,
+  onProgress?: (p: QueryProgress) => void,
+  onStarted?: (queryId: string) => void,
+  params?: Record<string, string>,
 ): Promise<QueryResult> {
   const headers: Record<string, string> = {
     ...getConnectionHeaders(),
@@ -176,10 +181,132 @@ export async function executeQuery(
   if (readonly) {
     headers["X-CH-Readonly"] = "1";
   }
-  return fetchJSON<QueryResult>(`${BASE}/execute`, {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/execute`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ query, limit, offset, settings, params }),
+      signal,
+    });
+  } catch (e) {
+    throw ApiError.wrap(e);
+  }
+  if (!res.ok) {
+    throw await ApiError.fromResponse(res);
+  }
+
+  // Consume the NDJSON event stream: started → progress* → result|error.
+  // The first event arrives before the query runs, which keeps reverse-proxy
+  // read timeouts from firing on long-running queries.
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let evt: ExecuteStreamEvent;
+      try {
+        evt = JSON.parse(trimmed);
+      } catch {
+        continue;
+      }
+      switch (evt.type) {
+        case "started":
+          if (evt.query_id) onStarted?.(evt.query_id);
+          break;
+        case "progress":
+          if (evt.progress) onProgress?.(evt.progress);
+          break;
+        case "result":
+          return evt.result!;
+        case "error": {
+          const e = evt.error;
+          const code = (e?.code ?? "CH_EXCEPTION") as ApiErrorCode;
+          const status = code === "QUERY_TIMEOUT" ? 504 : 502;
+          throw new ApiError(e?.error || "Query failed", status, code, e?.hint ?? "", e?.retry ?? false);
+        }
+      }
+    }
+  }
+  throw new ApiError("Query stream ended without a result", 0, "NETWORK_ERROR", "", true);
+}
+
+/**
+ * Kill an in-flight editor query server-side by its query_id. Best-effort:
+ * failures are swallowed because the request abort itself also triggers a
+ * server-side kill (the backend watches for client disconnects).
+ */
+export async function cancelExecuteQuery(queryId: string): Promise<void> {
+  try {
+    await fetchJSON(`${BASE}/execute/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query_id: queryId }),
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+/**
+ * Explicitly count the total rows of a user query (`SELECT count() FROM (q)`).
+ * This no longer happens automatically on the first page — it silently
+ * doubled the cost of heavy queries (e.g. a second full S3 scan).
+ */
+export async function countQueryRows(query: string, signal?: AbortSignal): Promise<number> {
+  const res = await fetchJSON<{ count: number }>(`${BASE}/execute/count`, {
     method: "POST",
-    headers,
-    body: JSON.stringify({ query, limit, offset, settings }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
+    signal,
+  });
+  return res.count;
+}
+
+export type DetachedJob = {
+  id: string;
+  query_id: string;
+  statement: string;
+  status: "running" | "done" | "error" | "canceled";
+  result?: QueryResult;
+  error?: { error?: string; code?: string; hint?: string; retry?: boolean };
+  progress?: QueryProgress;
+  started_at: string;
+  finished_at?: string;
+};
+
+/** Run a statement detached: it outlives the HTTP request; poll for status. */
+export async function executeDetached(
+  query: string,
+  limit: number,
+  offset: number,
+  settings?: Record<string, string>,
+  params?: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<{ job_id: string; query_id: string }> {
+  return fetchJSON(`${BASE}/execute`, {
+    method: "POST",
+    headers: { ...getConnectionHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ query, limit, offset, settings, params, detached: true }),
+    signal,
+  });
+}
+
+export async function fetchJob(jobId: string, signal?: AbortSignal): Promise<DetachedJob> {
+  return fetchJSON(`${BASE}/jobs/${encodeURIComponent(jobId)}`, { signal });
+}
+
+export async function cancelJob(jobId: string, signal?: AbortSignal): Promise<{ status: string }> {
+  return fetchJSON(`${BASE}/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     signal,
   });
 }
@@ -266,11 +393,19 @@ export async function fetchProcesses(signal?: AbortSignal): Promise<ProcessEntry
 }
 
 export async function killProcess(queryId: string, signal?: AbortSignal): Promise<{ status: string }> {
-  return fetchJSON<{ status: string }>(`${BASE}/processes/${encodeURIComponent(queryId)}/kill`, { method: "POST", signal });
+  return fetchJSON<{ status: string }>(`${BASE}/processes/${encodeURIComponent(queryId)}/kill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal,
+  });
 }
 
 export async function killProcessesByUser(user: string, signal?: AbortSignal): Promise<{ status: string; killed: number; user: string }> {
-  return fetchJSON<{ status: string; killed: number; user: string }>(`${BASE}/processes/kill-by-user?user=${encodeURIComponent(user)}`, { method: "POST", signal });
+  return fetchJSON<{ status: string; killed: number; user: string }>(`${BASE}/processes/kill-by-user?user=${encodeURIComponent(user)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal,
+  });
 }
 
 export async function fetchMutations(signal?: AbortSignal): Promise<MutationDetail[]> {
@@ -295,11 +430,19 @@ export async function fetchAccess(signal?: AbortSignal): Promise<AccessOverview>
 }
 
 export async function dropUser(name: string, signal?: AbortSignal): Promise<{ status: string }> {
-  return fetchJSON<{ status: string }>(`${BASE}/access/users/${encodeURIComponent(name)}/drop`, { method: "POST", signal });
+  return fetchJSON<{ status: string }>(`${BASE}/access/users/${encodeURIComponent(name)}/drop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal,
+  });
 }
 
 export async function dropRole(name: string, signal?: AbortSignal): Promise<{ status: string }> {
-  return fetchJSON<{ status: string }>(`${BASE}/access/roles/${encodeURIComponent(name)}/drop`, { method: "POST", signal });
+  return fetchJSON<{ status: string }>(`${BASE}/access/roles/${encodeURIComponent(name)}/drop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal,
+  });
 }
 
 export async function revokeGrant(

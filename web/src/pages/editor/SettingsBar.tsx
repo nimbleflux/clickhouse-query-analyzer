@@ -5,6 +5,9 @@ interface SettingsBarProps {
   onChange: (s: EditorSettings) => void;
   pageSize: number;
   onPageSizeChange: (n: number) => void;
+  /** Per-statement server-side budget in seconds; "" = server default. */
+  maxExecSeconds: string;
+  onMaxExecChange: (s: string) => void;
 }
 
 interface SettingToggleProps {
@@ -33,7 +36,7 @@ function SettingToggle({ checked, onChange, label, title, variant = "default" }:
   );
 }
 
-export function SettingsBar({ settings, onChange, pageSize, onPageSizeChange }: SettingsBarProps) {
+export function SettingsBar({ settings, onChange, pageSize, onPageSizeChange, maxExecSeconds, onMaxExecChange }: SettingsBarProps) {
   const update = (key: keyof EditorSettings, value: boolean) =>
     onChange({ ...settings, [key]: value });
 
@@ -76,12 +79,32 @@ export function SettingsBar({ settings, onChange, pageSize, onPageSizeChange }: 
         title="Allow introspection functions like addressToLine, demangle"
       />
       <SettingToggle
+        checked={settings.use_query_cache}
+        onChange={(v) => update("use_query_cache", v)}
+        label="use_query_cache"
+        title="Serve identical queries from the ClickHouse query cache (same text + settings). Great for repeated exploration reads."
+      />
+      <SettingToggle
         checked={settings.readonly}
         onChange={(v) => update("readonly", v)}
         label="Read-only mode"
         title="Reject INSERT, ALTER, DROP, etc. Only allow SELECT and EXPLAIN queries"
         variant="danger"
       />
+      <div className="flex items-center gap-1 text-xs text-[var(--color-text-primary)]" title="Server-side max_execution_time for each statement. Queries killed by ClickHouse when exceeded.">
+        Timeout:
+        <select
+          value={maxExecSeconds}
+          onChange={(e) => onMaxExecChange(e.target.value)}
+          className="rounded border border-[var(--color-border)] bg-[var(--surface-elevated)] px-1.5 py-0.5 text-xs text-[var(--color-text-primary)]"
+        >
+          <option value="">default</option>
+          <option value="30">30s</option>
+          <option value="60">1m</option>
+          <option value="300">5m</option>
+          <option value="600">10m</option>
+        </select>
+      </div>
       <div className="ml-auto flex items-center gap-1 text-xs text-[var(--color-text-primary)]">
         Rows/page:
         <select

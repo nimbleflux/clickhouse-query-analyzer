@@ -23,7 +23,9 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 - **Query Comparison** — Side-by-side diff of two queries including ProfileEvents metrics
 - **Users & Access** — Browse users, roles, grants, and quota usage (`system.users`/`roles`/`grants`/`quotas`/`quota_usage`); read-only plus permission-gated manage actions (DROP USER/ROLE, REVOKE).
 - **Cluster Support** — Auto-detects `system.clusters`, uses `clusterAllReplicas`
-- **Table Optimizer** — Analyze single tables, entire databases, or all databases for ClickHouse optimization opportunities including LowCardinality, integer right-sizing, Nullable removal, ORDER BY/PARTITION BY suggestions, skipping indices, codec recommendations, and table health checks. Generates copy-ready ALTER TABLE DDL. Bulk analysis streams results in real-time via SSE.
+- **Table Optimizer** — Analyze single tables, entire databases, or all databases for ClickHouse optimization opportunities including LowCardinality, integer right-sizing, Nullable removal, ORDER BY/PARTITION BY suggestions, skipping indices, codec recommendations, and table health checks. Generates copy-ready ALTER TABLE DDL. Bulk analysis streams results in real-time via SSE. On ClickHouse ≥ 26.6, skipping-index suggestions are **measured, not guessed**: a session-scoped hypothetical index + `EXPLAIN WHATIF` reports the projected granule skip ratio right on the recommendation card.
+- **Remote-Table Advisor** — Queries that touch S3/URL/Iceberg/… engine tables get an inline warning (remote scans are slow and expensive), with one-click "Add LIMIT 1000" / "Limit to 5 min" actions and per-table 24h read stats.
+- **ClickHouse 26 features** — version-gated with graceful fallbacks: `EXPLAIN ANALYZE` (26.7), pretty EXPLAIN output (26.3+), `EXPLAIN WHATIF` + hypothetical indexes (26.6), automatic fallback to `system.user_query_log` when full `query_log` access is denied (26.8), and per-statement server-side query parameters (no version requirement) that replace `{{param}}` string substitution with properly bound values.
 
 ## Screenshots
 
@@ -90,14 +92,18 @@ make build
 
 ## Connection
 
-The tool connects to ClickHouse via the browser — no ClickHouse credentials are stored server-side. Supported URL schemes:
+The tool connects to ClickHouse through its Go backend — no ClickHouse credentials are stored server-side (unless the operator configures defaults via env vars, see Security below). Supported URL schemes:
 
 | Scheme | Protocol | TLS |
 |--------|----------|-----|
-| `clickhouse://host:9000` | Native TCP | No |
-| `clickhouses://host:9440` | Native TCP | Yes |
+| `clickhouse://host:9000` | Native TCP (driver conns) | No |
+| `clickhouses://host:9440` | Native TCP (driver conns) | Yes |
 | `http://host:8123` | HTTP API | No |
 | `https://host:8443` | HTTP API | Yes |
+
+Protocol note: SQL Editor statements are executed via ClickHouse's HTTP interface regardless of scheme — `clickhouse://host:9000` is transparently mapped to `http://host:8123` (native port − 877) so you only enter one URL. All other pages (query log, dashboard, flame graphs, …) use the native driver connection. Every editor statement carries a pre-generated `query_id`: the UI streams live progress from `system.processes` while it runs, and Stop issues a precise `KILL QUERY` for it.
+
+**Slow-query behavior**: an ad-hoc statement gets a server-side budget (`-query-timeout`, default 120s) and its response is streamed as newline-delimited JSON events (started → progress → result), so reverse proxies in front of ClickLens see bytes immediately and won't fire their read timeouts on long queries. The full row count is **not** computed automatically anymore (it silently doubled the cost of heavy queries — e.g. a second full S3 scan); the result header offers an explicit "Count all rows" action instead.
 
 For self-signed certificates, check "Skip TLS verify" in the connection bar.
 
@@ -234,8 +240,24 @@ ClickLens is a developer tool, not a multi-tenant application. The backend has *
 - SQL query result rows capped (server-side pagination, `max_result_rows` enforced after user settings)
 - Trace log queries capped at 10,000 rows
 - Prometheus metrics use route patterns (not raw URLs) to prevent cardinality explosion
-- ClickHouse passwords are never logged (SHA-256 hash used only as an internal pool key)
+- ClickHouse passwords are never logged (connection URLs are redacted before logging; the SHA-256 hash is only used as an internal pool key)
 - The `/api/config` endpoint does not expose the password (only a `has_password` boolean)
+- POST endpoints require `Content-Type: application/json`, which blocks blind cross-origin "simple request" CSRF
+- Editor queries only accept a whitelisted set of ClickHouse settings (e.g. `max_execution_time`, `max_threads`, `query_plan_*`) — notably `log_comment` cannot be overridden, so ClickLens-internal query tagging can't be spoofed
+
+### Flags
+
+| Flag | Env | Default | Purpose |
+|------|-----|---------|---------|
+| `-port` | `PORT` | `8080` | HTTP server port |
+| `-clickhouse-url` | `CLICKHOUSE_URL` | — | Default ClickHouse URL for clients that omit `X-CH-URL` |
+| `-clickhouse-user` | `CLICKHOUSE_USER` | `default` | Default username |
+| `-clickhouse-password` | `CLICKHOUSE_PASSWORD` | — | Default password |
+| `-clickhouse-db` | `CLICKHOUSE_DB` | `system` | Default database |
+| `-query-timeout` | `QUERY_TIMEOUT` | `120s` | Per-statement budget for SQL editor queries and single-table analyses |
+| `-bulk-analysis-timeout` | `BULK_ANALYSIS_TIMEOUT` | `30m` | Budget for bulk table-analysis streams |
+| `-cors-origin` | `CORS_ORIGIN` | — | Allowed CORS origin (empty = same-origin only) |
+| `-dev` | — | `false` | Development mode (proxy frontend to Vite) |
 
 ## License
 

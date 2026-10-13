@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, Copy, Check } from "lucide-react";
+import { AlertTriangle, Copy, Check, FlaskConical } from "lucide-react";
 import type { Recommendation } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,34 @@ function confidenceVariant(confidence: string): "success" | "warning" | "seconda
   if (confidence === "high") return "success";
   if (confidence === "medium") return "warning";
   return "secondary";
+}
+
+function WhatIfBadge({ validation }: { validation: NonNullable<Recommendation["validation"]> }) {
+  if (!validation.available) {
+    return (
+      <Badge variant="secondary" title={validation.note || "EXPLAIN WHATIF validation unavailable on this server."}>
+        <FlaskConical className="h-3 w-3" />
+        what-if n/a
+      </Badge>
+    );
+  }
+  if (validation.applicable === "applicable" && (validation.skip_ratio_pct ?? 0) > 0) {
+    return (
+      <Badge
+        variant="success"
+        title={`Measured with a session-scoped hypothetical index + EXPLAIN WHATIF, for the sample predicate col = <sampled min>. Marks: ${validation.marks_before} → ${validation.marks_after}${validation.est_bytes_before ? `, est. bytes: ${validation.est_bytes_before} → ${validation.est_bytes_after ?? "?"}` : ""}.`}
+      >
+        <FlaskConical className="h-3 w-3" />
+        what-if: skips {(validation.skip_ratio_pct ?? 0).toFixed(1)}%
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="warning" title="EXPLAIN WHATIF reports this index would not prune granules for the sample predicate — the recommendation may not pay off.">
+      <FlaskConical className="h-3 w-3" />
+      what-if: no pruning
+    </Badge>
+  );
 }
 
 export function RecommendationCard({ rec }: { rec: Recommendation }) {
@@ -43,8 +71,14 @@ export function RecommendationCard({ rec }: { rec: Recommendation }) {
                 recreate
               </Badge>
             )}
+            {rec.validation && <WhatIfBadge validation={rec.validation} />}
           </div>
           <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{rec.description}</p>
+          {rec.validation?.available && (
+            <p className="mt-1 text-[10px] text-[var(--color-text-secondary)]">
+              Measured via EXPLAIN WHATIF against a hypothetical index — the estimate uses a sampled predicate value, not your real workload.
+            </p>
+          )}
           {rec.current && rec.suggested && (
             <div className="mt-2 flex items-center gap-2 text-xs">
               <code className="rounded bg-[var(--surface-base)] px-1.5 py-0.5 text-[var(--color-text-secondary)]">{rec.current}</code>

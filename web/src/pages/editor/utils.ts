@@ -1,4 +1,5 @@
 import type { QueryResult } from "@/api/types";
+import { ApiError } from "@/api/errors";
 
 export function splitQueries(sql: string): string[] {
   const stmts: string[] = [];
@@ -47,6 +48,24 @@ export function formatElapsed(ms: number): string {
   const min = Math.floor(ms / 60000);
   const sec = ((ms % 60000) / 1000).toFixed(0);
   return `${min}m ${sec}s`;
+}
+
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB", "PiB"];
+  let v = bytes;
+  let u = -1;
+  do { v /= 1024; u++; } while (v >= 1024 && u < units.length - 1);
+  return `${v.toFixed(1)} ${units[u]}`;
+}
+
+/** Render an error for display: message plus any actionable hint the backend attached. */
+export function errorText(e: unknown): string {
+  if (e instanceof ApiError) {
+    return e.hint ? `${e.message} — ${e.hint}` : e.message;
+  }
+  return e instanceof Error ? e.message : "Query failed";
 }
 
 export function exportResult(result: QueryResult, format: "csv" | "json" | "tsv") {

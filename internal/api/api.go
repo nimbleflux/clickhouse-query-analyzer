@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/nimbleflux/clickhouse-query-analyzer/internal/clickhouse"
 	"github.com/nimbleflux/clickhouse-query-analyzer/internal/config"
@@ -32,15 +33,26 @@ type API struct {
 	defaultUser     string
 	defaultPassword string
 	defaultDatabase string
+	// queryTimeout bounds a single ad-hoc editor statement (and single-table
+	// optimizer analyses). Configurable via -query-timeout / QUERY_TIMEOUT.
+	queryTimeout time.Duration
+	// hideDefaultConnection suppresses default_connection in /api/config.
+	hideDefaultConnection bool
+	// jobs tracks detached executions (run decoupled from the HTTP request).
+	jobs *jobStore
 }
 
 func New(pool *clickhouse.Pool, cfg *config.Config) *API {
-	api := &API{pool: pool}
+	api := &API{pool: pool, queryTimeout: 120 * time.Second, jobs: newJobStore()}
 	if cfg != nil {
 		api.defaultURL = cfg.ClickHouseURL
 		api.defaultUser = cfg.ClickHouseUser
 		api.defaultPassword = cfg.ClickHousePass
 		api.defaultDatabase = cfg.ClickHouseDB
+		api.hideDefaultConnection = cfg.HideDefaultConnection
+		if cfg.QueryTimeout > 0 {
+			api.queryTimeout = cfg.QueryTimeout
+		}
 	}
 	return api
 }
@@ -90,16 +102,23 @@ var readOnlyPrefixes = []string{
 	"GRANT ", "REVOKE ", "DELETE ", "UPDATE ",
 }
 
+// rejectWriteQuery rejects obvious write statements in read-only mode.
+// Leading comments are stripped first — `/* x */ DROP TABLE t` used to slip
+// past the prefix check. This is UX-grade defense in depth; real read-only
+// enforcement is a read-only ClickHouse user.
 func rejectWriteQuery(w http.ResponseWriter, query string) bool {
-	upper := strings.ToUpper(query)
+	stripped := clickhouse.StripLeadingComments(query)
+	if stripped == "" {
+		// Comment-only or unterminated comment: nothing sensible to run.
+		Forbidden(w, "Query rejected: read-only mode is enabled (query has no statement)")
+		return true
+	}
+	upper := strings.ToUpper(stripped)
 	for _, prefix := range readOnlyPrefixes {
 		if strings.HasPrefix(strings.TrimSpace(upper), prefix) {
 			Forbidden(w, fmt.Sprintf("Query rejected: read-only mode is enabled (%s not allowed)", strings.TrimSpace(prefix)))
 			return true
 		}
-	}
-	if strings.HasPrefix(strings.TrimSpace(upper), "EXPLAIN") {
-		return false
 	}
 	return false
 }

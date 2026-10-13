@@ -1,6 +1,9 @@
 package clickhouse
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNativeToHTTPPort(t *testing.T) {
 	tests := []struct {
@@ -123,5 +126,114 @@ func TestIsSelectLike(t *testing.T) {
 				t.Errorf("isSelectLike(%q) = %v, want %v", tt.query, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPrepareExecutedQueryWrapsSelects(t *testing.T) {
+	executed, wrapped, hasFormat := prepareExecutedQuery("SELECT * FROM t", 100, 20)
+	if !wrapped {
+		t.Fatalf("SELECT should be wrapped, got verbatim %q", executed)
+	}
+	if hasFormat {
+		t.Fatal("no FORMAT clause present")
+	}
+	want := "SELECT * FROM (\nSELECT * FROM t\n) LIMIT 100 OFFSET 20"
+	if executed != want {
+		t.Fatalf("got %q, want %q", executed, want)
+	}
+}
+
+func TestPrepareExecutedQueryTrailingLineComment(t *testing.T) {
+	// A trailing -- comment must not comment out the closing paren / LIMIT.
+	executed, wrapped, _ := prepareExecutedQuery("SELECT a FROM t -- fetch all", 50, 0)
+	if !wrapped {
+		t.Fatalf("expected wrapping, got %q", executed)
+	}
+	if !strings.HasSuffix(executed, ") LIMIT 50 OFFSET 0") {
+		t.Fatalf("LIMIT suffix was commented out: %q", executed)
+	}
+	if !strings.Contains(executed, "\n) LIMIT") {
+		t.Fatalf("closing paren must sit on its own line after the comment: %q", executed)
+	}
+}
+
+func TestPrepareExecutedQueryTrailingSemicolon(t *testing.T) {
+	executed, wrapped, _ := prepareExecutedQuery("SELECT 1;;  \n", 10, 0)
+	if !wrapped {
+		t.Fatalf("expected wrapping, got %q", executed)
+	}
+	if strings.Contains(executed, ";") {
+		t.Fatalf("semicolon must be stripped inside the subquery: %q", executed)
+	}
+}
+
+func TestPrepareExecutedQueryFormatRunsVerbatim(t *testing.T) {
+	for _, q := range []string{
+		"SELECT * FROM t FORMAT Pretty",
+		"SELECT * FROM t\nFORMAT Vertical",
+	} {
+		executed, wrapped, hasFormat := prepareExecutedQuery(q, 10, 0)
+		if wrapped {
+			t.Errorf("%q must not be wrapped", q)
+		}
+		if !hasFormat {
+			t.Errorf("%q: FORMAT clause not detected", q)
+		}
+		if executed != q {
+			t.Errorf("FORMAT query must run verbatim: got %q", executed)
+		}
+	}
+}
+
+func TestPrepareExecutedQueryShowGrantsVerbatim(t *testing.T) {
+	executed, wrapped, _ := prepareExecutedQuery("SHOW GRANTS FOR user1", 10, 0)
+	if wrapped || executed != "SHOW GRANTS FOR user1" {
+		t.Fatalf("SHOW GRANTS must run verbatim, got wrapped=%v %q", wrapped, executed)
+	}
+}
+
+func TestPrepareExecutedQueryNonSelectVerbatim(t *testing.T) {
+	executed, wrapped, _ := prepareExecutedQuery("DROP TABLE t", 10, 0)
+	if wrapped || executed != "DROP TABLE t" {
+		t.Fatalf("non-SELECT must run verbatim, got wrapped=%v %q", wrapped, executed)
+	}
+}
+
+func TestPrepareExecutedQueryLeadingCommentStillWraps(t *testing.T) {
+	// Leading comments are stripped for classification; the query itself
+	// should still be wrapped.
+	executed, wrapped, _ := prepareExecutedQuery("/* hint */ SELECT 1", 10, 0)
+	if !wrapped {
+		t.Fatalf("leading comment must not prevent wrapping: %q", executed)
+	}
+	if !strings.Contains(executed, "/* hint */ SELECT 1") {
+		t.Fatalf("query body altered: %q", executed)
+	}
+}
+
+func TestNewQueryID(t *testing.T) {
+	seen := make(map[string]bool)
+	for i := 0; i < 1000; i++ {
+		id := NewQueryID()
+		if len(id) != 32 {
+			t.Fatalf("query id should be 32 hex chars, got %q", id)
+		}
+		if seen[id] {
+			t.Fatalf("duplicate query id %q", id)
+		}
+		seen[id] = true
+	}
+}
+
+func TestCountQueryRowsRejectsNonSelect(t *testing.T) {
+	c := &Client{}
+	for _, q := range []string{"DROP TABLE t", "SELECT 1 FORMAT Pretty", "SHOW GRANTS"} {
+		n, err := c.CountQueryRows(nil, q)
+		if err != nil {
+			t.Fatalf("%q: unexpected error %v", q, err)
+		}
+		if n != -1 {
+			t.Fatalf("%q: want -1, got %d", q, n)
+		}
 	}
 }

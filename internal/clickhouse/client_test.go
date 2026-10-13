@@ -53,10 +53,13 @@ func TestIsTLSScheme(t *testing.T) {
 	}{
 		{"https", true},
 		{"clickhouses", true},
+		{"HTTPS", false}, // scheme is lowercased before the call; raw caps rejected
 		{"http", false},
 		{"clickhouse", false},
 		{"", false},
-		{"customs", true},
+		// Anything ending in "s" used to be treated as TLS — a plain bug that
+		// silently enabled TLS for unknown schemes like "customs".
+		{"customs", false},
 	}
 
 	for _, tt := range tests {
