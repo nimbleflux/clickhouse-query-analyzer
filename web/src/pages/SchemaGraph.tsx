@@ -43,9 +43,11 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
   const [loadDays, setLoadDays] = useState(0);
   const [heatMetric, setHeatMetric] = useState<HeatMetric>("duration");
   // One database at a time by default — unfiltered graphs don't scale past a
-  // handful of tables. "All databases" is an explicit choice (the backend
-  // caps it and says so).
+  // handful of tables. With dbFilter = null the SERVER auto-picks the first
+  // database, so even the initial response is scoped. "All databases" is an
+  // explicit choice (allTables; the backend caps it and says so).
   const [dbFilter, setDbFilter] = useState<string | null>(null);
+  const [allTables, setAllTables] = useState(false);
   const dbTouchedRef = useRef(false);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, 200);
@@ -59,7 +61,7 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetchSchemaGraph(loadDays, dbFilter, controller.signal)
+    fetchSchemaGraph(loadDays, allTables ? null : dbFilter, allTables, controller.signal)
       .then((data) => {
         setGraph(data);
         setFitSignal((n) => n + 1);
@@ -70,17 +72,15 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
-  }, [connected, loadDays, dbFilter]);
+  }, [connected, loadDays, dbFilter, allTables]);
 
   useEffect(() => load(), [load]);
 
-  // First successful load: pick the first database automatically (unless the
-  // user already chose). Subsequent db changes come from the picker only.
-  useEffect(() => {
-    if (dbTouchedRef.current || !graph || graph.databases.length === 0) return;
-    const first = graph.databases[0].database;
-    if (first !== dbFilter) setDbFilter(first);
-  }, [graph, dbFilter]);
+  // The database the graph is currently scoped to: the user's explicit
+  // choice, or the server's auto-pick reported in the response.
+  const activeDb = dbTouchedRef.current
+    ? (allTables ? "all" : dbFilter ?? "")
+    : (graph?.database ?? "");
 
   // Reset the selection when it leaves the (filtered) graph.
   const selected = useMemo(
@@ -196,16 +196,22 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
               />
             </div>
             <Select
-              value={dbFilter ?? ""}
+              value={activeDb}
               onChange={(e) => {
                 dbTouchedRef.current = true;
-                setDbFilter(e.target.value || null);
                 setSelectedKey(null);
+                if (e.target.value === "all") {
+                  setAllTables(true);
+                  setDbFilter(null);
+                } else {
+                  setAllTables(false);
+                  setDbFilter(e.target.value || null);
+                }
               }}
               className="w-56"
               title="Pick a database. “All databases” is capped at 400 tables and may be slow on large instances."
             >
-              <option value="">All databases ({graph.nodes.length} shown)</option>
+              <option value="all">All databases ({graph.nodes.length} shown)</option>
               {dbOptions.map(([db, count]) => (
                 <option key={db} value={db}>{db} ({count})</option>
               ))}
