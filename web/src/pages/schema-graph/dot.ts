@@ -1,4 +1,4 @@
-import type { SchemaGraphData, SchemaGraphEdge, SchemaGraphNode, SchemaKind } from "@/api/types";
+import type { SchemaGraphData, SchemaGraphEdge, SchemaGraphNode, SchemaKind, HeatMetric } from "@/api/types";
 
 /**
  * Pure DOT generation for the schema graph. No DOM access — colors arrive as
@@ -118,20 +118,37 @@ export interface DotOptions {
   heat: Map<string, number>;
 }
 
-/** Normalize raw load rows into a 0..1 heat per node key (log-scaled duration). */
+/** Which query_views_log metric the heat-map colors by. */
+export function loadValue(
+  l: { executions: number; total_duration_ms: number; total_written_rows: number; total_written_bytes: number; total_read_rows: number; total_read_bytes: number; peak_memory_usage: number },
+  metric: HeatMetric,
+): number {
+  switch (metric) {
+    case "executions": return l.executions;
+    case "written_rows": return l.total_written_rows;
+    case "written_bytes": return l.total_written_bytes;
+    case "read_rows": return l.total_read_rows;
+    case "read_bytes": return l.total_read_bytes;
+    case "peak_memory": return l.peak_memory_usage;
+    default: return l.total_duration_ms;
+  }
+}
+
+/** Normalize raw load rows into a 0..1 heat per node key (log-scaled) for the chosen metric. */
 export function computeHeat(
   graph: Pick<SchemaGraphData, "load" | "nodes">,
+  metric: HeatMetric = "duration",
 ): Map<string, number> {
   const out = new Map<string, number>();
   if (!graph.load || graph.load.length === 0) return out;
-  const max = Math.max(...graph.load.map((l) => Math.max(1, l.total_duration_ms)));
+  const max = Math.max(...graph.load.map((l) => Math.max(1, loadValue(l, metric))));
   for (const l of graph.load) {
     // view_name in query_views_log may be qualified or bare; match on suffix.
     const node = graph.nodes.find(
       (n) => n.name === l.view || `${n.database}.${n.name}` === l.view,
     );
     if (!node) continue;
-    const t = Math.log1p(Math.max(0, l.total_duration_ms)) / Math.log1p(max);
+    const t = Math.log1p(Math.max(0, loadValue(l, metric))) / Math.log1p(max);
     out.set(nodeKey(node), Math.max(0, Math.min(1, t)));
   }
   return out;

@@ -297,10 +297,25 @@ export interface SchemaGraphEdge {
   kind: "mv" | "dict" | "distributed" | "view";
 }
 
+/** Which query_views_log metric the heat-map colors by. */
+export type HeatMetric =
+  | "duration"
+  | "written_rows"
+  | "written_bytes"
+  | "read_rows"
+  | "read_bytes"
+  | "peak_memory"
+  | "executions";
+
 export interface SchemaGraphLoad {
   view: string;
   executions: number;
   total_duration_ms: number;
+  total_written_rows: number;
+  total_written_bytes: number;
+  total_read_rows: number;
+  total_read_bytes: number;
+  peak_memory_usage: number;
 }
 
 export interface SchemaGraphDbCount {

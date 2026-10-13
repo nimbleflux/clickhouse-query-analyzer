@@ -55,11 +55,17 @@ type SchemaGraphEdge struct {
 }
 
 // SchemaGraphLoad is the INSERT load of one materialized view, aggregated
-// from system.query_views_log — the heat-map overlay.
+// from system.query_views_log — the heat-map overlay. All metrics are
+// fetched at once; the UI picks which one to color by.
 type SchemaGraphLoad struct {
-	View            string `json:"view"`
-	Executions      uint64 `json:"executions"`
-	TotalDurationMs uint64 `json:"total_duration_ms"`
+	View              string `json:"view"`
+	Executions        uint64 `json:"executions"`
+	TotalDurationMs   uint64 `json:"total_duration_ms"`
+	TotalWrittenRows  uint64 `json:"total_written_rows"`
+	TotalWrittenBytes uint64 `json:"total_written_bytes"`
+	TotalReadRows     uint64 `json:"total_read_rows"`
+	TotalReadBytes    uint64 `json:"total_read_bytes"`
+	PeakMemoryUsage   uint64 `json:"peak_memory_usage"`
 }
 
 // SchemaGraphDbCount is one database's table count — the picker's options,
@@ -426,7 +432,15 @@ func unquoteIdent(s string) string {
 // render).
 func (c *Client) schemaViewLoad(ctx context.Context, days int) []SchemaGraphLoad {
 	q := fmt.Sprintf(`
-		SELECT view_name, count() AS executions, coalesce(sum(view_duration_ms), 0) AS duration
+		SELECT
+			view_name,
+			count()                AS executions,
+			sum(view_duration_ms)  AS duration_ms,
+			sum(written_rows)      AS written_rows,
+			sum(written_bytes)     AS written_bytes,
+			sum(read_rows)         AS read_rows,
+			sum(read_bytes)        AS read_bytes,
+			max(peak_memory_usage) AS peak_memory
 		FROM %s
 		WHERE event_time >= now() - INTERVAL ? DAY
 		  AND status IN ('QueryFinish', 'ExceptionWhileProcessing')
@@ -439,8 +453,15 @@ func (c *Client) schemaViewLoad(ctx context.Context, days int) []SchemaGraphLoad
 	var out []SchemaGraphLoad
 	for rows.Next() {
 		var l SchemaGraphLoad
-		if err := rows.Scan(&l.View, &l.Executions, &l.TotalDurationMs); err != nil {
+		// peak_memory_usage is Int64 in system.query_views_log; scan through
+		// int64 so a type mismatch doesn't kill the whole overlay.
+		var peak int64
+		if err := rows.Scan(&l.View, &l.Executions, &l.TotalDurationMs,
+			&l.TotalWrittenRows, &l.TotalWrittenBytes, &l.TotalReadRows, &l.TotalReadBytes, &peak); err != nil {
 			return out
+		}
+		if peak > 0 {
+			l.PeakMemoryUsage = uint64(peak)
 		}
 		if l.View != "" {
 			out = append(out, l)
