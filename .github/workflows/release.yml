@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bump_type:
-        description: "Version bump type"
+        description: "Version bump type (ignored when version is set)"
         required: true
         default: "patch"
         type: choice
@@ -12,6 +12,11 @@ on:
           - patch
           - minor
           - major
+      version:
+        description: "Explicit version (e.g. v0.5.1). Overrides the bump type — use when re-cutting a release."
+        required: false
+        default: ""
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -44,6 +49,18 @@ jobs:
       - name: Calculate next version
         id: next
         run: |
+          # An explicit version wins — lets you re-cut a release after deleting
+          # one, without the auto-bump deriving the wrong number from stale or
+          # missing tags.
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="v${{ github.event.inputs.version }}"
+            VERSION="${VERSION#v}"
+            VERSION="v${VERSION}"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "Pinned version: $VERSION"
+            exit 0
+          fi
+
           CURRENT=${{ steps.current.outputs.version }}
           CURRENT=${CURRENT#v}
 
