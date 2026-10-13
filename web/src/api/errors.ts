@@ -120,12 +120,14 @@ export class ApiError extends Error {
       if (err.name === "AbortError") {
         return new ApiError("Request aborted", 0, "ABORTED", "", false);
       }
-      // Network failure (fetch never reached the server).
+      // Network failure (fetch never reached the server) — a refused or
+      // dropped connection to the ClickLens backend itself (e.g. it was
+      // restarted while this page was open), not a ClickHouse problem.
       return new ApiError(
-        err.message || "Network request failed",
+        "Could not reach the ClickLens backend.",
         0,
         "NETWORK_ERROR",
-        "Check your network connection and that the analyzer backend is reachable.",
+        "Retry. If the backend was just restarted, reload this page and try again.",
         true,
       );
     }
