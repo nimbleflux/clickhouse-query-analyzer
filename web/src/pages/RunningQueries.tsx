@@ -305,7 +305,6 @@ export function RunningQueries({ connected }: { connected: boolean }) {
       />
 
       <PageHeader
-        heading="h2"
         title="Running Queries"
         description="Live view of system.processes"
         actions={

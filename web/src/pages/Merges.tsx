@@ -112,7 +112,6 @@ export function Merges({ connected }: { connected: boolean }) {
   return (
     <PageContainer>
       <PageHeader
-        heading="h2"
         title="Merges"
         description="In-progress part merges (system.merges) — read-only"
         actions={

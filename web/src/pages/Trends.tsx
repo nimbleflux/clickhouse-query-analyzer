@@ -58,7 +58,6 @@ export function Trends({ connected }: { connected: boolean }) {
   return (
     <PageContainer>
       <PageHeader
-        heading="h2"
         title="Trends"
         description="Cluster-wide query health over time (system.query_log)"
         actions={

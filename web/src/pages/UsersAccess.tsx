@@ -120,7 +120,6 @@ export function UsersAccess({ connected }: { connected: boolean }) {
   return (
     <PageContainer>
       <PageHeader
-        heading="h2"
         title="Users & Access"
         description={data?.current_user ? `Signed in as ${data.current_user}` : "Access management"}
         actions={
