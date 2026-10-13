@@ -53,9 +53,9 @@ jobs:
           # one, without the auto-bump deriving the wrong number from stale or
           # missing tags.
           if [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="v${{ github.event.inputs.version }}"
-            VERSION="${VERSION#v}"
-            VERSION="v${VERSION}"
+            INPUT="${{ github.event.inputs.version }}"
+            # Normalize: exactly one leading v, whatever the caller sent.
+            VERSION="v${INPUT#v}"
             echo "version=$VERSION" >> "$GITHUB_OUTPUT"
             echo "Pinned version: $VERSION"
             exit 0
