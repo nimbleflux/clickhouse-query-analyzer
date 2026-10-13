@@ -141,9 +141,13 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
             </Select>
             <Select
               value={heatMetric}
-              onChange={(e) => setHeatMetric(e.target.value as HeatMetric)}
-              disabled={loadDays === 0}
-              title="Which query_views_log metric the heat-map colors by"
+              onChange={(e) => {
+                setHeatMetric(e.target.value as HeatMetric);
+                // Picking a metric implies wanting the overlay — enable a
+                // sensible lookback instead of leaving a dead control.
+                if (loadDays === 0) setLoadDays(7);
+              }}
+              title="Which query_views_log metric the heat-map colors by (enables the Lookback)"
               className="w-48"
             >
               {HEAT_METRICS.map((m) => (
