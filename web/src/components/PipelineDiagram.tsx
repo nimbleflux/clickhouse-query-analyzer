@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { instance } from "@viz-js/viz";
-import type { Viz } from "@viz-js/viz";
 import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
 import { AlertCircle, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
+import { renderGraphvizSVG } from "../pages/schema-graph/render";
 
 interface PipelineDiagramProps {
   dot: string;
@@ -44,6 +44,7 @@ export function PipelineDiagram({ dot }: PipelineDiagramProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const panzoomRef = useRef<PanzoomObject | null>(null);
+  const naturalSize = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -53,9 +54,8 @@ export function PipelineDiagram({ dot }: PipelineDiagramProps) {
     const svg = wrapperRef.current?.querySelector("svg");
     if (!pz || !container || !svg) return;
 
-    const vb = (svg as SVGSVGElement).viewBox.baseVal;
-    const naturalWidth = vb.width || svg.getBoundingClientRect().width;
-    const naturalHeight = vb.height || svg.getBoundingClientRect().height;
+    const naturalWidth = naturalSize.current.w || svg.getBoundingClientRect().width;
+    const naturalHeight = naturalSize.current.h || svg.getBoundingClientRect().height;
     if (!naturalWidth || !naturalHeight) return;
 
     const scaleX = container.clientWidth / naturalWidth;
@@ -80,12 +80,12 @@ export function PipelineDiagram({ dot }: PipelineDiagramProps) {
 
     (async () => {
       try {
-        const viz: Viz = await instance();
+        const viz = await instance();
         if (cancelled) return;
-        const svg = viz.renderSVGElement(dot);
-        const vb = svg.viewBox.baseVal;
-        svg.style.width = `${vb.width}px`;
-        svg.style.height = `${vb.height}px`;
+        const { svg, width: naturalWidth, height: naturalHeight } = await renderGraphvizSVG(viz, dot);
+        naturalSize.current = { w: naturalWidth, h: naturalHeight };
+        svg.style.width = `${naturalWidth}px`;
+        svg.style.height = `${naturalHeight}px`;
         svg.style.maxWidth = "none";
         svg.style.display = "block";
         svg.style.transformOrigin = "0 0";

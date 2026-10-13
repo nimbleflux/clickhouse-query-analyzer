@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { Plug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge, Menu, X, Network, Layers, FlaskConical, ChevronRight, PanelLeft, PanelLeftClose, GitMerge, Users, BarChart3, TrendingUp, ChevronsUpDown, ChevronsDownUp, type LucideIcon } from "lucide-react";
+import { Plug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge, Menu, X, Network, Layers, FlaskConical, ChevronRight, PanelLeft, PanelLeftClose, GitMerge, Users, BarChart3, TrendingUp, ChevronsUpDown, ChevronsDownUp, Waypoints, type LucideIcon } from "lucide-react";
 import type { ConnectionParams } from "../api/connection";
 import { setConnectionHeaders } from "../api/connection";
 import { testConnection } from "../api/client";
@@ -45,6 +45,7 @@ const NAV_SECTIONS: NavSectionDef[] = [
   {
     label: "Schema",
     items: [
+      { to: "/schema/graph", icon: Waypoints, label: "Schema Graph" },
       { to: "/optimizer", icon: Wrench, label: "Optimizer" },
       { to: "/access", icon: Users, label: "Users & Access" },
     ],
@@ -64,6 +65,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/system-metrics": "System Metrics",
   "/trends": "Trends",
   "/access": "Users & Access",
+  "/schema/graph": "Schema Graph",
   "/optimizer": "Table Optimizer",
   "/editor": "SQL Editor",
   "/compare": "Query Comparison",

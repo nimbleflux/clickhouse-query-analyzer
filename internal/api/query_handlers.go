@@ -660,6 +660,33 @@ func (a *API) GetSchema(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"databases": databases})
 }
 
+// SchemaGraph serves the table/dependency graph for the schema visualizer.
+// load_days (0|1|7|30) optionally aggregates system.query_views_log into a
+// per-MV load heat-map.
+func (a *API) SchemaGraph(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	loadDays := 0
+	if v := r.URL.Query().Get("load_days"); v != "" {
+		loadDays, _ = strconv.Atoi(v)
+		if loadDays < 0 {
+			loadDays = 0
+		}
+		if loadDays > 30 {
+			loadDays = 30
+		}
+	}
+	graph, err := ch.GetSchemaGraph(r.Context(), loadDays)
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, graph)
+}
+
 func (a *API) GetTables(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
