@@ -36,6 +36,7 @@ export function QueryList({ connected }: { connected: boolean }) {
   const copy = useCopyToClipboard();
   const [queries, setQueries] = useState<QueryLogEntry[]>([]);
   const [total, setTotal] = useState(0);
+  const [limitedToOwnQueries, setLimitedToOwnQueries] = useState(false);
   const [cachedTotal, setCachedTotal] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ApiError | null>(null);
@@ -118,6 +119,7 @@ export function QueryList({ connected }: { connected: boolean }) {
       .then((data) => {
         if (!active) return;
         setQueries(data.queries || []);
+        setLimitedToOwnQueries(data.limited_to_own_queries === true);
         if (wantsCount) {
           setTotal(data.total);
           setCachedTotal(data.total);
@@ -185,6 +187,14 @@ export function QueryList({ connected }: { connected: boolean }) {
       />
 
       <div className="flex flex-wrap items-center gap-2">
+        {limitedToOwnQueries && (
+          <span
+            className="rounded border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text-secondary)]"
+            title="You don't have access to the full system.query_log — showing your own queries from system.user_query_log."
+          >
+            Showing your queries only (system.user_query_log)
+          </span>
+        )}
         <div className="relative min-w-[200px] flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-secondary)]" />
           <input

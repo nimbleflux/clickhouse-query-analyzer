@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	ch "github.com/ClickHouse/clickhouse-go/v2"
@@ -47,8 +48,17 @@ type Client struct {
 	// means detection failed or hasn't run; callers should check versionErr.
 	version    string
 	versionErr error
-	createdAt  time.Time
-	lastUsedAt time.Time
+	// advisor caches the remote-engine table list for the editor advisor
+	// (nil until first use; guarded by its own mutex internally).
+	advisor *advisorCache
+	// queryLogFallback tracks that the full system.query_log is access-denied
+	// for this user and reads should use system.user_query_log (26.8+),
+	// which holds only the connecting user's queries. queryLogDenied records
+	// that the flip was attempted (so the probe runs once).
+	queryLogFallback atomic.Bool
+	queryLogDenied   atomic.Bool
+	createdAt        time.Time
+	lastUsedAt       time.Time
 }
 
 type ConnParams struct {
@@ -118,19 +128,25 @@ func (p *Pool) healthLoop() {
 }
 
 func (p *Pool) checkHealth() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
+	// Snapshot under RLock and ping outside the lock: a slow node (5s ping
+	// timeout) must not block Get() for every other tenant of the pool.
+	p.mu.RLock()
+	snapshot := make(map[string]*Client, len(p.clients))
 	for key, c := range p.clients {
+		snapshot[key] = c
+	}
+	p.mu.RUnlock()
+
+	for key, c := range snapshot {
 		if time.Since(c.createdAt) >= connMaxAge {
-			slog.Info("evicting expired connection", "url", c.connURL)
-			p.evictLocked(key, c)
+			slog.Info("evicting expired connection", "url", redactURL(c.connURL))
+			p.evict(key, c)
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := c.conn.Ping(ctx); err != nil {
-			slog.Warn("evicting unhealthy connection", "url", c.connURL, "error", err)
-			p.evictLocked(key, c)
+			slog.Warn("evicting unhealthy connection", "url", redactURL(c.connURL), "error", err)
+			p.evict(key, c)
 		}
 		cancel()
 	}
@@ -160,7 +176,19 @@ func isNativeScheme(scheme string) bool {
 }
 
 func isTLSScheme(scheme string) bool {
-	return scheme == "https" || scheme == "clickhouses" || strings.HasSuffix(scheme, "s")
+	return scheme == "https" || scheme == "clickhouses"
+}
+
+// redactURL strips userinfo from a connection URL before it reaches the
+// logs. Users occasionally paste `clickhouse://user:password@host:9000`;
+// without this the password would end up in plaintext server logs.
+func redactURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.User == nil {
+		return rawURL
+	}
+	u.User = url.User(u.User.Username())
+	return u.String()
 }
 
 func (p *Pool) getDialMutex(key string) *sync.Mutex {
@@ -208,12 +236,15 @@ func buildOptions(parsedURL *url.URL, params ConnParams) *ch.Options {
 			Addr:             []string{fmt.Sprintf("%s:%d", host, chPort)},
 			Auth:             ch.Auth{Username: params.User, Password: params.Password, Database: params.Database},
 			DialTimeout:      time.Second * 10,
-			MaxOpenConns:     5,
-			MaxIdleConns:     5,
+			MaxOpenConns:     10,
+			MaxIdleConns:     10,
 			ConnMaxLifetime:  time.Hour,
 			ConnOpenStrategy: ch.ConnOpenInOrder,
 			BlockBufferSize:  10,
-			Settings:         ch.Settings{"log_comment": managedLogComment},
+			// LZ4 on the wire: system-table result sets (query_log pages,
+			// trace rows) shrink several-fold for negligible CPU cost.
+			Compression: &ch.Compression{Method: ch.CompressionLZ4},
+			Settings:    ch.Settings{"log_comment": managedLogComment},
 		}
 	}
 
@@ -302,7 +333,7 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 			}
 		}
 		if oldestKey != "" {
-			slog.Info("evicting oldest connection to make room", "url", oldestURL)
+			slog.Info("evicting oldest connection to make room", "url", redactURL(oldestURL))
 			if old, ok := p.clients[oldestKey]; ok {
 				old.conn.Close()
 				delete(p.clients, oldestKey)
@@ -314,7 +345,7 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 	p.mu.Unlock()
 	p.updatePoolGauge()
 
-	slog.Info("connected to clickhouse", "url", params.URL, "user", params.User, "cluster", isCluster)
+	slog.Info("connected to clickhouse", "url", redactURL(params.URL), "user", params.User, "cluster", isCluster)
 	return c, nil
 }
 
@@ -400,6 +431,17 @@ func detectCluster(ctx context.Context, conn driver.Conn) (bool, string, error) 
 		if err := rows.Scan(&cluster); err != nil {
 			return false, "", err
 		}
+		// system.clusters can name clusters that aren't actually usable
+		// (stale configs, single-node docker images ship sample entries).
+		// Validate with a cheap fan-out probe before committing to
+		// cluster-wide queries everywhere; failure degrades to local-node.
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		probe, probeErr := conn.Query(probeCtx, fmt.Sprintf("SELECT 1 FROM clusterAllReplicas('%s', system.one) LIMIT 1", cluster))
+		if probeErr != nil {
+			return false, "", fmt.Errorf("cluster %q unusable (%w) — using the local node", cluster, probeErr)
+		}
+		probe.Close()
 		return true, cluster, nil
 	}
 	return false, "", nil

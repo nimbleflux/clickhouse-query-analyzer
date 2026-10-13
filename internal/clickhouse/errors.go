@@ -39,23 +39,24 @@ const (
 	CHUnknownIdentifier         ClickHouseErrorCode = 47
 	CHUnknownTable              ClickHouseErrorCode = 60
 	CHUnknownDatabase           ClickHouseErrorCode = 81
-	CHUnknownColumn             ClickHouseErrorCode = 8
 	CHUnknownSetting            ClickHouseErrorCode = 115
 	CHNotFound                  ClickHouseErrorCode = 35
-	CHMissingColumns            ClickHouseErrorCode = 36
-	CHTooManyRows               ClickHouseErrorCode = 158
-	CHMemoryLimit               ClickHouseErrorCode = 241
-	CHTimeout                   ClickHouseErrorCode = 159
-	CHQuotaExceeded             ClickHouseErrorCode = 130
-	CHAttemptToReadAfterEOF     ClickHouseErrorCode = 32
-	CHCannotDecompress          ClickHouseErrorCode = 34
-	CHAbortedByClient           ClickHouseErrorCode = 236
-	CHNoFreeConnection          ClickHouseErrorCode = 192
-	CHAuthFailed                ClickHouseErrorCode = 516
-	CHUnknownAggregateFunction  ClickHouseErrorCode = 63
-	CHUnknownFormat             ClickHouseErrorCode = 73
-	CHBadArguments              ClickHouseErrorCode = 36
-	CHCannotCompileQuery        ClickHouseErrorCode = 81
+	// MISSING_COLUMNS shares 47 with UNKNOWN_IDENTIFIER upstream: ClickHouse
+	// reports missing columns as code 47 ("Missing columns: ...").
+	CHMissingColumns           ClickHouseErrorCode = 47
+	CHTooManyRows              ClickHouseErrorCode = 158
+	CHMemoryLimit              ClickHouseErrorCode = 241
+	CHTimeout                  ClickHouseErrorCode = 159
+	CHQuotaExceeded            ClickHouseErrorCode = 130
+	CHAttemptToReadAfterEOF    ClickHouseErrorCode = 32
+	CHCannotDecompress         ClickHouseErrorCode = 34
+	CHAbortedByClient          ClickHouseErrorCode = 236
+	CHNoFreeConnection         ClickHouseErrorCode = 192
+	CHAuthFailed               ClickHouseErrorCode = 516
+	CHAccessDenied             ClickHouseErrorCode = 164
+	CHUnknownAggregateFunction ClickHouseErrorCode = 63
+	CHUnknownFormat            ClickHouseErrorCode = 73
+	CHBadArguments             ClickHouseErrorCode = 36
 )
 
 // CHError carries a parsed ClickHouse exception code alongside the

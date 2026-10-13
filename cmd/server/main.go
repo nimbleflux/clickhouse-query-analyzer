@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -36,22 +37,45 @@ func main() {
 		"cors_origin", cfg.CORSOrigin,
 	)
 
-	pool := clickhouse.NewPool()
-	defer pool.CloseAll()
+	if cfg.CORSOrigin == "*" && cfg.ClickHouseURL != "" {
+		// With CORS_ORIGIN=*, any web page can read API responses
+		// cross-origin, and unauthenticated requests fall back to the
+		// server-side default credentials — full read/write access from
+		// any origin. Operators must opt into that consciously.
+		slog.Warn("CORS_ORIGIN=* combined with a server-side default ClickHouse URL: " +
+			"any website can run queries against your ClickHouse through this instance. " +
+			"Set CORS_ORIGIN to an explicit origin, or drop the default URL.")
+	}
 
 	if cfg.ClickHouseURL != "" {
-		slog.Info("default ClickHouse URL configured", "url", cfg.ClickHouseURL)
+		// Redact userinfo — the default URL may embed a password.
+		if u, err := url.Parse(cfg.ClickHouseURL); err == nil && u.User != nil {
+			u.User = url.User(u.User.Username())
+			slog.Info("default ClickHouse URL configured", "url", u.String())
+		} else {
+			slog.Info("default ClickHouse URL configured", "url", cfg.ClickHouseURL)
+		}
 	}
+
+	pool := clickhouse.NewPool()
+	defer pool.CloseAll()
 
 	apiHandler := api.New(pool, cfg)
 	router := api.Router(cfg, apiHandler, getFrontendFS())
 
 	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Port),
-		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:    fmt.Sprintf(":%d", cfg.Port),
+		Handler: router,
+		// ReadTimeout bounds request reads; IdleTimeout reaps keep-alive
+		// connections. WriteTimeout is deliberately 0: response writing is
+		// bounded by per-request context deadlines (query-timeout /
+		// bulk-analysis-timeout), and a server-level write deadline would
+		// silently kill long-running queries and SSE streams mid-flight.
+		// ReadHeaderTimeout caps slow-loris header attacks.
+		ReadTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      0,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {

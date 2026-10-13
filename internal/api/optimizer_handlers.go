@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -40,7 +41,45 @@ func (a *API) AnalyzeTableHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Skipping-index suggestions get measured, not just guessed: a
+	// session-scoped hypothetical index + EXPLAIN WHATIF reports the
+	// projected skip ratio / marks (ClickHouse ≥ 26.6). Best-effort —
+	// failures leave the heuristic recommendation untouched.
+	if r.URL.Query().Get("validate") != "0" && analysis != nil {
+		for i := range analysis.Recommendations {
+			rec := &analysis.Recommendations[i]
+			if rec.Category != "index" || rec.RequiresRecreate {
+				continue
+			}
+			indexType, column, ok := parseSuggestedIndex(rec.Suggested)
+			if !ok {
+				continue
+			}
+			rec.Validation = ch.ValidateIndexSuggestion(r.Context(), database, table, column, indexType, 4, clickhouse.SampleForColumn(analysis, column))
+		}
+	}
+
 	writeJSON(w, http.StatusOK, analysis)
+}
+
+// parseSuggestedIndex reads `minmax(`col`)` / `bloom_filter(`col`)` shaped
+// suggestions produced by the index recommender.
+func parseSuggestedIndex(suggested string) (indexType, column string, ok bool) {
+	open := strings.Index(suggested, "(")
+	if open <= 0 || !strings.HasSuffix(suggested, ")") {
+		return "", "", false
+	}
+	indexType = strings.ToLower(strings.TrimSpace(suggested[:open]))
+	column = strings.TrimSpace(suggested[open+1 : len(suggested)-1])
+	column = strings.Trim(column, "`")
+	if indexType == "" || column == "" || strings.ContainsAny(column, "(),") {
+		return "", "", false
+	}
+	switch indexType {
+	case "minmax", "bloom_filter", "set", "ngrambf_v1", "tokenbf_v1":
+		return indexType, column, true
+	}
+	return "", "", false
 }
 
 func (a *API) AnalyzeDatabaseHandler(w http.ResponseWriter, r *http.Request) {

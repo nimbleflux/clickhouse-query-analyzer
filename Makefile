@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend build clean docker dev-clickhouse dev-clickhouse-repl seed seed-replication test test-unit test-integration lint vulncheck fmt-check tidy-check
+.PHONY: dev dev-backend dev-frontend build clean docker dev-clickhouse dev-clickhouse-repl dev-clickhouse-s3 seed seed-replication test test-unit test-integration lint vulncheck fmt-check tidy-check
 
 BINARY := clickhouse-query-analyzer
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -27,6 +27,25 @@ dev-backend:
 
 dev-clickhouse:
 	cd dev && docker compose up -d clickhouse
+
+# S3 profile: MinIO + a ClickHouse node with the S3 storage disk, for the
+# remote-table advisor and S3-engine demos. NOTE: MinIO's community images
+# are no longer publicly pullable (Docker Hub repo deleted, quay.io repo
+# auth-required since ~Sep 2026). This target works only if you already
+# have the images locally or can authenticate against a registry serving
+# them; the error below says so instead of failing cryptically.
+dev-clickhouse-s3:
+	@for img in quay.io/minio/minio:latest quay.io/minio/mc:latest; do \
+		if ! docker image inspect "$$img" >/dev/null 2>&1; then \
+			if ! docker pull "$$img" 2>/dev/null; then \
+				echo "ERROR: $$img is not pullable."; \
+				echo "MinIO removed its public images (Docker Hub repo deleted, quay.io now auth-required)."; \
+				echo "Provide the image locally (docker load / your own registry mirror), then retry."; \
+				exit 1; \
+			fi; \
+		fi; \
+	done
+	cd dev && COMPOSE_PROFILES=s3 docker compose up -d
 
 # Replication demo stack: adds a 2nd ClickHouse node + Keeper. Use this before
 # `make seed-replication` (which the target does automatically).

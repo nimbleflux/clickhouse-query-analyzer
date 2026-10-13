@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -16,6 +17,16 @@ type Config struct {
 	DevMode        bool
 	Version        string
 	CORSOrigin     string
+	// HideDefaultConnection suppresses the default_connection block in
+	// /api/config, so an exposed instance doesn't advertise its internal
+	// ClickHouse URL and username to unauthenticated callers.
+	HideDefaultConnection bool
+	// QueryTimeout bounds a single ad-hoc statement from the SQL editor
+	// (and single-table optimizer analyses). Bulk analysis streams get
+	// BulkTimeout instead — they emit progress events the whole time, so
+	// they are safe to run much longer behind reverse proxies.
+	QueryTimeout time.Duration
+	BulkTimeout  time.Duration
 }
 
 func Parse() *Config {
@@ -28,6 +39,9 @@ func Parse() *Config {
 	flag.StringVar(&cfg.ClickHouseDB, "clickhouse-db", "system", "ClickHouse database for system tables")
 	flag.BoolVar(&cfg.DevMode, "dev", false, "Development mode (serve frontend from web/dist)")
 	flag.StringVar(&cfg.CORSOrigin, "cors-origin", "", "Allowed CORS origin (e.g. https://example.com). Empty = same-origin only, * = any origin (without credential headers).")
+	flag.DurationVar(&cfg.QueryTimeout, "query-timeout", 120*time.Second, "Per-statement budget for SQL editor queries and single-table analyses")
+	flag.DurationVar(&cfg.BulkTimeout, "bulk-analysis-timeout", 30*time.Minute, "Budget for bulk table-analysis streams (they emit progress continuously)")
+	flag.BoolVar(&cfg.HideDefaultConnection, "hide-default-connection", false, "Withhold the default connection URL/user from /api/config (for exposed instances)")
 	flag.Parse()
 
 	if v := os.Getenv("CLICKHOUSE_URL"); v != "" {
@@ -47,6 +61,16 @@ func Parse() *Config {
 	}
 	if v := os.Getenv("CORS_ORIGIN"); v != "" {
 		cfg.CORSOrigin = v
+	}
+	if v := os.Getenv("QUERY_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.QueryTimeout = d
+		}
+	}
+	if v := os.Getenv("BULK_ANALYSIS_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.BulkTimeout = d
+		}
 	}
 
 	cfg.ClickHouseURL = strings.TrimSpace(cfg.ClickHouseURL)

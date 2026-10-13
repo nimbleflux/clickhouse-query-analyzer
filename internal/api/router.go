@@ -8,6 +8,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,10 +30,9 @@ func Router(cfg *config.Config, api *API, frontendFS fs.FS) http.Handler {
 	r.Use(bodyLimitMiddleware)
 	r.Use(slogMiddleware)
 	r.Use(corsMiddleware(cfg.CORSOrigin))
-	r.Use(apiTimeout(30 * time.Second))
 
 	r.Get("/metrics", promhttp.Handler().ServeHTTP)
-	r.Mount("/api", apiRoutes(api))
+	r.Mount("/api", apiRoutes(api, cfg))
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -73,53 +73,98 @@ func isAPIRequest(r *http.Request) bool {
 		len(p) >= 5 && p[:5] == "/api/"
 }
 
-func apiRoutes(api *API) http.Handler {
+func apiRoutes(api *API, cfg *config.Config) http.Handler {
 	r := chi.NewRouter()
-	r.Use(apiTimeout(60 * time.Second))
 
-	r.Post("/connect", api.ConnectWithInfo)
-	r.Get("/config", api.GetConfig)
+	// A zero/negative bulk timeout would make context.WithTimeout below
+	// expire instantly (every request dead on arrival), so floor it.
+	bulkTimeout := cfg.BulkTimeout
+	if bulkTimeout <= 0 {
+		bulkTimeout = 30 * time.Minute
+	}
+	queryTimeout := cfg.QueryTimeout
+	if queryTimeout <= 0 {
+		queryTimeout = 120 * time.Second
+	}
+
+	// Outermost backstop sized for the longest legal request (a bulk table
+	// analysis stream). Tighter budgets apply further in: fast system-table
+	// routes get 60s, SQL editor queries bound themselves with -query-timeout
+	// per statement, and the optimizer SSE routes run under this backstop
+	// because they emit progress events the whole time.
+	r.Use(apiTimeout(bulkTimeout))
+	// POST bodies must be application/json. Cross-origin "simple requests"
+	// (text/plain, no preflight) can otherwise trigger state-changing
+	// endpoints like kill/drop/revoke even when CORS headers are absent.
+	// /connect is exempt: it has no body and no side effects beyond a probe.
+	r.Use(requireJSONContentType)
+
+	// Fast routes: dashboard/list/metadata queries against system tables.
+	// 60s is generous for these; a hung request is a server problem the
+	// user should hear about, not an indefinite spinner.
+	fast := r.With(apiTimeout(60 * time.Second))
+	fast.Post("/connect", api.ConnectWithInfo)
+	fast.Get("/config", api.GetConfig)
+	fast.Get("/schema", api.GetSchema)
+	fast.Get("/schema/{db}/tables", api.GetTables)
+	fast.Get("/schema/{db}/{table}/columns", api.GetColumns)
+	fast.Get("/schema/{db}/{table}/ddl", api.GetTableDDL)
+	fast.Get("/compare", api.CompareQueries)
+	fast.Get("/queries", api.ListQueries)
+	fast.Get("/queries/fingerprints", api.ListFingerprints)
+	fast.Get("/queries/health-trend", api.GetQueryHealthTrend)
+	fast.Get("/queries/fingerprints/{hash}/trend", api.GetFingerprintTrend)
+	fast.Get("/queries/fingerprints/{hash}/queries", api.ListFingerprintQueries)
+	fast.Get("/queries/{queryID}", api.GetQuery)
+	fast.Get("/queries/{queryID}/metrics", api.GetQueryMetrics)
+	fast.Get("/queries/{queryID}/threads", api.GetQueryThreads)
+	fast.Get("/queries/{queryID}/threads/summaries", api.GetThreadSummaries)
+	fast.Get("/queries/{queryID}/threads/{threadID}/profile", api.GetThreadProfile)
+	fast.Get("/queries/{queryID}/trace", api.GetTrace)
+	fast.Get("/queries/{queryID}/flamegraph", api.GetFlameGraph)
+	fast.Get("/queries/{queryID}/views", api.GetQueryViews)
+	fast.Post("/queries/{queryID}/explain", api.GetExplain)
+	// EXPLAIN ANALYZE re-executes the user's query — it needs the query
+	// budget, not the fast-system-tables budget.
+	r.With(apiTimeout(queryTimeout)).Post("/queries/{queryID}/explain-analyze", api.GetExplainAnalyze)
+	// Single-table optimizer analysis can scan a lot of table metadata —
+	// same query budget.
+	r.With(apiTimeout(queryTimeout)).Get("/optimizer/{db}/{table}", api.AnalyzeTableHandler)
+	fast.Get("/processes", api.ListProcesses)
+	fast.Post("/processes/kill-by-user", api.KillProcessesByUser)
+	fast.Post("/processes/{queryID}/kill", api.KillProcess)
+	fast.Get("/dashboard", api.GetDashboard)
+	fast.Get("/replication", api.GetReplication)
+	fast.Get("/ddl", api.GetDDL)
+	fast.Get("/mutations", api.ListMutations)
+	fast.Post("/mutations/kill", api.KillMutationHandler)
+	fast.Get("/merges", api.ListMerges)
+	fast.Get("/access", api.GetAccess)
+	fast.Post("/access/users/{user}/drop", api.DropUser)
+	fast.Post("/access/roles/{role}/drop", api.DropRole)
+	fast.Post("/access/grants/revoke", api.RevokeGrant)
+	fast.Get("/access/users/{user}/grants", api.GetUserGrants)
+	fast.Get("/access/roles/{role}/grants", api.GetRoleGrants)
+	fast.Get("/system-metrics", api.ListAsyncMetrics)
+	fast.Get("/advisor/remote-tables", api.RemoteTables)
+
+	// SQL editor execution bounds itself with -query-timeout per statement
+	// and streams NDJSON progress events, so it needs the bulk backstop,
+	// not the 60s fast budget.
 	r.Post("/execute", api.ExecuteQuery)
-	r.Get("/schema", api.GetSchema)
-	r.Get("/schema/{db}/tables", api.GetTables)
-	r.Get("/schema/{db}/{table}/columns", api.GetColumns)
-	r.Get("/schema/{db}/{table}/ddl", api.GetTableDDL)
-	r.Get("/compare", api.CompareQueries)
-	r.Get("/queries", api.ListQueries)
-	r.Get("/queries/fingerprints", api.ListFingerprints)
-	r.Get("/queries/health-trend", api.GetQueryHealthTrend)
-	r.Get("/queries/fingerprints/{hash}/trend", api.GetFingerprintTrend)
-	r.Get("/queries/fingerprints/{hash}/queries", api.ListFingerprintQueries)
-	r.Get("/queries/{queryID}", api.GetQuery)
-	r.Get("/queries/{queryID}/metrics", api.GetQueryMetrics)
-	r.Get("/queries/{queryID}/threads", api.GetQueryThreads)
-	r.Get("/queries/{queryID}/threads/summaries", api.GetThreadSummaries)
-	r.Get("/queries/{queryID}/threads/{threadID}/profile", api.GetThreadProfile)
-	r.Get("/queries/{queryID}/trace", api.GetTrace)
-	r.Get("/queries/{queryID}/flamegraph", api.GetFlameGraph)
-	r.Get("/queries/{queryID}/views", api.GetQueryViews)
-	r.Post("/queries/{queryID}/explain", api.GetExplain)
-	r.Post("/queries/{queryID}/explain-analyze", api.GetExplainAnalyze)
-	r.Get("/optimizer/{db}/{table}", api.AnalyzeTableHandler)
+	r.Post("/execute/count", api.ExecuteCount)
+	r.Post("/execute/cancel", api.ExecuteCancel)
+	// Detached execution jobs: start, poll, cancel. The query outlives the
+	// starting HTTP request, so these routes never need the fast budget.
+	r.Get("/jobs", api.ListJobs)
+	r.Get("/jobs/{jobID}", api.GetJob)
+	r.Post("/jobs/{jobID}/cancel", api.CancelJob)
+
+	// Bulk optimizer analysis streams; single-table analysis self-bounds at
+	// -query-timeout (wrapped above), the database/all-database SSE streams
+	// run under the bulk backstop.
 	r.Get("/optimizer/{db}", api.AnalyzeDatabaseHandler)
 	r.Get("/optimizer", api.AnalyzeAllHandler)
-
-	r.Get("/processes", api.ListProcesses)
-	r.Post("/processes/kill-by-user", api.KillProcessesByUser)
-	r.Post("/processes/{queryID}/kill", api.KillProcess)
-	r.Get("/dashboard", api.GetDashboard)
-	r.Get("/replication", api.GetReplication)
-	r.Get("/ddl", api.GetDDL)
-	r.Get("/mutations", api.ListMutations)
-	r.Post("/mutations/kill", api.KillMutationHandler)
-	r.Get("/merges", api.ListMerges)
-	r.Get("/access", api.GetAccess)
-	r.Post("/access/users/{user}/drop", api.DropUser)
-	r.Post("/access/roles/{role}/drop", api.DropRole)
-	r.Post("/access/grants/revoke", api.RevokeGrant)
-	r.Get("/access/users/{user}/grants", api.GetUserGrants)
-	r.Get("/access/roles/{role}/grants", api.GetRoleGrants)
-	r.Get("/system-metrics", api.ListAsyncMetrics)
 
 	return r
 }
@@ -177,6 +222,28 @@ func apiTimeout(d time.Duration) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// requireJSONContentType rejects POST requests that don't declare a JSON
+// body (415). A cross-origin attacker can always send a "simple request"
+// without triggering CORS preflight — but only with the CORS-safelisted
+// content types (text/plain, form-encoded). Demanding application/json
+// forces a preflight, which the CORS middleware (same-origin by default)
+// refuses, so the write never happens. GETs and bodyless /connect pass.
+func requireJSONContentType(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path != "/api/connect" {
+			if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+				writeJSON(w, http.StatusUnsupportedMediaType, ApiError{
+					Message: "POST requests must use Content-Type: application/json",
+					Code:    CodeInvalidBody,
+					Retry:   false,
+				})
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func slogMiddleware(next http.Handler) http.Handler {

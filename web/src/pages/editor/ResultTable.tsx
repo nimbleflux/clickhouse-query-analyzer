@@ -1,9 +1,10 @@
 import { useState, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Copy, Check, ExternalLink, Download, ArrowUp, ArrowDown, ChevronLeft, ChevronRightIcon, Loader2 } from "lucide-react";
+import { Copy, Check, ExternalLink, Download, ArrowUp, ArrowDown, ChevronLeft, ChevronRightIcon, Loader2, TriangleAlert } from "lucide-react";
 import { formatNumber } from "@/utils";
 import type { QueryResult } from "@/api/types";
-import { exportResult, formatElapsed } from "./utils";
+import { countQueryRows } from "@/api/client";
+import { exportResult, formatElapsed, errorText } from "./utils";
 
 function CellValue({ val }: { val: unknown }) {
   const [copied, setCopied] = useState(false);
@@ -64,12 +65,32 @@ interface ResultTableProps {
   pageLoading?: boolean;
   setResultPage: (fn: (p: number) => number) => void;
   onNavigate: (path: string) => void;
+  /**
+   * The original statement this result came from. When present, the header
+   * offers an explicit "count all rows" action — total counts are no longer
+   * computed automatically (that silently doubled the cost of heavy queries).
+   */
+  statement?: string;
+  /** Advisor quick-action handler ("add_limit", "set_max_execution_time"). */
+  onSuggestion?: (action: string) => void;
 }
 
-export function ResultTable({ result, pageSize, resultPage, pageLoading, setResultPage, onNavigate }: ResultTableProps) {
+export function ResultTable({ result, pageSize, resultPage, pageLoading, setResultPage, onNavigate, statement, onSuggestion }: ResultTableProps) {
   const [colFilters, setColFilters] = useState<Record<string, string>>({});
   const [sortCol, setSortCol] = useState<string>("");
   const [sortAsc, setSortAsc] = useState(true);
+  const [countState, setCountState] = useState<{ loading: boolean; value?: number; error?: string }>({ loading: false });
+
+  const countAllRows = async () => {
+    if (!statement) return;
+    setCountState({ loading: true });
+    try {
+      const n = await countQueryRows(statement);
+      setCountState({ loading: false, value: n });
+    } catch (e) {
+      setCountState({ loading: false, error: errorText(e) });
+    }
+  };
 
   // Memoized filter+sort so it isn't recomputed on every keystroke/render.
   const sortedRows = useMemo(() => {
@@ -135,6 +156,41 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
 
   return (
     <div>
+      {result.advisor && result.advisor.warnings.length > 0 && (
+        <div
+          role="note"
+          className="mb-2 rounded-lg border border-[var(--color-warning, #b45309)] bg-[var(--surface-hover)] p-2.5"
+        >
+          <div className="flex flex-col gap-1.5">
+            {result.advisor.warnings.map((w, i) => (
+              <p key={i} className="text-xs text-[var(--color-text-primary)]">
+                <TriangleAlert className="mr-1.5 inline h-3.5 w-3.5 text-[var(--color-warning, #b45309)]" />
+                {w}
+              </p>
+            ))}
+            {onSuggestion && result.advisor.suggestions.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {result.advisor.suggestions.includes("add_limit") && (
+                  <button
+                    onClick={() => onSuggestion("add_limit")}
+                    className="rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                  >
+                    Add LIMIT 1000
+                  </button>
+                )}
+                {result.advisor.suggestions.includes("set_max_execution_time") && (
+                  <button
+                    onClick={() => onSuggestion("set_max_execution_time")}
+                    className="rounded border border-[var(--color-border)] px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                  >
+                    Limit to 5 min
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {result.query_id && (
         <div className="mb-2 flex flex-wrap items-center gap-2">
           <button
@@ -160,6 +216,23 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
               ? `${formatNumber(totalRows)} rows in ${formatElapsed(result.timing_ms)}`
               : `${formatNumber(result.row_count)} row${result.row_count !== 1 ? "s" : ""} in ${formatElapsed(result.timing_ms)}`}
           </span>
+          {!totalKnown && statement && countState.value === undefined && (
+            <button
+              onClick={countAllRows}
+              disabled={countState.loading}
+              className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline disabled:opacity-50"
+              title="Run SELECT count() over the full query — can be expensive on remote tables"
+            >
+              {countState.loading && <Loader2 className="h-3 w-3 animate-spin" />}
+              Count all rows
+            </button>
+          )}
+          {countState.value !== undefined && (
+            <span className="text-xs text-[var(--color-text-secondary)]">({formatNumber(countState.value)} total)</span>
+          )}
+          {countState.error && (
+            <span className="text-xs text-[var(--color-error)]" title={countState.error}>count failed</span>
+          )}
           {hasFilters && (
             <button
               onClick={() => setColFilters({})}

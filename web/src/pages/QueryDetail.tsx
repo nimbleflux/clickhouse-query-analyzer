@@ -92,10 +92,12 @@ export function QueryDetail({ connected }: { connected: boolean }) {
     return () => { aborted = true; controller.abort(); };
   }, [queryId, connected]);
 
-  const loadExplain = async () => {
-    if (!queryId || explain) return;
+  const loadExplain = async (pretty?: boolean) => {
+    if (!queryId) return;
+    // without an explicit pretty flag, only fetch once (lazy tab open)
+    if (pretty === undefined && explain) return;
     try {
-      const e = await fetchExplain(queryId);
+      const e = await fetchExplain(queryId, pretty === true);
       setExplain(e);
     } catch {}
   };
@@ -303,7 +305,7 @@ export function QueryDetail({ connected }: { connected: boolean }) {
             activeType={activeFlameType}
           />
         </TabsContent>
-        <TabsContent value="explain"><ExplainTab queryId={query.query_id} explain={explain} /></TabsContent>
+        <TabsContent value="explain"><ExplainTab queryId={query.query_id} explain={explain} onLoadPretty={() => loadExplain(true)} /></TabsContent>
         <TabsContent value="views"><ViewsTab views={views} /></TabsContent>
         <TabsContent value="settings"><SettingsTab settings={query.settings} /></TabsContent>
       </Tabs>

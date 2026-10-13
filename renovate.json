@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "mode": "full",
-  "extends": ["config:recommended", ":semanticCommitTypeAll(chore)", "group:all"],
+  "extends": ["config:recommended", ":semanticCommitTypeAll(chore)"],
   "labels": ["dependencies"],
   "rangeStrategy": "bump",
   "minimumReleaseAge": "14 days",
@@ -13,6 +13,15 @@
   },
   "platformAutomerge": true,
   "packageRules": [
+    {
+      "description": "Split Go and npm updates into separate PRs — the old group:all produced un-bisectable mega-PRs mixing Go and JS majors",
+      "matchManagers": ["gomod"],
+      "groupName": "go dependencies"
+    },
+    {
+      "matchManagers": ["npm"],
+      "groupName": "js dependencies"
+    },
     {
       "description": "Automerge non-major dev dependencies",
       "matchDepTypes": ["devDependencies"],

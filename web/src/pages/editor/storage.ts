@@ -1,4 +1,4 @@
-import type { QueryResult } from "@/api/types";
+import type { QueryProgress, QueryResult } from "@/api/types";
 
 export interface EditorTab {
   id: string;
@@ -11,6 +11,12 @@ export interface EditorTab {
   paramValues: Record<string, string>;
   statements?: string[];
   pageLoading?: boolean;
+  /** Live progress of the running statement (streamed from system.processes). */
+  progress?: QueryProgress | null;
+  /** query_id of the in-flight statement — targets Stop → KILL QUERY. */
+  runningQueryId?: string;
+  /** Statement currently executing (1-based, shown while running). */
+  runningStatement?: number;
 }
 
 export interface SidebarSections {
@@ -33,6 +39,7 @@ export type SettingsKey =
   | "query_profiler_cpu_time_period_ns"
   | "allow_introspection_functions"
   | "enable_params"
+  | "use_query_cache"
   | "readonly";
 
 export type EditorSettings = Record<SettingsKey, boolean>;
@@ -74,7 +81,15 @@ export function loadTabs(): EditorTab[] {
 }
 
 export function saveTabs(tabs: EditorTab[]) {
-  const serializable = tabs.map((t) => ({ ...t, results: [], errors: [], running: false }));
+  const serializable = tabs.map((t) => ({
+    ...t,
+    results: [],
+    errors: [],
+    running: false,
+    progress: null,
+    runningQueryId: undefined,
+    runningStatement: undefined,
+  }));
   try { localStorage.setItem(TABS_KEY, JSON.stringify(serializable)); } catch {}
 }
 
@@ -87,6 +102,7 @@ export function loadSettings(): EditorSettings {
     query_profiler_cpu_time_period_ns: true,
     allow_introspection_functions: true,
     enable_params: true,
+    use_query_cache: false,
     readonly: false,
   };
   try {

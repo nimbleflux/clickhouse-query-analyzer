@@ -18,6 +18,7 @@ export type ApiErrorCode =
   | "FORBIDDEN"
   | "CH_UNREACHABLE"
   | "CH_EXCEPTION"
+  | "QUERY_TIMEOUT"
   | "INTERNAL"
   | "NETWORK_ERROR"
   | "ABORTED"
@@ -58,6 +59,11 @@ export class ApiError extends Error {
   /** True if the ClickHouse backend is unreachable or rejected auth. */
   isConnectionError(): boolean {
     return this.code === "CH_UNREACHABLE";
+  }
+
+  /** True if the query exceeded a time budget (ours or a proxy's). */
+  isQueryTimeout(): boolean {
+    return this.code === "QUERY_TIMEOUT";
   }
 
   /** True if the error came from a ClickHouse server-side exception (syntax, unknown table, etc.). */
@@ -133,9 +139,9 @@ function inferCodeFromStatus(status: number): ApiErrorCode {
     case 401:
     case 403: return "FORBIDDEN";
     case 404: return "NOT_FOUND";
+    case 504: return "QUERY_TIMEOUT";
     case 502:
-    case 503:
-    case 504: return "CH_UNREACHABLE";
+    case 503: return "CH_UNREACHABLE";
     case 500:
     default: return "INTERNAL";
   }
@@ -151,6 +157,10 @@ function defaultHintForCode(code: ApiErrorCode): string {
       return "Disable read-only mode in the SQL Editor settings.";
     case "NOT_FOUND":
       return "The resource may have aged out of query_log. Try widening the time range.";
+    case "QUERY_TIMEOUT":
+      // Inferred (no backend payload): either ClickLens's own query budget or
+      // a gateway in between gave up while the query was still running.
+      return "The query ran longer than a timeout between the browser and ClickHouse. Add a LIMIT or more selective WHERE, raise the -query-timeout budget, or increase the reverse proxy's read timeout.";
     default:
       return "";
   }

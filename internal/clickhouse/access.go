@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -292,6 +293,18 @@ func (c *Client) DropRole(ctx context.Context, name string) error {
 	return c.conn.Exec(ctx, fmt.Sprintf("DROP ROLE IF EXISTS %s", quoteIdent(name)))
 }
 
+// granteeNameRe restricts the SHOW GRANTS FOR grantee to plain identifier
+// characters. The name reaches this function from a URL path parameter, so
+// anything goes otherwise; the SHOW GRANTS grammar has no quoting that works
+// in the grantee position, so validation (not escaping) is the defense.
+var granteeNameRe = regexp.MustCompile(`^[A-Za-z0-9_.\-]+$`)
+
+// IsValidGranteeName reports whether name may be interpolated into
+// `SHOW GRANTS FOR <name>`.
+func IsValidGranteeName(name string) bool {
+	return granteeNameRe.MatchString(name)
+}
+
 // ShowGrantsFor runs `SHOW GRANTS FOR <name> FINAL` and returns the grant
 // statements joined with newlines (ClickHouse returns one row per grant).
 // FINAL merges in grants inherited via granted roles.
@@ -299,12 +312,15 @@ func (c *Client) DropRole(ctx context.Context, name string) error {
 // ClickHouse grammar: `SHOW GRANTS [FOR user1 [, user2 ...]] [WITH IMPLICIT] [FINAL]`.
 // Two traps: there is no USER/ROLE keyword (it would be parsed as the
 // grantee name), and the grantee must be a bare identifier — backtick- and
-// string-quoting both fail in this position. Names come from system.users /
-// system.roles (trusted); any name that isn't a valid identifier fails with
-// a graceful SYNTAX_ERROR rather than enabling injection.
+// string-quoting both fail in this position. Names are therefore validated
+// to plain identifier characters; anything else is rejected before SQL is
+// built.
 // Privileges are re-checked by the server; an unauthorized caller gets a
 // CH_EXCEPTION that surfaces as-is.
 func (c *Client) ShowGrantsFor(ctx context.Context, name string) (string, error) {
+	if !IsValidGranteeName(name) {
+		return "", fmt.Errorf("invalid user/role name %q", name)
+	}
 	rows, err := c.conn.Query(ctx, fmt.Sprintf("SHOW GRANTS FOR %s FINAL", name))
 	if err != nil {
 		return "", err
@@ -324,10 +340,73 @@ func (c *Client) ShowGrantsFor(ctx context.Context, name string) (string, error)
 	return strings.Join(lines, "\n"), nil
 }
 
+// privilegeTokens are the only words allowed inside the REVOKE privilege
+// expression. Everything else (comments, clauses like ON/FROM, quotes) is
+// rejected: an accessType such as `SELECT ON db2.* FROM victim /*` would
+// otherwise comment-swallow the statement suffix and revoke arbitrary
+// privileges from arbitrary grantees.
+var privilegeTokens = map[string]bool{
+	"ALL": true, "PRIVILEGES": true, "SELECT": true, "INSERT": true,
+	"ALTER": true, "UPDATE": true, "DELETE": true, "CREATE": true,
+	"DROP": true, "TRUNCATE": true, "OPTIMIZE": true, "SYSTEM": true,
+	"KILL": true, "QUERY": true, "TABLE": true, "VIEW": true,
+	"DICTIONARY": true, "NAMED": true, "COLLECTION": true,
+	"WORKLOAD": true, "RESOURCE": true, "USER": true, "ROLE": true,
+	"GRANT": true, "OPTION": true, "FOR": true, "SHOW": true,
+	"ACCESS": true, "MANAGEMENT": true, "USAGE": true, "CLUSTER": true,
+	"MOVE": true, "EXCHANGE": true, "FILES": true, "REFRESH": true,
+	"SCHEMA": true, "SOURCES": true, "FUNCTION": true, "FUNCTIONS": true,
+	"ENGINE": true, "TTL": true, "SETTINGS": true, "COLUMN": true,
+	"INDEX": true, "PROJECTION": true, "CONSTRAINT": true, "ADD": true,
+	"MODIFY": true, "CLEAR": true, "COMMENT": true, "ATTACH": true,
+	"DETACH": true, "REPLACE": true, "FETCH": true, "FREEZE": true,
+	"UNFREEZE": true, "MUTATION": true, "UNDROP": true,
+	// SYSTEM privilege subcommands (SYSTEM SHUTDOWN, SYSTEM RELOAD CONFIG,
+	// SYSTEM FLUSH LOGS, …).
+	"SHUTDOWN": true, "RELOAD": true, "CONFIG": true, "DNS": true,
+	"RESTART": true, "REPLICAS": true, "REPLICATION": true, "LOGS": true,
+	"STOP": true, "START": true, "MERGES": true, "SENDS": true,
+	"FETCHES": true, "MOVES": true, "QUEUES": true,
+	"SYNC": true, "DISTRIBUTED": true, "BACKUP": true, "RESTORE": true,
+	"LISTEN": true,
+}
+
+// parenColumnListRe strips a parenthesised column list from a privilege
+// expression (e.g. `SELECT(col1, col2)`) before token validation.
+var parenColumnListRe = regexp.MustCompile(`\([^()]*\)`)
+
+// ValidAccessType reports whether the privilege expression is safe to
+// interpolate into `REVOKE <accessType> ON ...`. Only known privilege
+// keywords, commas and parenthesised column lists are accepted.
+func ValidAccessType(accessType string) bool {
+	s := strings.ToUpper(strings.TrimSpace(accessType))
+	if s == "" {
+		return false
+	}
+	s = parenColumnListRe.ReplaceAllString(s, "")
+	if strings.ContainsAny(s, "();`'\"*") {
+		return false
+	}
+	for _, tok := range strings.Fields(s) {
+		tok = strings.TrimSuffix(tok, ",")
+		if tok == "" {
+			continue
+		}
+		if !privilegeTokens[tok] {
+			return false
+		}
+	}
+	return true
+}
+
 // RevokeGrant revokes a grant described by a system.grants row. granteeKind is
 // "user" or "role". The ON clause is reconstructed from database/table/column;
-// column-level and grant-option nuances are best-effort.
+// column-level and grant-option nuances are best-effort. accessType must pass
+// ValidAccessType — callers get an error for anything else.
 func (c *Client) RevokeGrant(ctx context.Context, granteeKind, grantee, accessType, database, table, column string, grantOption bool) error {
+	if !ValidAccessType(accessType) {
+		return fmt.Errorf("invalid access type %q: only known privilege keywords are allowed", accessType)
+	}
 	on := "*.*"
 	switch {
 	case database != "" && table != "" && column != "":

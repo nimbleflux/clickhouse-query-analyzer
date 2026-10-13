@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -93,10 +95,11 @@ func (a *API) ListQueries(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"queries": queries,
-		"total":   total,
-		"limit":   params.Limit,
-		"offset":  params.Offset,
+		"queries":                queries,
+		"total":                  total,
+		"limit":                  params.Limit,
+		"offset":                 params.Offset,
+		"limited_to_own_queries": ch.UsingUserQueryLog(),
 	})
 }
 
@@ -313,7 +316,9 @@ func (a *API) GetExplain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := ch.GetExplain(r.Context(), query.Query)
+	// pretty=1 opts into the human-readable plan output (ClickHouse ≥ 26.3).
+	pretty := r.URL.Query().Get("pretty") == "1"
+	result, err := ch.GetExplain(r.Context(), query.Query, pretty)
 	if err != nil {
 		respondErr(w, err, false)
 		return
@@ -395,6 +400,19 @@ func (a *API) CompareQueries(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// executeStreamEvent is one NDJSON line of the /api/execute streaming
+// response. The response always starts with a "started" event (flushed
+// immediately, so reverse proxies see bytes right away and their read
+// timeouts never fire), zero or more "progress" events, and exactly one
+// terminal "result" or "error" event.
+type executeStreamEvent struct {
+	Type     string                    `json:"type"` // started | progress | result | error
+	QueryID  string                    `json:"query_id,omitempty"`
+	Progress *clickhouse.QueryProgress `json:"progress,omitempty"`
+	Result   *clickhouse.QueryResult   `json:"result,omitempty"`
+	Error    *ApiError                 `json:"error,omitempty"`
+}
+
 func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
@@ -408,6 +426,8 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		Offset   int               `json:"offset"`
 		MaxRows  int               `json:"max_rows"`
 		Settings map[string]string `json:"settings"`
+		Params   map[string]string `json:"params"`
+		Detached bool              `json:"detached"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		InvalidBody(w, "")
@@ -437,13 +457,190 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	result, err := ch.ExecuteQuery(r.Context(), req.Query, limit, offset, req.Settings)
+	// Detached mode: the statement runs in a background job decoupled from
+	// this HTTP request — the structural fix for reverse-proxy timeouts on
+	// very long queries. The browser polls /api/jobs/{id} for progress and
+	// results. Must be handled before the NDJSON preamble switches this
+	// response to event streaming.
+	if req.Detached {
+		a.startDetachedJob(w, r, ch, req.Query, limit, offset, req.Settings, req.Params)
+		return
+	}
+
+	// Everything below streams NDJSON. From here on, errors must be written
+	// as events, not as non-200 JSON responses.
+	queryID := clickhouse.NewQueryID()
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	// Ask reverse proxies (nginx in particular) not to buffer this stream —
+	// the whole point is that the browser sees events as they happen.
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	var writeMu sync.Mutex
+	writeEvent := func(ev executeStreamEvent) {
+		b, err := json.Marshal(ev)
+		if err != nil {
+			return
+		}
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if _, err := w.Write(append(b, '\n')); err != nil {
+			return
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	writeEvent(executeStreamEvent{Type: "started", QueryID: queryID})
+
+	// Per-statement budget. The route-level middleware only provides the
+	// bulk backstop; this is where -query-timeout actually applies.
+	ctx, cancel := context.WithTimeout(r.Context(), a.queryTimeout)
+	defer cancel()
+
+	// If the browser disconnects (or hits Cancel, which aborts the fetch),
+	// the query would keep burning ClickHouse resources. Kill it. The
+	// query_id is ours, so the KILL is precise. After normal completion the
+	// watcher loses the select race at worst, and a KILL for an already
+	// finished query_id is a harmless no-op.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-r.Context().Done():
+			killCtx, killCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer killCancel()
+			_ = ch.KillQuery(killCtx, queryID)
+		case <-done:
+		}
+	}()
+
+	// Progress pump: poll system.processes for our query_id every 2s and
+	// stream snapshots. Every event also keeps bytes flowing through any
+	// reverse proxy between the browser and ClickLens.
+	progressStop := make(chan struct{})
+	defer close(progressStop)
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-progressStop:
+				return
+			case <-ticker.C:
+				pctx, pctxCancel := context.WithTimeout(context.Background(), 3*time.Second)
+				p, err := ch.GetProgress(pctx, queryID)
+				pctxCancel()
+				if err == nil && p.IsRunning {
+					writeEvent(executeStreamEvent{Type: "progress", QueryID: queryID, Progress: p})
+				}
+			}
+		}
+	}()
+
+	result, err := ch.ExecuteQuery(ctx, clickhouse.ExecuteOptions{
+		Query:    req.Query,
+		Limit:    limit,
+		Offset:   offset,
+		Settings: req.Settings,
+		Params:   req.Params,
+		QueryID:  queryID,
+	})
+	if err != nil {
+		writeEvent(executeStreamEvent{Type: "error", QueryID: queryID, Error: apiErrorFromErr(err, a.queryTimeout)})
+		return
+	}
+	// Advisor is best-effort, computed on the first page only (pagination
+	// re-runs shouldn't re-derive it), and must never fail the query.
+	if offset == 0 {
+		actx, acancel := context.WithTimeout(context.Background(), 5*time.Second)
+		result.Advisor = ch.AdviseForQuery(actx, req.Query)
+		acancel()
+	}
+	writeEvent(executeStreamEvent{Type: "result", QueryID: queryID, Result: result})
+}
+
+// ExecuteCount runs the (formerly automatic) `SELECT count() FROM (user query)`
+// as an explicit, user-initiated request. It returns the count in a normal
+// JSON response — counts are cheap to wait for and there is no value in
+// streaming them.
+func (a *API) ExecuteCount(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	var req struct {
+		Query string `json:"query"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		InvalidBody(w, "")
+		return
+	}
+	if req.Query == "" {
+		MissingParam(w, "query")
+		return
+	}
+	if isReadonly(r) && rejectWriteQuery(w, req.Query) {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), a.queryTimeout)
+	defer cancel()
+	n, err := ch.CountQueryRows(ctx, req.Query)
 	if err != nil {
 		respondErr(w, err, false)
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]int64{"count": n})
+}
 
-	writeJSON(w, http.StatusOK, result)
+// RemoteTables lists remote-backed tables (S3/URL/Iceberg/…) with their
+// 24h read load — used by the editor advisor and available standalone.
+func (a *API) RemoteTables(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	tables, err := ch.ListRemoteTables(r.Context())
+	if err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	if tables == nil {
+		tables = []clickhouse.RemoteTableInfo{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tables": tables})
+}
+
+// ExecuteCancel kills an in-flight editor query by the query_id the browser
+// received in the "started" stream event. Complements the fetch abort: the
+// abort closes the pipe, this guarantees the server-side query stops too.
+func (a *API) ExecuteCancel(w http.ResponseWriter, r *http.Request) {
+	ch, err := a.clientFromRequest(r)
+	if err != nil {
+		CHUnreachable(w, false, err)
+		return
+	}
+	var req struct {
+		QueryID string `json:"query_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		InvalidBody(w, "")
+		return
+	}
+	if req.QueryID == "" {
+		MissingParam(w, "query_id")
+		return
+	}
+	if err := ch.KillQuery(r.Context(), req.QueryID); err != nil {
+		respondErr(w, err, false)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "killed", "query_id": req.QueryID})
 }
 
 func (a *API) GetSchema(w http.ResponseWriter, r *http.Request) {
@@ -517,6 +714,10 @@ func (a *API) ListProcesses(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) KillProcess(w http.ResponseWriter, r *http.Request) {
+	if isReadonly(r) {
+		Forbidden(w, "KILL QUERY is not allowed in read-only mode")
+		return
+	}
 	ch, err := a.clientFromRequest(r)
 	if err != nil {
 		CHUnreachable(w, false, err)
@@ -538,6 +739,10 @@ func (a *API) KillProcess(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) KillProcessesByUser(w http.ResponseWriter, r *http.Request) {
+	if isReadonly(r) {
+		Forbidden(w, "KILL QUERY is not allowed in read-only mode")
+		return
+	}
 	user := r.URL.Query().Get("user")
 	if user == "" {
 		MissingParam(w, "user")
@@ -704,6 +909,10 @@ func (a *API) ListMutations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) KillMutationHandler(w http.ResponseWriter, r *http.Request) {
+	if isReadonly(r) {
+		Forbidden(w, "KILL MUTATION is not allowed in read-only mode")
+		return
+	}
 	var req struct {
 		Database   string `json:"database"`
 		Table      string `json:"table"`
@@ -761,6 +970,10 @@ func (a *API) GetAccess(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) DropUser(w http.ResponseWriter, r *http.Request) {
+	if isReadonly(r) {
+		Forbidden(w, "DROP USER is not allowed in read-only mode")
+		return
+	}
 	name := chi.URLParam(r, "user")
 	if name == "" {
 		MissingParam(w, "user")
@@ -779,6 +992,10 @@ func (a *API) DropUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) DropRole(w http.ResponseWriter, r *http.Request) {
+	if isReadonly(r) {
+		Forbidden(w, "DROP ROLE is not allowed in read-only mode")
+		return
+	}
 	name := chi.URLParam(r, "role")
 	if name == "" {
 		MissingParam(w, "role")
@@ -797,6 +1014,10 @@ func (a *API) DropRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) RevokeGrant(w http.ResponseWriter, r *http.Request) {
+	if isReadonly(r) {
+		Forbidden(w, "REVOKE is not allowed in read-only mode")
+		return
+	}
 	var req struct {
 		GranteeKind string `json:"grantee_kind"` // "user" | "role"
 		Grantee     string `json:"grantee"`
@@ -816,6 +1037,10 @@ func (a *API) RevokeGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.GranteeKind == "" {
 		req.GranteeKind = "user"
+	}
+	if !clickhouse.ValidAccessType(req.AccessType) {
+		InvalidParam(w, "access_type", "only known privilege keywords (SELECT, INSERT, ALTER, …) and optional column lists are allowed")
+		return
 	}
 	ch, err := a.clientFromRequest(r)
 	if err != nil {

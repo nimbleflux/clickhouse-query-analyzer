@@ -27,7 +27,7 @@ type TrendPoint struct {
 }
 
 func (c *Client) GetFingerprintTrend(ctx context.Context, hash uint64, interval string, fromTime string, toTime string) ([]TrendPoint, error) {
-	table := c.tableRef("query_log")
+	table := c.queryLogRef()
 
 	validIntervals := map[string]bool{
 		"minute": true, "hour": true, "day": true,
@@ -125,7 +125,7 @@ func (c *Client) GetQueryHealthTrend(ctx context.Context, hours int) ([]QueryHea
 	case 168:
 		bucketMinutes = 360
 	}
-	table := c.tableRef("query_log")
+	table := c.queryLogRef()
 	query := fmt.Sprintf(`SELECT
 		toStartOfInterval(event_time, INTERVAL %d MINUTE) AS bucket,
 		count() AS count,

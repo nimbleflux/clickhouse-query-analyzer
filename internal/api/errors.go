@@ -1,8 +1,14 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/nimbleflux/clickhouse-query-analyzer/internal/clickhouse"
 )
@@ -20,6 +26,7 @@ const (
 	CodeForbidden     ApiErrorCode = "FORBIDDEN"
 	CodeCHUnreachable ApiErrorCode = "CH_UNREACHABLE"
 	CodeCHException   ApiErrorCode = "CH_EXCEPTION"
+	CodeQueryTimeout  ApiErrorCode = "QUERY_TIMEOUT"
 	CodeInternal      ApiErrorCode = "INTERNAL"
 )
 
@@ -117,13 +124,24 @@ func CHUnreachable(w http.ResponseWriter, isConnect bool, err error) {
 	if isConnect {
 		status = http.StatusBadRequest
 	}
+	hint := "Verify the connection URL and credentials in the top connection bar."
+	// A refused connection is a wrong host/port, not a credentials problem —
+	// say so, and point at the dev-stack ports people actually run.
+	if isRefusedErr(err) {
+		hint = "Connection refused — nothing is listening on that host:port. Check the URL. The dev compose stack listens on clickhouse://localhost:19000 (native) or http://localhost:18123 (HTTP)."
+	}
 	writeApiError(w, newApiError(
 		status,
 		CodeCHUnreachable,
 		extractMessage(err, "ClickHouse is unreachable"),
-		"Verify the connection URL and credentials in the top connection bar.",
+		hint,
 		true,
 	))
+}
+
+// isRefusedErr detects TCP "connection refused" anywhere in the error chain.
+func isRefusedErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "connection refused")
 }
 
 // CHException responds 502 (or 400 for syntax errors) — ClickHouse
@@ -139,13 +157,13 @@ func CHException(w http.ResponseWriter, err error) {
 	status := http.StatusBadGateway
 	hint := ""
 	switch chErr.Code {
+	// CHMissingColumns shares 47 with CHUnknownIdentifier upstream, so one
+	// case covers both.
 	case clickhouse.CHSyntaxError,
 		clickhouse.CHUnknownIdentifier,
 		clickhouse.CHUnknownTable,
 		clickhouse.CHUnknownDatabase,
-		clickhouse.CHUnknownColumn,
 		clickhouse.CHUnknownSetting,
-		clickhouse.CHMissingColumns,
 		clickhouse.CHUnknownAggregateFunction,
 		clickhouse.CHUnknownFormat:
 		status = http.StatusBadRequest
@@ -171,6 +189,43 @@ func Internal(w http.ResponseWriter, err error) {
 	))
 }
 
+// QueryTimeout responds 504 — the query exceeded its budget (either the
+// -query-timeout deadline or a server-side max_execution_time). This is
+// NOT a connection problem: ClickHouse answered, the query was just slow.
+func QueryTimeout(w http.ResponseWriter, err error, budget time.Duration) {
+	msg := "Query exceeded its time budget"
+	if err != nil {
+		msg = extractMessage(err, msg)
+	}
+	hint := "Add a LIMIT or a more selective WHERE, or raise the budget with -query-timeout."
+	if budget > 0 {
+		hint = fmt.Sprintf("The query ran longer than the %s budget. Add a LIMIT or a more selective WHERE, or raise the budget with -query-timeout.", budget)
+	}
+	writeApiError(w, newApiError(
+		http.StatusGatewayTimeout,
+		CodeQueryTimeout,
+		msg,
+		hint,
+		true,
+	))
+}
+
+// isTimeoutErr reports whether err is a local deadline/cancellation timeout
+// (as opposed to a ClickHouse-side exception, which Classify handles).
+func isTimeoutErr(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return false
+}
+
 // respondErr is the central dispatch: given any error returned from a
 // clickhouse client call, pick the right response shape.
 func respondErr(w http.ResponseWriter, err error, isConnect bool) {
@@ -182,11 +237,64 @@ func respondErr(w http.ResponseWriter, err error, isConnect bool) {
 			NotFound(w, "resource")
 			return
 		}
+		if chErr.Code == clickhouse.CHTimeout {
+			QueryTimeout(w, err, 0)
+			return
+		}
 		CHException(w, err)
+		return
+	}
+	// Local deadline exceeded (our -query-timeout / route budgets): a slow
+	// query is not an unreachable server — say so precisely.
+	if isTimeoutErr(err) {
+		QueryTimeout(w, err, 0)
 		return
 	}
 	// Plain transport / auth failure.
 	CHUnreachable(w, isConnect, err)
+}
+
+// apiErrorFromErr mirrors respondErr's dispatch but returns the payload
+// instead of writing it — used by the streaming execute handler, which
+// must serialize errors as NDJSON events after the response head is sent.
+func apiErrorFromErr(err error, budget time.Duration) *ApiError {
+	if chErr, isNotFound := clickhouse.Classify(err); chErr != nil {
+		if isNotFound {
+			return newApiError(http.StatusNotFound, CodeNotFound, "resource not found", "", false)
+		}
+		if chErr.Code == clickhouse.CHTimeout {
+			return timeoutApiError(err, budget)
+		}
+		status := http.StatusBadGateway
+		switch chErr.Code {
+		case clickhouse.CHSyntaxError,
+			clickhouse.CHUnknownIdentifier,
+			clickhouse.CHUnknownTable,
+			clickhouse.CHUnknownDatabase,
+			clickhouse.CHUnknownSetting,
+			clickhouse.CHUnknownAggregateFunction,
+			clickhouse.CHUnknownFormat:
+			status = http.StatusBadRequest
+		}
+		return &ApiError{Message: chErr.Message, Code: CodeCHException, Retry: chErr.IsRetryable(), status: status}
+	}
+	if isTimeoutErr(err) {
+		return timeoutApiError(err, budget)
+	}
+	return newApiError(http.StatusBadGateway, CodeCHUnreachable,
+		extractMessage(err, "ClickHouse is unreachable"),
+		"Verify the connection URL and credentials in the top connection bar.", true)
+}
+
+func timeoutApiError(err error, budget time.Duration) *ApiError {
+	e := newApiError(http.StatusGatewayTimeout, CodeQueryTimeout,
+		extractMessage(err, "Query exceeded its time budget"), "", true)
+	if budget > 0 {
+		e.Hint = fmt.Sprintf("The query ran longer than the %s budget. Add a LIMIT or a more selective WHERE, or raise the budget with -query-timeout.", budget)
+	} else {
+		e.Hint = "Add a LIMIT or a more selective WHERE, or raise the budget with -query-timeout."
+	}
+	return e
 }
 
 // writeApiError serialises an ApiError to the ResponseWriter.

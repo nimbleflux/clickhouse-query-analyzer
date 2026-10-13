@@ -27,7 +27,12 @@ type ExplainEstimate struct {
 	Raw    string `json:"raw,omitempty"`
 }
 
-func (c *Client) GetExplain(ctx context.Context, query string) (*ExplainResult, error) {
+// minPrettyExplainVersion is the ClickHouse release where
+// `EXPLAIN PLAN pretty=1, compact=1` produces the human-readable tree with
+// per-step output columns and JOIN row estimates (26.3/26.4).
+const minPrettyExplainVersion = "26.3"
+
+func (c *Client) GetExplain(ctx context.Context, query string, pretty bool) (*ExplainResult, error) {
 	// EXPLAIN PLAN/PIPELINE/ESTIMATE only parse SELECT-like statements.
 	// Running them on DDL/DML produces five SYNTAX_ERRORs in the ClickHouse
 	// log per view, so short-circuit before touching the connection.
@@ -41,7 +46,15 @@ func (c *Client) GetExplain(ctx context.Context, query string) (*ExplainResult, 
 
 	result := &ExplainResult{Errors: map[string]string{}}
 
-	plan, err := c.runExplain(ctx, "EXPLAIN PLAN", query)
+	// The parsed plan tree (AnalyzePlanTree) is tuned for the classic
+	// explain text, so pretty output is opt-in and surfaced as the raw plan
+	// text only.
+	planExplain := "EXPLAIN PLAN"
+	if pretty && c.Version() != "" && compareVersions(c.Version(), minPrettyExplainVersion) >= 0 {
+		planExplain = "EXPLAIN PLAN pretty = 1, compact = 1"
+	}
+
+	plan, err := c.runExplain(ctx, planExplain, query)
 	if err == nil {
 		result.Plan = plan
 	} else {

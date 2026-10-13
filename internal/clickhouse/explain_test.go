@@ -28,7 +28,7 @@ func TestGetExplain_SkipsNonSelect(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res, err := c.GetExplain(context.Background(), tt.query)
+			res, err := c.GetExplain(context.Background(), tt.query, false)
 			if err != nil {
 				t.Fatalf("GetExplain returned err: %v", err)
 			}
@@ -59,7 +59,7 @@ func TestGetExplain_AttemptsSelect(t *testing.T) {
 		}
 	}()
 	c := &Client{}
-	_, _ = c.GetExplain(context.Background(), "SELECT 1")
+	_, _ = c.GetExplain(context.Background(), "SELECT 1", false)
 }
 
 // TestGetExplainAnalyze_SkipsNonSelect mirrors the planner-only guard:

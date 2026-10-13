@@ -21,9 +21,10 @@ func (a *API) ConnectWithInfo(w http.ResponseWriter, r *http.Request) {
 
 // GetConfig returns server-side default connection settings so the frontend
 // can pre-fill the connection form. The password is never exposed — only a
-// boolean indicating whether one is configured server-side.
+// boolean indicating whether one is configured server-side. Operators can
+// hide the URL/user entirely with -hide-default-connection.
 func (a *API) GetConfig(w http.ResponseWriter, r *http.Request) {
-	if a.defaultURL == "" {
+	if a.defaultURL == "" || a.hideDefaultConnection {
 		writeJSON(w, http.StatusOK, map[string]interface{}{})
 		return
 	}

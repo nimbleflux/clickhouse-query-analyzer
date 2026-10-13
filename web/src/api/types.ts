@@ -34,6 +34,8 @@ export interface QueryListResponse {
   total: number;
   limit: number;
   offset: number;
+  /** True when reads fell back to system.user_query_log (own queries only). */
+  limited_to_own_queries?: boolean;
 }
 
 export interface MetricPoint {
@@ -200,6 +202,25 @@ export interface QueryListParams {
   no_clamp?: boolean;
 }
 
+/** A remote-backed table (S3/URL/Iceberg/…) flagged by the query advisor. */
+export interface RemoteTableInfo {
+  database: string;
+  table: string;
+  engine: string;
+  total_rows: number;
+  queries_24h: number;
+  read_rows_24h: number;
+  read_bytes_24h: number;
+}
+
+/** Advisor block attached to editor results that read remote tables. */
+export interface QueryAdvisor {
+  tables: RemoteTableInfo[];
+  warnings: string[];
+  /** Quick actions: "add_limit" | "add_where" | "set_max_execution_time". */
+  suggestions: string[];
+}
+
 export interface QueryResult {
   columns: { name: string; type: string }[];
   rows: Record<string, any>[];
@@ -210,6 +231,41 @@ export interface QueryResult {
   /** When true, the query had a FORMAT clause and `output` is its raw text. */
   is_text?: boolean;
   output?: string;
+  advisor?: QueryAdvisor;
+}
+
+/** Live snapshot of a running query, polled from system.processes. */
+export interface QueryProgress {
+  elapsed_sec: number;
+  read_rows: number;
+  read_bytes: number;
+  total_rows_approx: number;
+  memory_usage: number;
+  /** ClickHouse's own 0..1 progress estimate (0 when unknown). */
+  progress: number;
+  is_running: boolean;
+}
+
+/** One NDJSON line of the /api/execute streaming response. */
+export interface ExecuteStreamEvent {
+  type: "started" | "progress" | "result" | "error";
+  query_id?: string;
+  progress?: QueryProgress;
+  result?: QueryResult;
+  error?: { error?: string; code?: string; hint?: string; retry?: boolean };
+}
+
+/** A detached execution job (runs server-side, polled for status). */
+export interface DetachedJob {
+  id: string;
+  query_id: string;
+  statement: string;
+  status: "running" | "done" | "error" | "canceled";
+  result?: QueryResult;
+  error?: { error?: string; code?: string; hint?: string; retry?: boolean };
+  progress?: QueryProgress;
+  started_at: string;
+  finished_at?: string;
 }
 
 export interface OptColumn {
@@ -242,6 +298,18 @@ export interface IndexInfo {
   granularity: number;
 }
 
+/** EXPLAIN WHATIF measurement for a suggested skipping index (CH ≥ 26.6). */
+export interface IndexValidation {
+  available: boolean;
+  note?: string;
+  applicable?: string;
+  marks_before?: number;
+  marks_after?: number;
+  skip_ratio_pct?: number;
+  est_bytes_before?: string;
+  est_bytes_after?: string;
+}
+
 export interface Recommendation {
   category: string;
   severity: string;
@@ -253,6 +321,7 @@ export interface Recommendation {
   impact?: string;
   ddl?: string;
   requires_recreate: boolean;
+  validation?: IndexValidation;
 }
 
 export interface TableAnalysis {

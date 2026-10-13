@@ -8,9 +8,9 @@ import { keymap } from "@codemirror/view";
 import { Prec } from "@codemirror/state";
 import { acceptCompletion } from "@codemirror/autocomplete";
 import { format as sqlFormat } from "sql-formatter";
-import { Play, Loader2, Square, Plus, X, Bookmark, BookmarkCheck, Settings2, Share2 } from "lucide-react";
-import { executeQuery, fetchDatabases, fetchTables, fetchColumns } from "@/api/client";
-import type { QueryResult } from "@/api/types";
+import { Play, Loader2, Square, Plus, X, Bookmark, BookmarkCheck, Settings2, Share2, Clock } from "lucide-react";
+import { executeQuery, executeDetached, fetchJob, cancelJob, cancelExecuteQuery, fetchDatabases, fetchTables, fetchColumns } from "@/api/client";
+import type { QueryResult, QueryProgress, DetachedJob } from "@/api/types";
 import { useTheme } from "@/api/theme";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { NotConnectedState, ErrorState } from "@/components/ui/state";
@@ -23,7 +23,7 @@ import {
 import type { SchemaData } from "@/api/schema-cache";
 import {
   loadSavedQueries, addSavedQuery, updateSavedQuery, deleteSavedQuery,
-  detectParams, resolveParams, importSavedQueries,
+  detectParams, importSavedQueries,
   loadParamSets, addParamSet, deleteParamSet, importParamSets,
 } from "@/api/saved-queries";
 import type { SavedQuery } from "@/api/saved-queries";
@@ -36,7 +36,8 @@ import {
   loadHistory, addToHistory, clearHistory,
   PAGE_SIZE_KEY,
 } from "./editor/storage";
-import { splitQueries, formatElapsed, mod } from "./editor/utils";
+import { splitQueries, formatElapsed, formatBytes, errorText, mod } from "./editor/utils";
+import { formatNumber } from "@/utils";
 import { ResultTable } from "./editor/ResultTable";
 import { SchemaSidebar } from "./editor/SchemaSidebar";
 import { SavedQueriesPanel } from "./editor/SavedQueriesPanel";
@@ -65,6 +66,9 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     try { return Number(localStorage.getItem(PAGE_SIZE_KEY)) || 100; } catch { return 100; }
   });
   const [settings, setSettings] = useState<EditorSettings>(loadSettings);
+  const [maxExecSeconds, setMaxExecSeconds] = useState(() => {
+    try { return localStorage.getItem("ch-editor-max-exec") || ""; } catch { return ""; }
+  });
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try { return Number(localStorage.getItem("ch-editor-sidebar-width")) || 256; } catch { return 256; }
   });
@@ -213,6 +217,10 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     try { localStorage.setItem("ch-editor-section-heights", JSON.stringify(sectionHeights)); } catch {}
   }, [sectionHeights]);
 
+  useEffect(() => {
+    try { if (maxExecSeconds) localStorage.setItem("ch-editor-max-exec", maxExecSeconds); else localStorage.removeItem("ch-editor-max-exec"); } catch {}
+  }, [maxExecSeconds]);
+
   const startTimer = useCallback(() => {
     startTimeRef.current = Date.now();
     setElapsed(0);
@@ -243,15 +251,16 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     s["query_profiler_real_time_period_ns"] = settings.query_profiler_real_time_period_ns ? "1000000000" : "0";
     s["query_profiler_cpu_time_period_ns"] = settings.query_profiler_cpu_time_period_ns ? "1000000000" : "0";
     s["allow_introspection_functions"] = settings.allow_introspection_functions ? "1" : "0";
+    if (settings.use_query_cache) {
+      s["use_query_cache"] = "1";
+    }
+    if (maxExecSeconds) {
+      s["max_execution_time"] = maxExecSeconds;
+    }
     return s;
-  }, [settings]);
+  }, [settings, maxExecSeconds]);
 
   const emptyParams = detectedParams.filter((p) => !paramValues[p]?.trim());
-
-  const resolvedSQL = useCallback((raw: string): string => {
-    if (detectedParams.length === 0) return raw;
-    return resolveParams(raw, paramValues);
-  }, [detectedParams, paramValues]);
 
   const runAllQueries = useCallback(async (sqlToRun?: string) => {
     const input = sqlToRun || sqlText;
@@ -265,8 +274,9 @@ export function QueryEditor({ connected }: { connected: boolean }) {
       });
       return;
     }
-    const resolved = resolvedSQL(input);
-    const stmts = splitQueries(resolved);
+    // The SQL runs as written: {{param}} placeholders are bound server-side
+    // as ClickHouse query parameters, so values never touch the SQL text.
+    const stmts = splitQueries(input);
     if (stmts.length === 0) return;
 
     if (!settings.readonly && hasDestructiveStatement(stmts)) {
@@ -275,37 +285,57 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     }
 
     executeStatements(stmts, input);
-  }, [sqlText, activeTab.id, updateTab, resolvedSQL, emptyParams, settings.readonly]);
+  }, [sqlText, activeTab.id, updateTab, emptyParams, settings.readonly]);
+
+  // Streaming execute of one statement. Progress events and the query_id
+  // (needed for Stop → KILL QUERY) flow into the tab state as they arrive.
+  // {{param}} placeholders are bound server-side (ClickHouse parameter
+  // expressions) — the SQL is sent as written.
+  const runOneStatement = useCallback(async (
+    stmt: string,
+    offset: number,
+    signal: AbortSignal | undefined,
+    onProgress: ((p: QueryProgress) => void) | undefined,
+  ): Promise<QueryResult> => {
+    return executeQuery(
+      stmt, pageSize, offset, buildSettingsMap(), settings.readonly, signal,
+      onProgress,
+      (queryId) => updateTab(activeTab.id, { runningQueryId: queryId }),
+      settings.enable_params ? paramValues : undefined,
+    );
+  }, [buildSettingsMap, settings.readonly, settings.enable_params, paramValues, pageSize, activeTab.id, updateTab]);
 
   const executeStatements = useCallback(async (stmts: string[], historyInput: string) => {
-    updateTab(activeTab.id, { results: [], errors: [], running: true, resultPage: 0, statements: stmts });
+    updateTab(activeTab.id, { results: [], errors: [], running: true, resultPage: 0, statements: stmts, progress: null, runningQueryId: undefined });
     abortRef.current = new AbortController();
     startTimer();
 
     const allResults: QueryResult[] = [];
     const allErrors: string[] = [];
-    const chSettings = buildSettingsMap();
 
     for (let i = 0; i < stmts.length; i++) {
+      updateTab(activeTab.id, { runningStatement: i + 1 });
       try {
-        const r = await executeQuery(stmts[i], pageSize, 0, chSettings, settings.readonly, abortRef.current?.signal);
+        const r = await runOneStatement(stmts[i], 0, abortRef.current?.signal, (p) => {
+          updateTab(activeTab.id, { progress: p });
+        });
         allResults.push(r);
         allErrors.push("");
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") break;
         allResults.push({ columns: [], rows: [], row_count: 0, total_rows: -1, timing_ms: 0, query_id: "" });
-        allErrors.push(e instanceof Error ? e.message : "Query failed");
+        allErrors.push(errorText(e));
       }
     }
 
-    updateTab(activeTab.id, { results: allResults, errors: allErrors, running: false, resultPage: 0 });
+    updateTab(activeTab.id, { results: allResults, errors: allErrors, running: false, resultPage: 0, progress: null, runningQueryId: undefined, runningStatement: undefined });
     stopTimer();
     abortRef.current = null;
     if (!allErrors.every((e) => e)) {
       addToHistory(historyInput);
       setQueryHistory(loadHistory());
     }
-  }, [activeTab.id, updateTab, startTimer, stopTimer, buildSettingsMap, settings.readonly, pageSize]);
+  }, [activeTab.id, updateTab, startTimer, stopTimer, runOneStatement]);
 
   const loadResultPage = useCallback(async (page: number) => {
     const stmts = activeTab.statements;
@@ -313,24 +343,23 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     updateTab(activeTab.id, { resultPage: page, pageLoading: true });
     abortRef.current?.abort();
     abortRef.current = new AbortController();
-    const chSettings = buildSettingsMap();
     const offset = page * pageSize;
     const allResults: QueryResult[] = [];
     const allErrors: string[] = [];
     for (let i = 0; i < stmts.length; i++) {
       try {
-        const r = await executeQuery(stmts[i], pageSize, offset, chSettings, settings.readonly, abortRef.current?.signal);
+        const r = await runOneStatement(stmts[i], offset, abortRef.current?.signal, undefined);
         allResults.push(r);
         allErrors.push("");
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         allResults.push({ columns: [], rows: [], row_count: 0, total_rows: -1, timing_ms: 0, query_id: "" });
-        allErrors.push(e instanceof Error ? e.message : "Query failed");
+        allErrors.push(errorText(e));
       }
     }
-    updateTab(activeTab.id, { results: allResults, errors: allErrors, pageLoading: false });
+    updateTab(activeTab.id, { results: allResults, errors: allErrors, pageLoading: false, runningQueryId: undefined });
     abortRef.current = null;
-  }, [activeTab.id, activeTab.statements, updateTab, buildSettingsMap, settings.readonly, pageSize]);
+  }, [activeTab.id, activeTab.statements, updateTab, runOneStatement, pageSize]);
 
   const runSelection = useCallback(async () => {
     const view = (editorRef.current as { view?: { state: { selection: { main: { from: number; to: number; head: number } }; sliceDoc: (from: number, to: number) => string; doc: { toString: () => string } } } })?.view;
@@ -357,13 +386,19 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     return runAllQueries();
   }, [runAllQueries]);
 
+  // Stop = abort the fetch AND kill the query server-side. The abort alone
+  // triggers a best-effort kill in the backend (disconnect watcher), the
+  // explicit KILL QUERY is the guarantee.
   const cancelQuery = useCallback(() => {
+    if (activeTab.runningQueryId) {
+      cancelExecuteQuery(activeTab.runningQueryId);
+    }
     if (abortRef.current) {
       abortRef.current.abort();
       stopTimer();
-      updateTab(activeTab.id, { running: false });
+      updateTab(activeTab.id, { running: false, progress: null, runningQueryId: undefined, runningStatement: undefined });
     }
-  }, [stopTimer, activeTab.id, updateTab]);
+  }, [stopTimer, activeTab.id, activeTab.runningQueryId, updateTab]);
 
   const formatSQL = useCallback(() => {
     setFormatting(true);
@@ -384,6 +419,81 @@ export function QueryEditor({ connected }: { connected: boolean }) {
       setFormatting(false);
     });
   }, [sqlText, setSQLText, settings.enable_params]);
+
+  // Advisor quick actions from the result header. They edit the SQL or the
+  // settings; the user re-runs from there.
+  const applySuggestion = useCallback((action: string) => {
+    if (action === "add_limit") {
+      const current = sqlText.trimEnd();
+      if (!/\blimit\b/i.test(current.split("\n").pop() || "")) {
+        setSQLText(`${current}\nLIMIT 1000`);
+      }
+    } else if (action === "set_max_execution_time") {
+      setMaxExecSeconds("300");
+    }
+  }, [sqlText, setSQLText]);
+
+  // Detached execution: the statement runs server-side, decoupled from this
+  // request — long S3 scans survive reverse-proxy timeouts entirely. The
+  // job is polled for progress and the result lands in the tab when done.
+  const [detachedJob, setDetachedJob] = useState<DetachedJob | null>(null);
+  const detachedPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopDetachedPoll = useCallback(() => {
+    if (detachedPollRef.current) {
+      clearInterval(detachedPollRef.current);
+      detachedPollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => stopDetachedPoll, [stopDetachedPoll]);
+
+  const runDetached = useCallback(async () => {
+    if (emptyParams.length > 0) return;
+    const stmts = splitQueries(sqlText);
+    if (stmts.length !== 1) return; // detached is single-statement by design
+    const stmt = stmts[0];
+    if (!settings.readonly && hasDestructiveStatement([stmt])) {
+      // Destructive statements run through the confirm dialog's normal path.
+      setPendingSql(sqlText);
+      return;
+    }
+    stopDetachedPoll();
+    try {
+      const started = await executeDetached(stmt, pageSize, 0, buildSettingsMap(), settings.enable_params ? paramValues : undefined);
+      setDetachedJob({ id: started.job_id, query_id: started.query_id, statement: stmt, status: "running", started_at: new Date().toISOString() });
+      detachedPollRef.current = setInterval(async () => {
+        try {
+          const j = await fetchJob(started.job_id);
+          setDetachedJob(j);
+          if (j.status !== "running") {
+            stopDetachedPoll();
+            if (j.status === "done" && j.result) {
+              updateTab(activeTab.id, { results: [j.result], errors: [""], running: false, resultPage: 0, statements: [stmt] });
+              addToHistory(sqlText);
+              setQueryHistory(loadHistory());
+            } else {
+              const msg = j.error
+                ? `${j.error.error ?? "Job failed"}${j.error.hint ? ` — ${j.error.hint}` : ""}`
+                : "Job canceled";
+              updateTab(activeTab.id, { results: [], errors: [msg], running: false, resultPage: 0 });
+            }
+            setDetachedJob(null);
+          }
+        } catch {
+          // transient poll errors are ignored; the next tick retries
+        }
+      }, 1500);
+    } catch (e) {
+      updateTab(activeTab.id, { results: [], errors: [errorText(e)], running: false, resultPage: 0 });
+    }
+  }, [sqlText, emptyParams.length, settings.readonly, settings.enable_params, paramValues, buildSettingsMap, pageSize, activeTab.id, updateTab, stopDetachedPoll]);
+
+  const cancelDetachedJob = useCallback(async () => {
+    if (detachedJob) {
+      await cancelJob(detachedJob.id);
+    }
+  }, [detachedJob]);
 
   const runAllQueriesRef = useRef(runAllQueries);
   runAllQueriesRef.current = runAllQueries;
@@ -796,7 +906,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
             const sql = pendingSql;
             setPendingSql(null);
             if (sql) {
-              const stmts = splitQueries(resolvedSQL(sql));
+              const stmts = splitQueries(sql);
               executeStatements(stmts, sql);
             }
           }}
@@ -884,21 +994,53 @@ export function QueryEditor({ connected }: { connected: boolean }) {
                 Stop
               </button>
             ) : (
-              <button
-                onClick={() => runAllQueries()}
-                disabled={!sqlText.trim()}
-                className="flex items-center gap-1.5 rounded bg-[var(--color-accent)] px-3 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
-              >
-                <Play className="h-3 w-3" />
-                Run
-              </button>
+              <>
+                <button
+                  onClick={() => runAllQueries()}
+                  disabled={!sqlText.trim()}
+                  className="flex items-center gap-1.5 rounded bg-[var(--color-accent)] px-3 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  <Play className="h-3 w-3" />
+                  Run
+                </button>
+                <button
+                  onClick={runDetached}
+                  disabled={!sqlText.trim() || splitQueries(sqlText).length !== 1 || emptyParams.length > 0}
+                  title="Run detached: the query runs server-side and outlives proxies/timeouts. Single statements only; poll here for progress."
+                  className="flex items-center gap-1.5 rounded border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
+                >
+                  <Clock className="h-3 w-3" />
+                  Detached
+                </button>
+              </>
             )}
             <span className="text-[10px] text-[var(--color-text-secondary)]" title="Run all queries">{mod}+Enter</span>
             <span className="text-[10px] text-[var(--color-text-secondary)]" title="Run selection or statement at cursor">/ {mod}+Shift+Enter</span>
             {activeTab?.running && (
-              <span className="ml-2 flex items-center gap-1.5 font-mono text-xs text-[var(--color-accent)]">
+              <span className="ml-2 flex items-center gap-2 font-mono text-xs text-[var(--color-accent)]">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 {formatElapsed(elapsed)}
+                {activeTab.statements && activeTab.statements.length > 1 && activeTab.runningStatement != null && (
+                  <span className="text-[var(--color-text-secondary)]">
+                    stmt {activeTab.runningStatement}/{activeTab.statements.length}
+                  </span>
+                )}
+                {activeTab.progress && (
+                  <span className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-secondary)]">
+                    <span>{(activeTab.progress.progress * 100).toFixed(0)}%</span>
+                    <span title="Rows read from ClickHouse">{formatNumber(activeTab.progress.read_rows)} rows</span>
+                    <span title="Bytes read from ClickHouse">{formatBytes(activeTab.progress.read_bytes)}</span>
+                  </span>
+                )}
+              </span>
+            )}
+            {detachedJob?.status === "running" && (
+              <span className="ml-2 flex items-center gap-2 font-mono text-xs text-[var(--color-accent)]">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                detached {detachedJob.progress ? `${(detachedJob.progress.progress * 100).toFixed(0)}% · ${formatNumber(detachedJob.progress.read_rows)} rows` : "started"}
+                <button onClick={cancelDetachedJob} className="text-[var(--color-error)] hover:underline" title="Cancel the detached job (KILL QUERY)">
+                  cancel
+                </button>
               </span>
             )}
             {!activeTab?.running && activeTab?.results.length > 0 && (
@@ -959,6 +1101,8 @@ export function QueryEditor({ connected }: { connected: boolean }) {
               onChange={onSettingsChange}
               pageSize={pageSize}
               onPageSizeChange={setPageSize}
+              maxExecSeconds={maxExecSeconds}
+              onMaxExecChange={setMaxExecSeconds}
             />
           )}
           <div style={{ height: editorHeight }}>
@@ -1038,6 +1182,8 @@ export function QueryEditor({ connected }: { connected: boolean }) {
                       pageSize={pageSize}
                       resultPage={activeTab.resultPage}
                       pageLoading={activeTab.pageLoading}
+                      statement={activeTab.statements?.[i]}
+                      onSuggestion={applySuggestion}
                       setResultPage={(fn) => {
                         const next = fn(activeTab.resultPage);
                         loadResultPage(next);

@@ -83,7 +83,65 @@ func hideSystemQueriesClause() string {
 	return "log_comment != '" + managedLogComment + "'"
 }
 
+// minUserQueryLogVersion is the ClickHouse release that added
+// system.user_query_log (26.8): a per-user view of query history for users
+// without access to the full system.query_log.
+const minUserQueryLogVersion = "26.8"
+
+// queryLogRef returns the table to read for query history. After an
+// ACCESS_DENIED flip (see tryUserQueryLogFallback) reads go to
+// system.user_query_log instead — node-local, never cluster-wide.
+func (c *Client) queryLogRef() string {
+	if c.queryLogFallback.Load() {
+		return "system.user_query_log"
+	}
+	return c.tableRef("query_log")
+}
+
+// UsingUserQueryLog reports whether query-history reads are limited to the
+// connecting user's own queries (so the UI can badge it).
+func (c *Client) UsingUserQueryLog() bool { return c.queryLogFallback.Load() }
+
+// tryUserQueryLogFallback reacts to an ACCESS_DENIED error reading
+// system.query_log: probes system.user_query_log once and, when it works,
+// switches all query-history reads to it. Returns true when the caller
+// should retry with queryLogRef().
+func (c *Client) tryUserQueryLogFallback(ctx context.Context, err error) bool {
+	if c.queryLogFallback.Load() {
+		return false
+	}
+	chErr, _ := Classify(err)
+	if chErr == nil || chErr.Code != CHAccessDenied {
+		return false
+	}
+	if !c.queryLogDenied.CompareAndSwap(false, true) {
+		return false
+	}
+	if c.Version() != "" && compareVersions(c.Version(), minUserQueryLogVersion) < 0 {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var one uint8
+	if perr := c.conn.QueryRow(probeCtx, "SELECT 1 FROM system.user_query_log LIMIT 1").Scan(&one); perr != nil {
+		return false
+	}
+	c.queryLogFallback.Store(true)
+	return true
+}
+
 func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]QueryLogEntry, uint64, error) {
+	entries, total, err := c.listQueriesWithTable(ctx, params, c.queryLogRef())
+	if err != nil {
+		if c.tryUserQueryLogFallback(ctx, err) {
+			return c.listQueriesWithTable(ctx, params, c.queryLogRef())
+		}
+		return nil, 0, err
+	}
+	return entries, total, nil
+}
+
+func (c *Client) listQueriesWithTable(ctx context.Context, params QueryListParams, table string) ([]QueryLogEntry, uint64, error) {
 	if params.Limit <= 0 {
 		params.Limit = defaultListParams.Limit
 	}
@@ -99,8 +157,6 @@ func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]Que
 	if params.SortDir == "" {
 		params.SortDir = defaultListParams.SortDir
 	}
-
-	table := c.tableRef("query_log")
 
 	// PREWHERE: selective filters on cheap columns (date range + search).
 	// ClickHouse reads only these columns first, then reads expensive columns
@@ -263,7 +319,7 @@ func (c *Client) GetQuery(ctx context.Context, queryID string) (*QueryLogEntry, 
 // fallback. Returns (nil, true, err) when neither source has the row and a
 // retry might help (the race window).
 func (c *Client) getQueryOnce(ctx context.Context, queryID string) (*QueryLogEntry, bool, error) {
-	table := c.tableRef("query_log")
+	table := c.queryLogRef()
 	query := fmt.Sprintf(`SELECT
 		type, event_time, query_start_time, query_duration_ms, query_id, query,
 		normalized_query_hash, query_kind, user,
@@ -377,7 +433,7 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 		params.Offset = 0
 	}
 
-	table := c.tableRef("query_log")
+	table := c.queryLogRef()
 
 	// PREWHERE: selective filters on cheap columns (date range + search).
 	// Mirrors ListQueries: pruning on event_time (the partition key) before
@@ -522,7 +578,7 @@ type FingerprintQuery struct {
 }
 
 func (c *Client) ListFingerprintQueries(ctx context.Context, hash uint64, limit int, offset int) ([]FingerprintQuery, uint64, error) {
-	table := c.tableRef("query_log")
+	table := c.queryLogRef()
 
 	if limit <= 0 {
 		limit = 20

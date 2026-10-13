@@ -1,25 +1,9 @@
 <clickhouse>
-    <storage_configuration>
-        <disks>
-            <disk_s3>
-                <type>s3</type>
-                <endpoint>http://minio:9000/clickhouse-data/data/</endpoint>
-                <access_key_id>minioadmin</access_key_id>
-                <secret_access_key>minioadmin123</secret_access_key>
-                <metadata_path>/var/lib/clickhouse/disks/disk_s3/</metadata_path>
-                <cache_enabled>true</cache_enabled>
-            </disk_s3>
-        </disks>
-        <policies>
-            <s3_policy>
-                <volumes>
-                    <main>
-                        <disk>disk_s3</disk>
-                    </main>
-                </volumes>
-            </s3_policy>
-        </policies>
-    </storage_configuration>
+    <!-- The S3 disk + storage policy moved to s3-storage.xml, mounted only
+         by the `s3` compose profile. ClickHouse validates disks at startup,
+         so a static S3 disk here would pin the whole dev stack to MinIO —
+         whose community images are no longer publicly pullable (Docker Hub
+         repo deleted, quay.io repo now auth-required). -->
 
     <query_log>
         <database>system</database>

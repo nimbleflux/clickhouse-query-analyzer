@@ -77,6 +77,9 @@ type Recommendation struct {
 	Impact           string `json:"impact,omitempty"`
 	DDL              string `json:"ddl,omitempty"`
 	RequiresRecreate bool   `json:"requires_recreate"`
+	// Validation carries EXPLAIN WHATIF measurements for skipping-index
+	// suggestions (ClickHouse ≥ 26.6, single-table analysis only).
+	Validation *IndexValidation `json:"validation,omitempty"`
 }
 
 type confidenceCtx struct {
@@ -159,10 +162,13 @@ type BulkEvent struct {
 	Done     *BulkDone      `json:"done,omitempty"`
 }
 
-func (c *Client) AnalyzeTable(ctx context.Context, database, table string) (*TableAnalysis, error) {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
+// perTableAnalysisBudget caps one table inside a bulk analysis stream. The
+// single-table HTTP route provides -query-timeout itself, so AnalyzeTable no
+// longer hard-codes a deadline — the old 60s silently truncated very large
+// tables.
+const perTableAnalysisBudget = 5 * time.Minute
 
+func (c *Client) AnalyzeTable(ctx context.Context, database, table string) (*TableAnalysis, error) {
 	analysis := &TableAnalysis{
 		Database:   database,
 		Table:      table,
@@ -271,7 +277,9 @@ func (c *Client) StreamBulkAnalysis(ctx context.Context, database string, filter
 			},
 		})
 
-		analysis, err := c.AnalyzeTable(ctx, database, t.Name)
+		tableCtx, tableCancel := context.WithTimeout(ctx, perTableAnalysisBudget)
+		analysis, err := c.AnalyzeTable(tableCtx, database, t.Name)
+		tableCancel()
 		if err != nil {
 			errors++
 			fn(BulkEvent{
@@ -491,7 +499,7 @@ func (c *Client) recommendLowCardinality(a *TableAnalysis, cc confidenceCtx) []R
 			Current:     col.Type,
 			Suggested:   newType,
 			Impact:      fmt.Sprintf("Reduces storage by ~%s, speeds up GROUP BY and IN operations", estimatedSavings),
-			DDL:         fmt.Sprintf("ALTER TABLE `%s`.`%s` MODIFY COLUMN `%s` %s;", a.Database, a.Table, col.Name, newType),
+			DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s;", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), newType),
 		})
 	}
 	return recs
@@ -527,7 +535,7 @@ func (c *Client) recommendIntegerResize(a *TableAnalysis, cc confidenceCtx) []Re
 			Current:     col.Type,
 			Suggested:   newType,
 			Impact:      fmt.Sprintf("Reduces column size from %d bytes to %d bytes per value", intTypeSize(stripNullable(col.Type)), intTypeSize(suggested)),
-			DDL:         fmt.Sprintf("ALTER TABLE `%s`.`%s` MODIFY COLUMN `%s` %s;", a.Database, a.Table, col.Name, newType),
+			DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s;", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), newType),
 		})
 	}
 	return recs
@@ -557,7 +565,7 @@ func (c *Client) recommendRemoveNullable(a *TableAnalysis, cc confidenceCtx) []R
 			Current:     col.Type,
 			Suggested:   inner,
 			Impact:      "Eliminates null bitmap overhead, improves scan performance",
-			DDL:         fmt.Sprintf("ALTER TABLE `%s`.`%s` MODIFY COLUMN `%s` %s;", a.Database, a.Table, col.Name, inner),
+			DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s;", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), inner),
 		})
 	}
 	return recs
@@ -622,7 +630,7 @@ func (c *Client) recommendOrderBy(a *TableAnalysis, cc confidenceCtx) []Recommen
 		Current:          "(none)",
 		Suggested:        suggested,
 		Impact:           "Enables proper data compression and efficient range scans",
-		DDL:              fmt.Sprintf("-- Requires table recreation:\n-- CREATE TABLE `%s`.`%s` ... ORDER BY (%s);", a.Database, a.Table, suggested),
+		DDL:              fmt.Sprintf("-- Requires table recreation:\n-- CREATE TABLE %s.%s ... ORDER BY (%s);", quoteID(a.Database), quoteID(a.Table), suggested),
 		RequiresRecreate: true,
 	})
 	return recs
@@ -645,7 +653,7 @@ func (c *Client) recommendPartitionBy(a *TableAnalysis, cc confidenceCtx) []Reco
 					Current:          "(none)",
 					Suggested:        expr,
 					Impact:           "Enables partition pruning for date-filtered queries, supports efficient DROP PARTITION for data retention",
-					DDL:              fmt.Sprintf("-- Requires table recreation:\n-- CREATE TABLE `%s`.`%s` ... PARTITION BY %s;", a.Database, a.Table, expr),
+					DDL:              fmt.Sprintf("-- Requires table recreation:\n-- CREATE TABLE %s.%s ... PARTITION BY %s;", quoteID(a.Database), quoteID(a.Table), expr),
 					RequiresRecreate: true,
 				})
 				break
@@ -731,12 +739,12 @@ func (c *Client) recommendSkippingIndices(a *TableAnalysis, cc confidenceCtx) []
 		if col.TotalSampled == 0 {
 			continue
 		}
-		colExpr := fmt.Sprintf("`%s`", col.Name)
+		colExpr := quoteID(col.Name)
 		if existingIdxCols[colExpr] {
 			continue
 		}
 
-		idxName := fmt.Sprintf("idx_%s", col.Name)
+		idxName := quoteID(fmt.Sprintf("idx_%s", col.Name))
 		conf := cc.forCategory("index").withSample(col.TotalSampled).assess()
 
 		if isStringType(col.Type) {
@@ -751,7 +759,7 @@ func (c *Client) recommendSkippingIndices(a *TableAnalysis, cc confidenceCtx) []
 					Current:     "(none)",
 					Suggested:   fmt.Sprintf("bloom_filter(%s)", colExpr),
 					Impact:      "Speeds up WHERE col = ... and WHERE col LIKE ... queries by skipping granules",
-					DDL:         fmt.Sprintf("ALTER TABLE `%s`.`%s` ADD INDEX %s bloom_filter(%s) TYPE bloom_filter GRANULARITY 4;", a.Database, a.Table, idxName, colExpr),
+					DDL:         fmt.Sprintf("ALTER TABLE %s.%s ADD INDEX %s bloom_filter(%s) TYPE bloom_filter GRANULARITY 4;", quoteID(a.Database), quoteID(a.Table), idxName, colExpr),
 				})
 			}
 		} else if isNumericType(col.Type) {
@@ -764,7 +772,7 @@ func (c *Client) recommendSkippingIndices(a *TableAnalysis, cc confidenceCtx) []
 				Current:     "(none)",
 				Suggested:   fmt.Sprintf("minmax(%s)", colExpr),
 				Impact:      "Speeds up WHERE col > ... and WHERE col BETWEEN ... queries",
-				DDL:         fmt.Sprintf("ALTER TABLE `%s`.`%s` ADD INDEX %s minmax(%s) TYPE minmax GRANULARITY 4;", a.Database, a.Table, idxName, colExpr),
+				DDL:         fmt.Sprintf("ALTER TABLE %s.%s ADD INDEX %s minmax(%s) TYPE minmax GRANULARITY 4;", quoteID(a.Database), quoteID(a.Table), idxName, colExpr),
 			})
 		}
 	}
@@ -794,7 +802,7 @@ func (c *Client) recommendCodecs(a *TableAnalysis, cc confidenceCtx) []Recommend
 					Current:     col.Type,
 					Suggested:   col.Type + " CODEC(DoubleDelta, LZ4)",
 					Impact:      "Can reduce storage by 90%+ for timestamp columns",
-					DDL:         fmt.Sprintf("ALTER TABLE `%s`.`%s` MODIFY COLUMN `%s` %s CODEC(DoubleDelta, LZ4);", a.Database, a.Table, col.Name, col.Type),
+					DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s CODEC(DoubleDelta, LZ4);", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), col.Type),
 				})
 			} else {
 				recs = append(recs, Recommendation{
@@ -806,7 +814,7 @@ func (c *Client) recommendCodecs(a *TableAnalysis, cc confidenceCtx) []Recommend
 					Current:     col.Type,
 					Suggested:   col.Type + " CODEC(Gorilla, LZ4)",
 					Impact:      "Reduces storage for timestamp/time-series data",
-					DDL:         fmt.Sprintf("ALTER TABLE `%s`.`%s` MODIFY COLUMN `%s` %s CODEC(Gorilla, LZ4);", a.Database, a.Table, col.Name, col.Type),
+					DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s CODEC(Gorilla, LZ4);", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), col.Type),
 				})
 			}
 			continue
@@ -822,7 +830,7 @@ func (c *Client) recommendCodecs(a *TableAnalysis, cc confidenceCtx) []Recommend
 				Current:     col.Type,
 				Suggested:   col.Type + " CODEC(Delta, LZ4)",
 				Impact:      "Reduces storage for sequential integer columns",
-				DDL:         fmt.Sprintf("ALTER TABLE `%s`.`%s` MODIFY COLUMN `%s` %s CODEC(Delta, LZ4);", a.Database, a.Table, col.Name, col.Type),
+				DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s CODEC(Delta, LZ4);", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), col.Type),
 			})
 			continue
 		}
@@ -839,7 +847,7 @@ func (c *Client) recommendCodecs(a *TableAnalysis, cc confidenceCtx) []Recommend
 					Current:     col.Type,
 					Suggested:   col.Type + " CODEC(ZSTD(3))",
 					Impact:      "Improves compression ratio for high-cardinality strings",
-					DDL:         fmt.Sprintf("ALTER TABLE `%s`.`%s` MODIFY COLUMN `%s` %s CODEC(ZSTD(3));", a.Database, a.Table, col.Name, col.Type),
+					DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s CODEC(ZSTD(3));", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), col.Type),
 				})
 			}
 		}
