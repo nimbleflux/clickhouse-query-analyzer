@@ -165,7 +165,6 @@ export function Dashboard({ connected }: { connected: boolean }) {
   return (
     <PageContainer>
       <PageHeader
-        heading="h2"
         title="System Dashboard"
         description={(data.nodes?.length ?? 0) > 0 ? `ClickHouse v${data.nodes[0].version}` : undefined}
         actions={

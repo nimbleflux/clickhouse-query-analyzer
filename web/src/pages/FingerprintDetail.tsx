@@ -154,7 +154,6 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
   return (
     <PageContainer>
       <PageHeader
-        heading="h2"
         title="Query Fingerprint"
         breadcrumb={
           <Link to="/fingerprints" className="flex items-center gap-1 text-xs hover:text-[var(--color-accent)]">
