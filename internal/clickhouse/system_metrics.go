@@ -2,19 +2,36 @@ package clickhouse
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 )
+
+// finiteFloat marshals NaN/Inf as null. JSON has no representation for
+// non-finite floats — several asynchronous_metrics are NaN on containers
+// (disk stats over overlayfs, for example) — and a marshal failure inside
+// writeJSON used to swallow the whole response into an empty 200.
+type finiteFloat float64
+
+func (f finiteFloat) MarshalJSON() ([]byte, error) {
+	if math.IsNaN(float64(f)) || math.IsInf(float64(f), 0) {
+		return []byte("null"), nil
+	}
+	// Delegate to the standard encoder so finite values keep the exact
+	// representation encoding/json always produced.
+	return json.Marshal(float64(f))
+}
 
 // AsyncMetric is one row of system.asynchronous_metrics — a periodically
 // sampled gauge (OS stats, caches, memory trackers, load, etc.) tagged with
 // the node it came from. The table holds the latest sample for each metric;
 // history lives in system.asynchronous_metric_log (not exposed here — phase b).
 type AsyncMetric struct {
-	Host        string  `json:"host"`
-	Metric      string  `json:"metric"`
-	Value       float64 `json:"value"`
-	Description string  `json:"description"`
+	Host        string      `json:"host"`
+	Metric      string      `json:"metric"`
+	Value       finiteFloat `json:"value"`
+	Description string      `json:"description"`
 }
 
 // AsyncMetricsOverview wraps the metric rows with the set of nodes they span.
@@ -49,9 +66,13 @@ func (c *Client) ListAsyncMetrics(ctx context.Context) (*AsyncMetricsOverview, e
 	seen := map[string]struct{}{}
 	for rows.Next() {
 		var m AsyncMetric
-		if err := rows.Scan(&m.Host, &m.Metric, &m.Value, &m.Description); err != nil {
+		// Scan the value as plain float64 — the driver assigns strictly by
+		// type, and finiteFloat is only a marshal-time wrapper.
+		var value float64
+		if err := rows.Scan(&m.Host, &m.Metric, &value, &m.Description); err != nil {
 			return nil, fmt.Errorf("scanning asynchronous_metric row: %w", err)
 		}
+		m.Value = finiteFloat(value)
 		out.Metrics = append(out.Metrics, m)
 		if _, ok := seen[m.Host]; !ok {
 			seen[m.Host] = struct{}{}

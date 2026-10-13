@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"strings"
@@ -13,18 +14,29 @@ import (
 )
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	// Keep nil slices as [] — handlers don't all normalize, and the frontend
+	// maps over responses directly.
+	if v != nil {
+		rv := reflect.ValueOf(v)
+		if rv.Kind() == reflect.Slice && rv.IsNil() {
+			v = []any{}
+		}
+	}
+	// Marshal before touching the ResponseWriter: if encoding fails (e.g. a
+	// NaN slipped through), headers haven't been sent yet and we can still
+	// return a well-formed 500 instead of an empty 200 the frontend then
+	// chokes on with "unexpected end of data".
+	b, err := json.Marshal(v)
+	if err != nil {
+		slog.Error("encoding JSON response", "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"response encoding failed","code":"INTERNAL","retry":false}`))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if v == nil {
-		w.Write([]byte("null"))
-		return
-	}
-	rv := reflect.ValueOf(v)
-	if rv.Kind() == reflect.Slice && rv.IsNil() {
-		w.Write([]byte("[]"))
-		return
-	}
-	json.NewEncoder(w).Encode(v)
+	w.Write(b)
 }
 
 type API struct {
