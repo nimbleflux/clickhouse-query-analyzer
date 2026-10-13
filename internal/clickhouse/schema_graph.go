@@ -89,6 +89,9 @@ type SchemaGraphDbCount struct {
 
 // SchemaGraph is the full response for the schema visualizer.
 type SchemaGraph struct {
+	// Database is the resolved selection: the explicit filter, or the
+	// auto-picked first database when the caller sent none.
+	Database      string               `json:"database,omitempty"`
 	Nodes         []SchemaGraphNode    `json:"nodes"`
 	Edges         []SchemaGraphEdge    `json:"edges"`
 	Databases     []SchemaGraphDbCount `json:"databases"`
@@ -158,16 +161,33 @@ type schemaTable struct {
 
 // GetSchemaGraph builds the table/dependency graph. loadDays > 0 additionally
 // aggregates system.query_views_log into the per-MV load heat-map. dbFilter
-// restricts the graph to one database server-side (the default page view);
-// the databases summary always covers the whole instance.
-func (c *Client) GetSchemaGraph(ctx context.Context, loadDays int, dbFilter string) (*SchemaGraph, error) {
+// restricts the graph to one database server-side — the default: with no
+// filter the first database (alphabetical) is auto-selected, because
+// unfiltered graphs don't scale past a handful of tables. includeAll lifts
+// that restriction for an explicit "All databases" request (still capped).
+// The databases summary always covers the whole instance, and the resolved
+// selection is returned in the response.
+func (c *Client) GetSchemaGraph(ctx context.Context, loadDays int, dbFilter string, includeAll bool) (*SchemaGraph, error) {
 	graph := &SchemaGraph{Nodes: []SchemaGraphNode{}, Edges: []SchemaGraphEdge{}}
+
+	// Full-instance summary: both the picker options and the auto-selection
+	// source. Cheap (one GROUP BY over system.tables metadata).
+	graph.Databases = c.schemaDbCounts(ctx)
+
+	if dbFilter == "" && !includeAll {
+		if len(graph.Databases) > 0 {
+			dbFilter = graph.Databases[0].Database
+		} else {
+			// No user tables anywhere — return the empty graph.
+			return graph, nil
+		}
+	}
+	graph.Database = dbFilter
 
 	tables, err := c.loadSchemaTables(ctx, graph, dbFilter)
 	if err != nil {
 		return nil, err
 	}
-	graph.Databases = c.schemaDbCounts(ctx)
 	if len(tables) > maxSchemaGraphNodes {
 		tables = tables[:maxSchemaGraphNodes]
 		graph.Truncated = true

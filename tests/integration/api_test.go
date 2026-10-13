@@ -329,7 +329,8 @@ func TestIntegration_SchemaGraph(t *testing.T) {
 		}
 	}
 
-	w := makeReq(t, router, "GET", "/api/schema/graph", chHeaders(), "")
+	// all=1: the full unfiltered graph (capped).
+	w := makeReq(t, router, "GET", "/api/schema/graph?all=1", chHeaders(), "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -466,5 +467,45 @@ func TestIntegration_ExecuteNativeEdgeCases(t *testing.T) {
 	}
 	if row["n"] != nil {
 		t.Errorf("nullable NULL: got %v", row["n"])
+	}
+}
+
+// Auto mode: no database param and no all=1 → the server picks the first
+// database and scopes the whole graph to it in a single response, so the UI
+// never loads every database at once.
+func TestIntegration_SchemaGraphAutoSelectsFirstDb(t *testing.T) {
+	_, router := setupIntegrationAPI(t)
+
+	w := makeReq(t, router, "GET", "/api/schema/graph", chHeaders(), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var graph struct {
+		Database string `json:"database"`
+		Nodes    []struct {
+			Database string `json:"database"`
+		} `json:"nodes"`
+		Databases []struct {
+			Database string `json:"database"`
+			Tables   int    `json:"tables"`
+		} `json:"databases"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&graph); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if graph.Database == "" {
+		t.Fatal("expected a resolved database in the response")
+	}
+	if len(graph.Nodes) == 0 {
+		t.Fatal("expected nodes for the auto-selected database")
+	}
+	for _, n := range graph.Nodes {
+		if n.Database != graph.Database {
+			t.Errorf("auto-scoped graph leaked node from %q (selected %q)", n.Database, graph.Database)
+		}
+	}
+	// The picker summary must still cover every database.
+	if len(graph.Databases) < 2 {
+		t.Errorf("databases summary should list all databases, got %v", graph.Databases)
 	}
 }
