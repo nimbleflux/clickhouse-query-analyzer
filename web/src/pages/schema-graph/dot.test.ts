@@ -152,16 +152,31 @@ describe("buildAdjacency", () => {
 });
 
 describe("computeHeat", () => {
+  const load = {
+    view: "events_daily_mv",
+    executions: 10,
+    total_duration_ms: 5000,
+    total_written_rows: 30,
+    total_written_bytes: 1024,
+    total_read_rows: 10000,
+    total_read_bytes: 450322,
+    peak_memory_usage: 4096,
+  };
+
   it("normalizes durations log-scaled into 0..1", () => {
-    const heat = computeHeat({
-      nodes: fixture.nodes,
-      load: [{ view: "events_daily_mv", executions: 10, total_duration_ms: 5000 }],
-    });
+    const heat = computeHeat({ nodes: fixture.nodes, load: [load] });
     expect(heat.get("analytics.events_daily_mv")).toBeGreaterThan(0);
     expect(heat.get("analytics.events_daily_mv")).toBeLessThanOrEqual(1);
   });
+  it("switches field with the metric", () => {
+    const a = computeHeat({ nodes: fixture.nodes, load: [load] }, "duration");
+    const b = computeHeat({ nodes: fixture.nodes, load: [load] }, "peak_memory");
+    // Different metrics normalize to different relative values.
+    expect(a.get("analytics.events_daily_mv")).not.toBeNaN();
+    expect(b.get("analytics.events_daily_mv")).toBe(1); // single row → max
+  });
   it("ignores views with no matching node", () => {
-    const heat = computeHeat({ nodes: fixture.nodes, load: [{ view: "ghost", executions: 1, total_duration_ms: 10 }] });
+    const heat = computeHeat({ nodes: fixture.nodes, load: [{ ...load, view: "ghost" }] });
     expect(heat.size).toBe(0);
   });
 });
