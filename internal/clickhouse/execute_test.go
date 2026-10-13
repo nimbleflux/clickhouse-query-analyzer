@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -228,7 +229,7 @@ func TestNewQueryID(t *testing.T) {
 func TestCountQueryRowsRejectsNonSelect(t *testing.T) {
 	c := &Client{}
 	for _, q := range []string{"DROP TABLE t", "SELECT 1 FORMAT Pretty", "SHOW GRANTS"} {
-		n, err := c.CountQueryRows(nil, q)
+		n, err := c.CountQueryRows(context.Background(), q)
 		if err != nil {
 			t.Fatalf("%q: unexpected error %v", q, err)
 		}

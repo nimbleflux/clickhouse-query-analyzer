@@ -148,7 +148,7 @@ make dev
 
 The dev ClickHouse runs on ports 18123 (HTTP) and 19000 (native) to avoid conflicts with existing instances. Connect using `clickhouse://localhost:19000` or `http://localhost:18123`.
 
-The default `make dev-clickhouse` starts a single ClickHouse node plus MinIO (the S3 disk in `config.xml` is validated at startup, so MinIO must be present). That's all most query-analysis work needs. The replication demo stack is opt-in to avoid holding CPU and memory for a second full ClickHouse server + Keeper while idle:
+The default `make dev-clickhouse` starts a single ClickHouse node only — no external dependencies. The replication demo stack (2nd node + Keeper) and the S3 stack (MinIO + S3 storage disk) are opt-in profiles:
 
 ```bash
 # Replication + DDL dashboards: a 2nd node + Keeper, then seed ReplicatedMergeTree
@@ -157,6 +157,15 @@ make seed-replication
 ```
 
 `make seed-replication` auto-starts the replication stack, so it also works as a one-shot. The second replica has no host ports — it's reached over the internal Docker network for replication only.
+
+```bash
+# S3 stack: MinIO + a ClickHouse node with the S3 disk (ports 18223/19100),
+# for the remote-table advisor and S3-engine demos
+make dev-clickhouse-s3
+docker exec -i dev-clickhouse-s3-1 clickhouse-client < dev/seed-s3.sql
+```
+
+> **Note on the S3 stack:** MinIO removed its public container images (the Docker Hub repo was deleted and the quay.io repo now requires auth), so `make dev-clickhouse-s3` only works if you already have the images locally or can pull them from a registry you have access to. The default and replication stacks are unaffected.
 
 ## Setup & Diagnostics
 

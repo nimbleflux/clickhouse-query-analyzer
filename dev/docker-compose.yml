@@ -1,18 +1,24 @@
 services:
   # ---------------------------------------------------------------------------
-  # Default stack: a single ClickHouse node + MinIO. This is what `make dev`
-  # starts. ClickHouse validates the S3 disk (disk_s3, declared in config.xml)
-  # at startup, so minio must be present — hence it stays in the default stack
-  # rather than behind a profile. MinIO is light at idle (~100–200 MB); the
-  # big saving is dropping the *second* full ClickHouse server + Keeper.
+  # Default stack: a single ClickHouse node. This is what `make dev` starts.
+  # It has no external dependencies (see the note on the `s3` profile below
+  # for why MinIO moved out of the default stack).
   #
-  # The replication stack (a 2nd ClickHouse node + Keeper) is opt-in — see
-  # `make dev-clickhouse-repl` / `make seed-replication`.
+  # Opt-in profiles:
+  #   repl — a 2nd ClickHouse node + Keeper, for the Replication / DDL
+  #          dashboards and the ReplicatedMergeTree demo
+  #          (`make dev-clickhouse-repl` / `make seed-replication`).
+  #   s3   — MinIO + an S3 storage disk, for the remote-table advisor and
+  #          S3-engine demos (`make dev-clickhouse-s3`). ClickHouse validates
+  #          disks at startup, so the S3 disk config (s3-storage.xml) is only
+  #          mounted for this variant. NOTE: MinIO's community images are no
+  #          longer publicly pullable (Docker Hub repo deleted, quay.io repo
+  #          auth-required) — this profile only works if you have a working
+  #          MinIO image locally or access to a registry that serves it.
   # ---------------------------------------------------------------------------
 
   minio:
-    # MinIO's Docker Hub repos deny anonymous pulls; quay.io is the
-    # officially maintained public registry.
+    profiles: ["s3"]
     image: quay.io/minio/minio:latest
     ports:
       - "19001:9000"
@@ -32,6 +38,7 @@ services:
       - ch-net
 
   minio-init:
+    profiles: ["s3"]
     image: quay.io/minio/mc:latest
     depends_on:
       minio:
@@ -48,9 +55,6 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     hostname: clickhouse
-    depends_on:
-      minio-init:
-        condition: service_completed_successfully
     ports:
       - "18123:8123"
       - "19000:9000"
@@ -61,6 +65,38 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - ./config.xml:/etc/clickhouse-server/config.d/analyzer.xml
+      - ./users.xml:/etc/clickhouse-server/users.d/analyzer.xml
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - ch-net
+
+  # ---------------------------------------------------------------------------
+  # `s3` profile: ClickHouse with the S3 storage disk mounted, talking to the
+  # MinIO above. Distinct host ports so it can run alongside the default node.
+  # ---------------------------------------------------------------------------
+
+  clickhouse-s3:
+    image: clickhouse/clickhouse-server:latest
+    hostname: clickhouse-s3
+    profiles: ["s3"]
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "18223:8123"
+      - "19100:9000"
+    environment:
+      CLICKHOUSE_DB: system
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+    volumes:
+      - clickhouse-s3-data:/var/lib/clickhouse
+      - ./config.xml:/etc/clickhouse-server/config.d/analyzer.xml
+      - ./s3-storage.xml:/etc/clickhouse-server/config.d/s3-storage.xml
       - ./users.xml:/etc/clickhouse-server/users.d/analyzer.xml
     healthcheck:
       test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
@@ -93,8 +129,6 @@ services:
     depends_on:
       clickhouse-keeper:
         condition: service_started
-      minio-init:
-        condition: service_completed_successfully
     environment:
       CLICKHOUSE_DB: system
       CLICKHOUSE_USER: default
@@ -117,5 +151,6 @@ networks:
 volumes:
   clickhouse-data:
   clickhouse-2-data:
+  clickhouse-s3-data:
   minio-data:
   keeper-data:

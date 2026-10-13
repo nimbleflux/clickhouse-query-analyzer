@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/nimbleflux/clickhouse-query-analyzer/internal/clickhouse"
@@ -123,13 +124,24 @@ func CHUnreachable(w http.ResponseWriter, isConnect bool, err error) {
 	if isConnect {
 		status = http.StatusBadRequest
 	}
+	hint := "Verify the connection URL and credentials in the top connection bar."
+	// A refused connection is a wrong host/port, not a credentials problem —
+	// say so, and point at the dev-stack ports people actually run.
+	if isRefusedErr(err) {
+		hint = "Connection refused — nothing is listening on that host:port. Check the URL. The dev compose stack listens on clickhouse://localhost:19000 (native) or http://localhost:18123 (HTTP)."
+	}
 	writeApiError(w, newApiError(
 		status,
 		CodeCHUnreachable,
 		extractMessage(err, "ClickHouse is unreachable"),
-		"Verify the connection URL and credentials in the top connection bar.",
+		hint,
 		true,
 	))
+}
+
+// isRefusedErr detects TCP "connection refused" anywhere in the error chain.
+func isRefusedErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "connection refused")
 }
 
 // CHException responds 502 (or 400 for syntax errors) — ClickHouse
