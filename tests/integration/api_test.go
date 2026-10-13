@@ -386,3 +386,46 @@ func quoteJSON(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+// The UI defaults to a single database (unfiltered graphs don't scale); the
+// filter must apply server-side while the databases summary stays complete.
+func TestIntegration_SchemaGraphDbFilter(t *testing.T) {
+	_, router := setupIntegrationAPI(t)
+
+	w := makeReq(t, router, "GET", "/api/schema/graph?database=graph_demo", chHeaders(), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var graph struct {
+		Nodes []struct {
+			Database string `json:"database"`
+			Name     string `json:"name"`
+		} `json:"nodes"`
+		Databases []struct {
+			Database string `json:"database"`
+			Tables   int    `json:"tables"`
+		} `json:"databases"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&graph); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(graph.Nodes) == 0 {
+		t.Fatal("expected filtered nodes")
+	}
+	for _, n := range graph.Nodes {
+		if n.Database != "graph_demo" {
+			t.Errorf("filter leaked: got table in %s", n.Database)
+		}
+	}
+	// The picker summary must still cover the whole instance.
+	dbs := map[string]int{}
+	for _, d := range graph.Databases {
+		dbs[d.Database] = d.Tables
+	}
+	if _, ok := dbs["graph_demo"]; !ok {
+		t.Errorf("databases summary missing graph_demo: %v", dbs)
+	}
+	if _, ok := dbs["analytics"]; !ok {
+		t.Errorf("databases summary must be unfiltered; missing analytics: %v", dbs)
+	}
+}

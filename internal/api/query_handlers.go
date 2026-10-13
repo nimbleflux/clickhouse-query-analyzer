@@ -679,7 +679,8 @@ func (a *API) SchemaGraph(w http.ResponseWriter, r *http.Request) {
 			loadDays = 30
 		}
 	}
-	graph, err := ch.GetSchemaGraph(r.Context(), loadDays)
+	dbFilter := r.URL.Query().Get("database")
+	graph, err := ch.GetSchemaGraph(r.Context(), loadDays, dbFilter)
 	if err != nil {
 		respondErr(w, err, false)
 		return

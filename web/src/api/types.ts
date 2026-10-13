@@ -303,9 +303,16 @@ export interface SchemaGraphLoad {
   total_duration_ms: number;
 }
 
+export interface SchemaGraphDbCount {
+  database: string;
+  tables: number;
+}
+
 export interface SchemaGraphData {
   nodes: SchemaGraphNode[];
   edges: SchemaGraphEdge[];
+  /** Every user database with table counts — unfiltered picker options. */
+  databases: SchemaGraphDbCount[];
   load?: SchemaGraphLoad[];
   partial_errors?: string[];
   note?: string;

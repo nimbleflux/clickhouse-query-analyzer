@@ -62,14 +62,22 @@ type SchemaGraphLoad struct {
 	TotalDurationMs uint64 `json:"total_duration_ms"`
 }
 
+// SchemaGraphDbCount is one database's table count — the picker's options,
+// always computed over the whole instance regardless of the active filter.
+type SchemaGraphDbCount struct {
+	Database string `json:"database"`
+	Tables   int    `json:"tables"`
+}
+
 // SchemaGraph is the full response for the schema visualizer.
 type SchemaGraph struct {
-	Nodes         []SchemaGraphNode `json:"nodes"`
-	Edges         []SchemaGraphEdge `json:"edges"`
-	Load          []SchemaGraphLoad `json:"load,omitempty"`
-	PartialErrors []string          `json:"partial_errors,omitempty"`
-	Note          string            `json:"note,omitempty"`
-	Truncated     bool              `json:"truncated"`
+	Nodes         []SchemaGraphNode    `json:"nodes"`
+	Edges         []SchemaGraphEdge    `json:"edges"`
+	Databases     []SchemaGraphDbCount `json:"databases"`
+	Load          []SchemaGraphLoad    `json:"load,omitempty"`
+	PartialErrors []string             `json:"partial_errors,omitempty"`
+	Note          string               `json:"note,omitempty"`
+	Truncated     bool                 `json:"truncated"`
 }
 
 // maxSchemaGraphNodes caps the rendered graph; beyond this the layout is
@@ -109,7 +117,9 @@ const schemaGraphSelect = `
 
 const schemaGraphFromWhere = `
 	FROM system.tables
-	WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')
+	WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')`
+
+const schemaGraphOrder = `
 	ORDER BY database, name`
 
 // schemaTable is a system.tables row plus its parsed dependency arrays —
@@ -121,14 +131,17 @@ type schemaTable struct {
 }
 
 // GetSchemaGraph builds the table/dependency graph. loadDays > 0 additionally
-// aggregates system.query_views_log into the per-MV load heat-map.
-func (c *Client) GetSchemaGraph(ctx context.Context, loadDays int) (*SchemaGraph, error) {
+// aggregates system.query_views_log into the per-MV load heat-map. dbFilter
+// restricts the graph to one database server-side (the default page view);
+// the databases summary always covers the whole instance.
+func (c *Client) GetSchemaGraph(ctx context.Context, loadDays int, dbFilter string) (*SchemaGraph, error) {
 	graph := &SchemaGraph{Nodes: []SchemaGraphNode{}, Edges: []SchemaGraphEdge{}}
 
-	tables, err := c.loadSchemaTables(ctx, graph)
+	tables, err := c.loadSchemaTables(ctx, graph, dbFilter)
 	if err != nil {
 		return nil, err
 	}
+	graph.Databases = c.schemaDbCounts(ctx)
 	if len(tables) > maxSchemaGraphNodes {
 		tables = tables[:maxSchemaGraphNodes]
 		graph.Truncated = true
@@ -153,15 +166,21 @@ func (c *Client) GetSchemaGraph(ctx context.Context, loadDays int) (*SchemaGraph
 
 // loadSchemaTables reads system.tables, retrying with the reduced column set
 // on servers that predate loading_dependencies_*.
-func (c *Client) loadSchemaTables(ctx context.Context, graph *SchemaGraph) ([]schemaTable, error) {
+func (c *Client) loadSchemaTables(ctx context.Context, graph *SchemaGraph, dbFilter string) ([]schemaTable, error) {
+	where := schemaGraphFromWhere
+	args := []any{}
+	if dbFilter != "" {
+		where += " AND database = ?"
+		args = append(args, dbFilter)
+	}
 	rows, err := c.conn.Query(ctx, schemaGraphSelect+`,
-	       ifNull(loading_dependencies_database, []), ifNull(loading_dependencies_table, [])`+schemaGraphFromWhere)
+	       ifNull(loading_dependencies_database, []), ifNull(loading_dependencies_table, [])`+where+schemaGraphOrder, args...)
 	if err != nil {
 		// Older server: unknown column (47) → retry the core set and note it.
 		if chErr, _ := Classify(err); chErr == nil || chErr.Code != CHUnknownIdentifier {
 			return nil, fmt.Errorf("querying system.tables: %w", err)
 		}
-		rows, err = c.conn.Query(ctx, schemaGraphSelect+schemaGraphFromWhere)
+		rows, err = c.conn.Query(ctx, schemaGraphSelect+schemaGraphFromWhere+schemaGraphOrder, args...)
 		if err != nil {
 			return nil, fmt.Errorf("querying system.tables: %w", err)
 		}
@@ -426,6 +445,32 @@ func (c *Client) schemaViewLoad(ctx context.Context, days int) []SchemaGraphLoad
 		if l.View != "" {
 			out = append(out, l)
 		}
+	}
+	return out
+}
+
+// schemaDbCounts lists every user database with its table count — the
+// picker's options. Unfiltered by design.
+func (c *Client) schemaDbCounts(ctx context.Context) []SchemaGraphDbCount {
+	rows, err := c.conn.Query(ctx, `
+		SELECT database, count() AS tables
+		FROM system.tables
+		WHERE database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')
+		GROUP BY database
+		ORDER BY database`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []SchemaGraphDbCount{}
+	for rows.Next() {
+		var db string
+		// count() is UInt64 — the driver scans strictly by type.
+		var tables uint64
+		if rows.Scan(&db, &tables) != nil {
+			continue
+		}
+		out = append(out, SchemaGraphDbCount{Database: db, Tables: int(tables)})
 	}
 	return out
 }

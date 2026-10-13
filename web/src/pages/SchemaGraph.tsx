@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, type NavigateFunction } from "react-router-dom";
 import { Search, RefreshCw, X, ExternalLink, ArrowRight, Wrench } from "lucide-react";
 import { fetchSchemaGraph, fetchColumns } from "@/api/client";
@@ -31,7 +31,11 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [loadDays, setLoadDays] = useState(0);
+  // One database at a time by default — unfiltered graphs don't scale past a
+  // handful of tables. "All databases" is an explicit choice (the backend
+  // caps it and says so).
   const [dbFilter, setDbFilter] = useState<string | null>(null);
+  const dbTouchedRef = useRef(false);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, 200);
   const [visibleKinds, setVisibleKinds] = useState<Set<SchemaKind>>(new Set(ALL_KINDS));
@@ -44,7 +48,7 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetchSchemaGraph(loadDays, controller.signal)
+    fetchSchemaGraph(loadDays, dbFilter, controller.signal)
       .then((data) => {
         setGraph(data);
         setFitSignal((n) => n + 1);
@@ -55,9 +59,17 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
-  }, [connected, loadDays]);
+  }, [connected, loadDays, dbFilter]);
 
   useEffect(() => load(), [load]);
+
+  // First successful load: pick the first database automatically (unless the
+  // user already chose). Subsequent db changes come from the picker only.
+  useEffect(() => {
+    if (dbTouchedRef.current || !graph || graph.databases.length === 0) return;
+    const first = graph.databases[0].database;
+    if (first !== dbFilter) setDbFilter(first);
+  }, [graph, dbFilter]);
 
   // Reset the selection when it leaves the (filtered) graph.
   const selected = useMemo(
@@ -68,12 +80,10 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
     if (selectedKey && !selected) setSelectedKey(null);
   }, [selectedKey, selected]);
 
-  const dbOptions = useMemo(() => {
-    if (!graph) return [];
-    const counts = new Map<string, number>();
-    for (const n of graph.nodes) counts.set(n.database, (counts.get(n.database) ?? 0) + 1);
-    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [graph]);
+  const dbOptions = useMemo(
+    () => graph?.databases.map((d) => [d.database, d.tables] as [string, number]) ?? [],
+    [graph],
+  );
 
   const kindCounts = useMemo(() => {
     const counts = new Map<SchemaKind, number>();
@@ -165,11 +175,15 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
             </div>
             <Select
               value={dbFilter ?? ""}
-              onChange={(e) => setDbFilter(e.target.value || null)}
+              onChange={(e) => {
+                dbTouchedRef.current = true;
+                setDbFilter(e.target.value || null);
+                setSelectedKey(null);
+              }}
               className="w-56"
-              title="Filter to a single database"
+              title="Pick a database. “All databases” is capped at 400 tables and may be slow on large instances."
             >
-              <option value="">All databases ({graph.nodes.length} tables)</option>
+              <option value="">All databases ({graph.nodes.length} shown)</option>
               {dbOptions.map(([db, count]) => (
                 <option key={db} value={db}>{db} ({count})</option>
               ))}

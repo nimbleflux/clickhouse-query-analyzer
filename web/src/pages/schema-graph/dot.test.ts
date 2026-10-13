@@ -32,6 +32,7 @@ const fixture: SchemaGraphData = {
     { from: "analytics.events", to: "analytics.events_daily_mv", kind: "mv" },
     { from: "analytics.events_daily_mv", to: "analytics.events_daily", kind: "mv" },
   ],
+  databases: [{ database: "analytics", tables: 3 }],
   truncated: false,
 };
 
@@ -119,6 +120,7 @@ describe("buildDot", () => {
     const wide: SchemaGraphData = {
       nodes: [...fixture.nodes, { database: "shop", name: "orders", engine: "MergeTree", kind: "mergetree", total_rows: 5, total_bytes: 5 }],
       edges: [],
+      databases: [{ database: "analytics", tables: 3 }, { database: "shop", tables: 1 }],
       truncated: false,
     };
     const dot = buildDot(wide, { theme, visibleKinds: new Set(["mergetree", "mv"]), dbFilter: "shop", heat: new Map() });
@@ -130,6 +132,7 @@ describe("buildDot", () => {
     const weird: SchemaGraphData = {
       nodes: [{ database: "db", name: 'we"ird', engine: "Memory", kind: "other", total_rows: 0, total_bytes: 0 }],
       edges: [],
+      databases: [{ database: "db", tables: 1 }],
       truncated: false,
     };
     const dot = buildDot(weird, { theme, visibleKinds: new Set(["other"]), dbFilter: null, heat: new Map() });
