@@ -19,6 +19,29 @@ var (
 	ErrNotFound = errors.New("not found")
 )
 
+// ResultReadError marks a failure that happened while reading rows out of a
+// result set the server already produced (rows.Scan). The query itself ran —
+// this is a decoding bug in our code or the driver, never a connection,
+// credentials, or query problem. The API layer checks for this type so such
+// errors are not reported as "ClickHouse is unreachable — verify your
+// credentials". Deliberately not applied to the "iterating rows" wrap: errors
+// surfacing mid-stream there include real server exceptions (e.g. a memory
+// limit hit while fetching the next block), which stay CH_EXCEPTION.
+type ResultReadError struct {
+	Err error
+}
+
+func (e *ResultReadError) Error() string { return e.Err.Error() }
+
+func (e *ResultReadError) Unwrap() error { return e.Err }
+
+// IsResultReadError reports whether err (or anything it wraps) failed while
+// reading rows from a result set.
+func IsResultReadError(err error) bool {
+	var rrErr *ResultReadError
+	return errors.As(err, &rrErr)
+}
+
 // ClickHouseErrorCode is a strongly-typed wrapper around the numeric error
 // code that ClickHouse includes with every server-side exception.
 //

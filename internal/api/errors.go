@@ -226,10 +226,28 @@ func isTimeoutErr(err error) bool {
 	return false
 }
 
+// ResultDecode responds 500 — the query executed but the result set could
+// not be decoded into rows. This is a bug in this tool or its driver, never
+// a connection problem: ClickHouse answered and produced data, so the
+// "verify credentials" hint would be wrong here.
+func ResultDecode(w http.ResponseWriter, err error) {
+	writeApiError(w, newApiError(
+		http.StatusInternalServerError,
+		CodeInternal,
+		extractMessage(err, "failed to read the query result"),
+		"The query ran, but the result could not be decoded — this looks like a bug in this tool, not a connection or credentials problem. Please report it, including the query and the columns it returns.",
+		false,
+	))
+}
+
 // respondErr is the central dispatch: given any error returned from a
 // clickhouse client call, pick the right response shape.
 func respondErr(w http.ResponseWriter, err error, isConnect bool) {
 	if err == nil {
+		return
+	}
+	if clickhouse.IsResultReadError(err) {
+		ResultDecode(w, err)
 		return
 	}
 	if chErr, isNotFound := clickhouse.Classify(err); chErr != nil {
@@ -258,6 +276,12 @@ func respondErr(w http.ResponseWriter, err error, isConnect bool) {
 // instead of writing it — used by the streaming execute handler, which
 // must serialize errors as NDJSON events after the response head is sent.
 func apiErrorFromErr(err error, budget time.Duration) *ApiError {
+	if clickhouse.IsResultReadError(err) {
+		return newApiError(http.StatusInternalServerError, CodeInternal,
+			extractMessage(err, "failed to read the query result"),
+			"The query ran, but the result could not be decoded — this looks like a bug in this tool, not a connection or credentials problem. Please report it, including the query and the columns it returns.",
+			false)
+	}
 	if chErr, isNotFound := clickhouse.Classify(err); chErr != nil {
 		if isNotFound {
 			return newApiError(http.StatusNotFound, CodeNotFound, "resource not found", "", false)
