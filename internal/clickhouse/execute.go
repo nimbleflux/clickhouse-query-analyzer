@@ -359,42 +359,49 @@ func (c *Client) executeQueryNative(ctx context.Context, opts *ExecuteOptions) (
 		columns = append(columns, ColumnInfo{Name: ct.Name(), Type: ct.DatabaseTypeName()})
 	}
 
-	// The driver can't Scan into *any — allocate correctly typed targets
-	// from ScanType (pointer targets for nullable columns).
+	// The driver can't Scan into *any — allocate correctly typed targets from
+	// ScanType. ScanType already reports the shape the driver scans into,
+	// including the pointer for nullable columns (Nullable(String) → *string)
+	// and for wrappers around them (LowCardinality(Nullable(String)) as well);
+	// adding another indirection here produced ***string destinations the
+	// driver rejects ("converting String to ***string is unsupported") on
+	// every nullable column.
 	scanVals := make([]any, len(colTypes))
-	nullables := make([]bool, len(colTypes))
+	scanTypes := make([]reflect.Type, len(colTypes))
 	for i, ct := range colTypes {
-		nullables[i] = ct.Nullable()
-		st := ct.ScanType()
-		if st == nil {
-			scanVals[i] = new(any)
-			continue
-		}
-		if nullables[i] {
-			scanVals[i] = reflect.New(reflect.PointerTo(st)).Interface()
-		} else {
-			scanVals[i] = reflect.New(st).Interface()
-		}
+		scanTypes[i] = ct.ScanType() // nil → *any fallback below
 	}
 
 	result := make([]map[string]any, 0, min(opts.Limit, 64))
 	count := 0
 	for rows.Next() && count < opts.Limit {
+		// Fresh targets per row: the driver's NULL handling only clears some
+		// **T shapes (numerics, **string, **time.Time); reused targets would
+		// leak the previous row's value into NULL cells of other types
+		// (Nullable(Bool/Decimal/UUID/IPv4), LowCardinality(Nullable), …).
+		for i, st := range scanTypes {
+			if st == nil {
+				scanVals[i] = new(any)
+			} else {
+				scanVals[i] = reflect.New(st).Interface()
+			}
+		}
 		if err := rows.Scan(scanVals...); err != nil {
-			return nil, fmt.Errorf("scanning row: %w", err)
+			// Typed so the API layer reports a result-decoding bug instead of
+			// "ClickHouse is unreachable — verify your credentials".
+			return nil, &ResultReadError{fmt.Errorf("scanning row: %w", err)}
 		}
 		row := make(map[string]any, len(colTypes))
 		for i, ct := range colTypes {
 			v := reflect.Indirect(reflect.ValueOf(scanVals[i])).Interface()
-			if nullables[i] {
-				if pv, ok := v.(*uint64); ok && pv == nil {
+			// ScanType is a pointer type whenever the column can carry NULL
+			// (Nullable(T), LowCardinality(Nullable(T)), …), so unwrap by
+			// shape rather than by ct.Nullable().
+			if pr := reflect.ValueOf(v); pr.Kind() == reflect.Pointer {
+				if pr.IsNil() {
 					v = nil
-				} else if pr := reflect.ValueOf(v); pr.Kind() == reflect.Pointer {
-					if pr.IsNil() {
-						v = nil
-					} else {
-						v = pr.Elem().Interface()
-					}
+				} else {
+					v = pr.Elem().Interface()
 				}
 			}
 			row[ct.Name()] = normalizeNativeValue(v)
