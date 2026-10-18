@@ -18,7 +18,28 @@ func writeSSE(w http.ResponseWriter, flusher http.Flusher, evt clickhouse.BulkEv
 		return
 	}
 	fmt.Fprintf(w, "data: %s\n\n", data)
-	flusher.Flush()
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+// beginSSE writes the SSE response head and flushes immediately. The
+// X-Accel-Buffering header mirrors the /api/execute NDJSON path: without it
+// nginx buffers the stream and "real-time" table analysis appears to hang
+// until completion.
+func beginSSE(w http.ResponseWriter) http.Flusher {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	if f, ok := w.(http.Flusher); ok {
+		// Leading bytes through the proxy before the first table analysis.
+		fmt.Fprint(w, ": stream open\n\n")
+		f.Flush()
+		return f
+	}
+	return nil
 }
 
 func (a *API) AnalyzeTableHandler(w http.ResponseWriter, r *http.Request) {
@@ -97,11 +118,7 @@ func (a *API) AnalyzeDatabaseHandler(w http.ResponseWriter, r *http.Request) {
 
 	filters := parseBulkFilters(r)
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, _ := w.(http.Flusher)
+	flusher := beginSSE(w)
 
 	ch.StreamBulkAnalysis(r.Context(), database, filters, func(evt clickhouse.BulkEvent) {
 		writeSSE(w, flusher, evt)
@@ -123,11 +140,7 @@ func (a *API) AnalyzeAllHandler(w http.ResponseWriter, r *http.Request) {
 
 	filters := parseBulkFilters(r)
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, _ := w.(http.Flusher)
+	flusher := beginSSE(w)
 
 	for _, database := range databases {
 		if filters.ExcludeSystem && isSystemDatabase(database) {

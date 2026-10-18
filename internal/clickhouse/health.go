@@ -20,6 +20,8 @@ type HealthReport struct {
 	Settings      []SettingValue `json:"settings"`
 	Nodes         []NodeInfo     `json:"nodes"`
 	Warnings      []string       `json:"warnings"`
+
+	PartialErrors
 }
 
 type LogTableSize struct {
@@ -53,8 +55,9 @@ func (c *Client) HealthCheck(ctx context.Context) (*HealthReport, error) {
 	if err := c.queryBasicInfo(ctx, report); err != nil {
 		return nil, err
 	}
-	c.queryLogTableSizes(ctx, report)
-	c.querySettings(ctx, report)
+	c.queryLogTableSizes(ctx, report, &report.PartialErrors)
+	c.querySettings(ctx, report, &report.PartialErrors)
+	report.initPartialErrors()
 	c.queryNodes(ctx, report)
 	c.deriveWarnings(report)
 
@@ -73,7 +76,7 @@ func (c *Client) queryBasicInfo(ctx context.Context, r *HealthReport) error {
 	return nil
 }
 
-func (c *Client) queryLogTableSizes(ctx context.Context, r *HealthReport) {
+func (c *Client) queryLogTableSizes(ctx context.Context, r *HealthReport, partial *PartialErrors) {
 	tables := c.tableRef("parts")
 	sizeQuery := fmt.Sprintf(`SELECT
 		table,
@@ -87,6 +90,7 @@ func (c *Client) queryLogTableSizes(ctx context.Context, r *HealthReport) {
 
 	rows, err := c.conn.Query(ctx, sizeQuery)
 	if err != nil {
+		partial.addPartial("system.parts", err)
 		return
 	}
 	defer rows.Close()
@@ -100,7 +104,7 @@ func (c *Client) queryLogTableSizes(ctx context.Context, r *HealthReport) {
 		sizes[lt.Table] = lt
 	}
 
-	enabledTables := c.queryEnabledLogTables(ctx)
+	enabledTables := c.queryEnabledLogTables(ctx, partial)
 
 	allTables := []string{"query_log", "query_thread_log", "query_views_log", "query_metric_log", "trace_log"}
 	for _, t := range allTables {
@@ -115,10 +119,11 @@ func (c *Client) queryLogTableSizes(ctx context.Context, r *HealthReport) {
 	}
 }
 
-func (c *Client) queryEnabledLogTables(ctx context.Context) map[string]bool {
+func (c *Client) queryEnabledLogTables(ctx context.Context, partial *PartialErrors) map[string]bool {
 	enabled := make(map[string]bool)
 	rows, err := c.conn.Query(ctx, "SELECT name FROM system.tables WHERE database = 'system' AND name IN ('query_log', 'query_thread_log', 'query_views_log', 'query_metric_log', 'trace_log')")
 	if err != nil {
+		partial.addPartial("system.tables", err)
 		return enabled
 	}
 	defer rows.Close()
@@ -141,7 +146,7 @@ var healthSettings = []string{
 	"max_query_size",
 }
 
-func (c *Client) querySettings(ctx context.Context, r *HealthReport) {
+func (c *Client) querySettings(ctx context.Context, r *HealthReport, partial *PartialErrors) {
 	placeholders := make([]string, len(healthSettings))
 	args := make([]interface{}, len(healthSettings))
 	for i, s := range healthSettings {
@@ -152,6 +157,7 @@ func (c *Client) querySettings(ctx context.Context, r *HealthReport) {
 
 	rows, err := c.conn.Query(ctx, query, args...)
 	if err != nil {
+		partial.addPartial("system.settings", err)
 		return
 	}
 	defer rows.Close()
@@ -167,7 +173,7 @@ func (c *Client) querySettings(ctx context.Context, r *HealthReport) {
 
 func (c *Client) queryNodes(ctx context.Context, r *HealthReport) {
 	if c.isCluster {
-		query := fmt.Sprintf(`SELECT hostName() AS host, uptime(), version() FROM clusterAllReplicas('%s', system.one)`, c.cluster)
+		query := fmt.Sprintf(`SELECT hostName() AS host, uptime(), version() FROM clusterAllReplicas(%s, system.one)`, quoteStr(c.cluster))
 		rows, err := c.conn.Query(ctx, query)
 		if err == nil {
 			defer rows.Close()

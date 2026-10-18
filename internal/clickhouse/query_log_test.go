@@ -109,3 +109,62 @@ func TestProcessToEntry_NegativePeakGuardsZero(t *testing.T) {
 		t.Errorf("MemoryUsage = %d, want 0 for negative peak", e.MemoryUsage)
 	}
 }
+
+// TestBuildQueryLogFilters locks the shared predicate set: every
+// query-history surface must filter terminal rows, drop the SELECT 1 probe,
+// exclude cluster fan-out (is_initial_query), and honor the user filters —
+// ListFingerprints silently dropped half of these before the shared builder.
+func TestBuildQueryLogFilters(t *testing.T) {
+	params := QueryListParams{
+		FromTime:          "2026-01-01 00:00:00",
+		ToTime:            "2026-01-02 00:00:00",
+		Search:            "events",
+		User:              "alice",
+		Database:          "analytics",
+		Table:             "events",
+		QueryKind:         "Select",
+		MinDuration:       100,
+		MinMemory:         1000,
+		MinReadBytes:      2000,
+		ErrorsOnly:        true,
+		LogComment:        "etl",
+		HideSystemQueries: true,
+	}
+	f := buildQueryLogFilters(params)
+
+	joined := strings.Join(f.whereParts, " | ")
+	for _, want := range []string{
+		"query != 'SELECT 1'",
+		"type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')",
+		"is_initial_query = 1",
+		"log_comment != '" + managedLogComment + "'",
+		"user = ?",
+		"has(databases, ?)",
+		"has(tables, ?)",
+		"query_kind = ?",
+		"query_duration_ms >= ?",
+		"memory_usage >= ?",
+		"read_bytes >= ?",
+		"exception_code != 0",
+		"log_comment ILIKE ?",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("whereParts missing %q; got %s", want, joined)
+		}
+	}
+	if len(f.whereArgs) != 8 {
+		t.Errorf("whereArgs = %v, want 8 bound values", f.whereArgs)
+	}
+	if len(f.prewhereParts) != 3 {
+		t.Errorf("prewhereParts = %v, want 3", f.prewhereParts)
+	}
+
+	// Minimal params: exactly the base predicates, no user filters, no args.
+	base := buildQueryLogFilters(QueryListParams{})
+	if len(base.whereParts) != 3 || len(base.whereArgs) != 0 {
+		t.Errorf("base filters = %v / %v, want 3 predicates / 0 args", base.whereParts, base.whereArgs)
+	}
+	if base.prewhereClause() != "" {
+		t.Errorf("empty params should produce no PREWHERE, got %q", base.prewhereClause())
+	}
+}

@@ -66,33 +66,15 @@ type ReplicationParams struct {
 }
 
 type ReplicationStatus struct {
-	ReplicaStatuses     []ReplicaStatus          `json:"replica_statuses"`
-	ReplicationQueue    []ReplicationQueueEntry  `json:"replication_queue"`
-	Mutations           []MutationEntry          `json:"mutations"`
-	Keeper              []KeeperStatus           `json:"keeper"`
-	MetricHistory       []ReplicationMetricPoint `json:"metric_history"`
-	Summary             ReplicationSummary       `json:"summary"`
-	ClusterNote         string                   `json:"cluster_note,omitempty"`
-	PartialErrors       []string                 `json:"partial_errors"`
-	PartialErrorDetails map[string]string        `json:"partial_error_details,omitempty"`
-}
+	ReplicaStatuses  []ReplicaStatus          `json:"replica_statuses"`
+	ReplicationQueue []ReplicationQueueEntry  `json:"replication_queue"`
+	Mutations        []MutationEntry          `json:"mutations"`
+	Keeper           []KeeperStatus           `json:"keeper"`
+	MetricHistory    []ReplicationMetricPoint `json:"metric_history"`
+	Summary          ReplicationSummary       `json:"summary"`
+	ClusterNote      string                   `json:"cluster_note,omitempty"`
 
-// addPartial records a per-section failure: the table name (deduped) goes in
-// PartialErrors for the banner, and the raw message goes in
-// PartialErrorDetails for a hover tooltip. Lets restricted users see *why* a
-// section is empty (usually missing SELECT privileges) instead of a misleading
-// "no data" state.
-func (s *ReplicationStatus) addPartial(table string, err error) {
-	if err == nil {
-		return
-	}
-	if s.PartialErrorDetails == nil {
-		s.PartialErrorDetails = map[string]string{}
-	}
-	if _, ok := s.PartialErrorDetails[table]; !ok {
-		s.PartialErrors = append(s.PartialErrors, table)
-	}
-	s.PartialErrorDetails[table] = err.Error()
+	PartialErrors
 }
 
 // GetReplication assembles the full replication view. Unlike the dashboard's
@@ -116,8 +98,8 @@ func (c *Client) GetReplication(ctx context.Context, params ReplicationParams) (
 		Mutations:        []MutationEntry{},
 		Keeper:           []KeeperStatus{},
 		MetricHistory:    []ReplicationMetricPoint{},
-		PartialErrors:    []string{},
 	}
+	out.initPartialErrors()
 
 	c.queryReplicaStatuses(ctx, params.Database, out)
 	c.queryReplicationQueue(ctx, params, out)

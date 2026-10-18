@@ -10,18 +10,30 @@ import (
 )
 
 // remoteEngines are table engines that read data over the network at query
-// time (object storage, HTTP, HDFS). Queries touching them can be slow and
-// expensive in ways local tables never are: every scan is a remote read,
-// LIMIT only short-circuits streaming reads, and EXPLAIN ESTIMATE reports
-// zero rows. The advisor surfaces this in the editor.
+// time (object storage, HTTP, HDFS, external databases). Queries touching
+// them can be slow and expensive in ways local tables never are: every scan
+// is a remote read, LIMIT only short-circuits streaming reads, and EXPLAIN
+// ESTIMATE reports zero rows. The advisor surfaces this in the editor.
 var remoteEngines = map[string]bool{
-	"S3":               true,
-	"URL":              true,
-	"Iceberg":          true,
-	"DeltaLake":        true,
-	"DataLakeCatalog":  true,
-	"HDFS":             true,
-	"AzureBlobStorage": true,
+	"S3":                      true,
+	"S3Cluster":               true,
+	"URL":                     true,
+	"Iceberg":                 true,
+	"IcebergCluster":          true,
+	"DeltaLake":               true,
+	"DataLakeCatalog":         true,
+	"HDFS":                    true,
+	"HDFSCluster":             true,
+	"AzureBlobStorage":        true,
+	"AzureBlobStorageCluster": true,
+	// External databases: every query reads over the network too.
+	"PostgreSQL": true,
+	"MySQL":      true,
+	"MongoDB":    true,
+	"Redis":      true,
+	"SQLite":     true,
+	"JDBC":       true,
+	"ODBC":       true,
 }
 
 // RemoteTableInfo describes a remote-backed table plus its recent read load.
@@ -49,7 +61,9 @@ type QueryAdvisor struct {
 
 // advisorCache memoizes the remote-table list per connection for a few
 // minutes — the editor calls the advisor on every run, and system.tables
-// is not free on instances with thousands of tables.
+// is not free on instances with thousands of tables. The zero value is
+// ready to use; c.advisor itself is initialized at connect time (see
+// client.go) so concurrent editor runs never race on the pointer.
 type advisorCache struct {
 	mu        sync.Mutex
 	tables    []RemoteTableInfo
@@ -59,15 +73,21 @@ type advisorCache struct {
 const advisorCacheTTL = 5 * time.Minute
 
 func (c *Client) cachedRemoteTables(ctx context.Context) ([]RemoteTableInfo, error) {
-	if c.advisor == nil {
-		c.advisor = &advisorCache{}
+	c.advisor.mu.Lock()
+	if c.advisor.tables != nil && time.Since(c.advisor.fetchedAt) < advisorCacheTTL {
+		tables := c.advisor.tables
+		c.advisor.mu.Unlock()
+		return tables, nil
 	}
+	c.advisor.mu.Unlock()
+
+	// Fetch OUTSIDE the lock: ListRemoteTables includes the per-table 24h
+	// stats (N queries) — holding the lock through it serialized every
+	// concurrent editor "Run" behind one slow refresh.
+	tables, err := c.ListRemoteTables(ctx)
+
 	c.advisor.mu.Lock()
 	defer c.advisor.mu.Unlock()
-	if c.advisor.tables != nil && time.Since(c.advisor.fetchedAt) < advisorCacheTTL {
-		return c.advisor.tables, nil
-	}
-	tables, err := c.ListRemoteTables(ctx)
 	if err != nil {
 		// Serve the stale list rather than nagging the user on every run.
 		if c.advisor.tables != nil {
@@ -114,27 +134,44 @@ func (c *Client) ListRemoteTables(ctx context.Context) ([]RemoteTableInfo, error
 	return tables, nil
 }
 
+// remoteStatsWorkers bounds the per-table 24h query_log stat queries. They
+// used to run strictly sequentially under the advisor lock; a server with 40
+// remote tables paid 40 sequential 24h scans on the first editor run.
+const remoteStatsWorkers = 4
+
 func (c *Client) attachRemoteTableStats(ctx context.Context, tables []RemoteTableInfo) {
+	if len(tables) == 0 {
+		return
+	}
+	sem := make(chan struct{}, remoteStatsWorkers)
+	var wg sync.WaitGroup
 	for i := range tables {
 		t := &tables[i]
-		// query_log.tables holds qualified names ("db.table"); has() prunes
-		// on the array directly. Top-level read_rows/read_bytes exist on
-		// every version, unlike per-engine ProfileEvents.
-		q := fmt.Sprintf(`
-			SELECT count(), sum(read_rows), sum(read_bytes)
-			FROM %s
-			WHERE event_time >= now() - INTERVAL 24 HOUR
-			  AND type = 'QueryFinish'
-			  AND has(tables, ?)`, c.tableRef("query_log"))
-		ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
-		var queries, readRows, readBytes uint64
-		if err := c.conn.QueryRow(ctx2, q, t.Database+"."+t.Table).Scan(&queries, &readRows, &readBytes); err == nil {
-			t.Queries24h = queries
-			t.ReadRows = readRows
-			t.ReadBytes = readBytes
-		}
-		cancel()
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			// query_log.tables holds qualified names ("db.table"); has()
+			// prunes on the array directly. Top-level read_rows/read_bytes
+			// exist on every version, unlike per-engine ProfileEvents.
+			q := fmt.Sprintf(`
+				SELECT count(), sum(read_rows), sum(read_bytes)
+				FROM %s
+				WHERE event_time >= now() - INTERVAL 24 HOUR
+				  AND type = 'QueryFinish'
+				  AND has(tables, ?)`, c.tableRef("query_log"))
+			ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			var queries, readRows, readBytes uint64
+			if err := c.conn.QueryRow(ctx2, q, t.Database+"."+t.Table).Scan(&queries, &readRows, &readBytes); err == nil {
+				t.Queries24h = queries
+				t.ReadRows = readRows
+				t.ReadBytes = readBytes
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // AdviseForQuery checks the query text against the remote-backed tables on

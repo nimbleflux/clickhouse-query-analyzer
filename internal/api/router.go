@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -26,13 +27,22 @@ func Router(cfg *config.Config, api *API, frontendFS fs.FS) http.Handler {
 
 	r.Use(chiMW.RequestID)
 	r.Use(chiMW.Recoverer)
-	r.Use(securityHeadersMiddleware)
+	r.Use(securityHeadersMiddleware(cfg.DevMode))
 	r.Use(bodyLimitMiddleware)
 	r.Use(slogMiddleware)
 	r.Use(corsMiddleware(cfg.CORSOrigin))
 
-	r.Get("/metrics", promhttp.Handler().ServeHTTP)
-	r.Mount("/api", apiRoutes(api, cfg))
+	// Auth gates /api and /metrics ONLY: /health stays open for container
+	// healthchecks, and the SPA assets must load so the browser can render
+	// the Access-token dialog instead of a bare 401.
+	guard := func(next http.Handler) http.Handler { return next }
+	if cfg.AuthToken != "" {
+		guard = authTokenMiddleware(cfg.AuthToken)
+		slog.Info("authentication enabled (-auth-token)", "protected", "/api, /metrics")
+	}
+
+	r.Get("/metrics", guard(promhttp.Handler()).ServeHTTP)
+	r.Mount("/api", guarded(guard, apiRoutes(api, cfg)))
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -73,8 +83,23 @@ func isAPIRequest(r *http.Request) bool {
 		len(p) >= 5 && p[:5] == "/api/"
 }
 
+// guarded wraps a route subtree with the auth guard (identity when no token
+// is configured).
+func guarded(guard func(http.Handler) http.Handler, next http.Handler) http.Handler {
+	return guard(next)
+}
+
 func apiRoutes(api *API, cfg *config.Config) http.Handler {
 	r := chi.NewRouter()
+
+	// API responses carry query text and potentially sensitive metadata —
+	// never let browsers or shared caches retain them.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	// A zero/negative bulk timeout would make context.WithTimeout below
 	// expire instantly (every request dead on arrival), so floor it.
@@ -140,6 +165,8 @@ func apiRoutes(api *API, cfg *config.Config) http.Handler {
 	fast.Get("/mutations", api.ListMutations)
 	fast.Post("/mutations/kill", api.KillMutationHandler)
 	fast.Get("/merges", api.ListMerges)
+	fast.Get("/backups", api.ListBackups)
+	fast.Get("/schema/{db}/{table}/parts", api.ListTableParts)
 	fast.Get("/access", api.GetAccess)
 	fast.Post("/access/users/{user}/drop", api.DropUser)
 	fast.Post("/access/roles/{role}/drop", api.DropRole)
@@ -199,13 +226,54 @@ func corsMiddleware(origin string) func(http.Handler) http.Handler {
 	}
 }
 
-func securityHeadersMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		next.ServeHTTP(w, r)
-	})
+// securityHeadersMiddleware sets conservative headers on every response.
+// The Content-Security-Policy locks the SPA down to same-origin scripts and
+// styles; 'unsafe-inline' on styles is required because CodeMirror and React
+// inject style attributes at runtime. In dev mode the CSP is skipped — the
+// Vite dev server needs HMR websockets and transformed-module sources.
+func securityHeadersMiddleware(devMode bool) func(http.Handler) http.Handler {
+	csp := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; " +
+		"object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			if !devMode {
+				w.Header().Set("Content-Security-Policy", csp)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// authTokenMiddleware enforces the operator-configured bearer token.
+// Comparison is constant-time. Accepted headers: Authorization: Bearer <t>
+// and X-Auth-Token: <t> (the browser sends the latter because the SPA must
+// not need to touch the Authorization header itself).
+func authTokenMiddleware(token string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got := r.Header.Get("X-Auth-Token")
+			if got == "" {
+				if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+					got = strings.TrimPrefix(auth, "Bearer ")
+				}
+			}
+			if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+				w.Header().Set("Cache-Control", "no-store")
+				writeJSON(w, http.StatusUnauthorized, ApiError{
+					Message: "Authentication required. Set the access token to use this instance.",
+					Code:    CodeUnauthorized,
+					Hint:    "The server was started with -auth-token. Enter the configured token to continue.",
+					Retry:   false,
+				})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func bodyLimitMiddleware(next http.Handler) http.Handler {
@@ -297,9 +365,19 @@ func static(r chi.Router, fsys fs.FS) {
 		path := req.URL.Path
 		f, err := staticFS.Open(path)
 		if err != nil {
+			// SPA fallback: unknown paths serve index.html. That file must
+			// never be cached hard — it references hashed assets by name.
 			req.URL.Path = "/"
+			w.Header().Set("Cache-Control", "no-cache")
 		} else {
 			f.Close()
+			// Vite emits content-hashed filenames under assets/ — safe to
+			// cache forever. Everything else (favicon, index.html) revalidates.
+			if strings.HasPrefix(path, "/assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache")
+			}
 		}
 		fileServer.ServeHTTP(w, req)
 	})))

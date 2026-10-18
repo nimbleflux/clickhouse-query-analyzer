@@ -44,31 +44,16 @@ type DDLOpsPoint struct {
 }
 
 type DDLStatus struct {
-	DistributedDDL      []DistributedDDLEntry `json:"distributed_ddl"`
-	RecentDDL           []RecentDDLEntry      `json:"recent_ddl"`
-	Trend               []DDLOpsPoint         `json:"trend"`
-	Hours               int                   `json:"hours"`
-	PendingMutations    uint64                `json:"pending_mutations"`
-	StuckDDL            int                   `json:"stuck_ddl"`
-	FailedDDL           int                   `json:"failed_ddl"`
-	ClusterNote         string                `json:"cluster_note,omitempty"`
-	PartialErrors       []string              `json:"partial_errors"`
-	PartialErrorDetails map[string]string     `json:"partial_error_details,omitempty"`
-}
+	DistributedDDL   []DistributedDDLEntry `json:"distributed_ddl"`
+	RecentDDL        []RecentDDLEntry      `json:"recent_ddl"`
+	Trend            []DDLOpsPoint         `json:"trend"`
+	Hours            int                   `json:"hours"`
+	PendingMutations uint64                `json:"pending_mutations"`
+	StuckDDL         int                   `json:"stuck_ddl"`
+	FailedDDL        int                   `json:"failed_ddl"`
+	ClusterNote      string                `json:"cluster_note,omitempty"`
 
-// addPartial mirrors ReplicationStatus.addPartial: clean table name for the
-// banner, raw message for the hover tooltip.
-func (s *DDLStatus) addPartial(table string, err error) {
-	if err == nil {
-		return
-	}
-	if s.PartialErrorDetails == nil {
-		s.PartialErrorDetails = map[string]string{}
-	}
-	if _, ok := s.PartialErrorDetails[table]; !ok {
-		s.PartialErrors = append(s.PartialErrors, table)
-	}
-	s.PartialErrorDetails[table] = err.Error()
+	PartialErrors
 }
 
 type DDLParams struct {
@@ -127,8 +112,8 @@ func (c *Client) GetDDL(ctx context.Context, params DDLParams) (*DDLStatus, erro
 		RecentDDL:      []RecentDDLEntry{},
 		Trend:          []DDLOpsPoint{},
 		Hours:          params.Hours,
-		PartialErrors:  []string{},
 	}
+	out.initPartialErrors()
 
 	c.queryDistributedDDL(ctx, params, out)
 	c.queryRecentDDL(ctx, params, fromTime, out)

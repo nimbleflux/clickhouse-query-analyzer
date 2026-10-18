@@ -81,29 +81,16 @@ type QuotaDef struct {
 // fetched independently and recorded via addPartial — the page degrades to
 // whichever sections the current user can read.
 type AccessOverview struct {
-	CurrentUser         string            `json:"current_user"`
-	CanManageAccess     bool              `json:"can_manage_access"`
-	Users               []UserRow         `json:"users"`
-	Roles               []RoleRow         `json:"roles"`
-	Grants              []GrantRow        `json:"grants"`
-	RoleGrants          []RoleGrant       `json:"role_grants"`
-	Quotas              []QuotaDef        `json:"quotas"`
-	QuotaUsage          []QuotaUsageRow   `json:"quota_usage"`
-	PartialErrors       []string          `json:"partial_errors"`
-	PartialErrorDetails map[string]string `json:"partial_error_details,omitempty"`
-}
+	CurrentUser     string          `json:"current_user"`
+	CanManageAccess bool            `json:"can_manage_access"`
+	Users           []UserRow       `json:"users"`
+	Roles           []RoleRow       `json:"roles"`
+	Grants          []GrantRow      `json:"grants"`
+	RoleGrants      []RoleGrant     `json:"role_grants"`
+	Quotas          []QuotaDef      `json:"quotas"`
+	QuotaUsage      []QuotaUsageRow `json:"quota_usage"`
 
-func (a *AccessOverview) addPartial(table string, err error) {
-	if err == nil {
-		return
-	}
-	if a.PartialErrorDetails == nil {
-		a.PartialErrorDetails = map[string]string{}
-	}
-	if _, ok := a.PartialErrorDetails[table]; !ok {
-		a.PartialErrors = append(a.PartialErrors, table)
-	}
-	a.PartialErrorDetails[table] = err.Error()
+	PartialErrors
 }
 
 // GetAccess assembles the access-management view. The capability probe decides
@@ -111,6 +98,7 @@ func (a *AccessOverview) addPartial(table string, err error) {
 // validated server-side (the probe can be wrong or privileges partial).
 func (c *Client) GetAccess(ctx context.Context) (*AccessOverview, error) {
 	out := &AccessOverview{Users: []UserRow{}, Roles: []RoleRow{}, Grants: []GrantRow{}, RoleGrants: []RoleGrant{}, Quotas: []QuotaDef{}, QuotaUsage: []QuotaUsageRow{}}
+	out.initPartialErrors()
 
 	c.queryCurrentUser(ctx, out)
 	c.queryAccessCapability(ctx, out)
@@ -416,11 +404,9 @@ func (c *Client) RevokeGrant(ctx context.Context, granteeKind, grantee, accessTy
 	case database != "":
 		on = fmt.Sprintf("%s.*", quoteIdent(database))
 	}
-	kw := "FROM"
-	if granteeKind == "role" {
-		kw = "FROM"
-	}
-	stmt := fmt.Sprintf("REVOKE %s ON %s %s %s", accessType, on, kw, quoteIdent(grantee))
+	// REVOKE ... FROM applies to users and roles alike in ClickHouse
+	// (granteeKind only mattered to an earlier draft of the grammar).
+	stmt := fmt.Sprintf("REVOKE %s ON %s FROM %s", accessType, on, quoteIdent(grantee))
 	if grantOption {
 		// Revoke only the WITH GRANT OPTION, not the underlying privilege.
 		stmt = "REVOKE GRANT OPTION FOR " + stmt[len("REVOKE "):]

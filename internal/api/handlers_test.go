@@ -357,3 +357,59 @@ func TestQueryRoutes_ReturnNon404(t *testing.T) {
 		})
 	}
 }
+
+// TestNewRoutes_ReturnNon404 pins the routes added with the Backups page and
+// the per-table parts explorer: without these tests a route-regex typo
+// (chi params, fast-route group) surfaces as a frontend 404 only.
+func TestNewRoutes_ReturnNon404(t *testing.T) {
+	cfg := &config.Config{}
+	api := New(clickhouse.NewPool(), nil)
+	router := Router(cfg, api, nil)
+
+	routes := []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/backups"},
+		{"GET", "/api/schema/analytics/events/parts"},
+		// URL-encoded spaces in db/table names must still route (chi decodes params).
+		{"GET", "/api/schema/a%20b/ta%20ble/parts"},
+	}
+
+	for _, route := range routes {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			req := httptest.NewRequest(route.method, route.path, nil)
+			req.Header.Set("X-CH-URL", "clickhouse://localhost:9000")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Code == http.StatusNotFound {
+				t.Errorf("route %s %s returned 404", route.method, route.path)
+			}
+		})
+	}
+}
+
+// TestConnectResponse_Shape locks the /api/connect response contract the
+// frontend depends on (cluster info + server timezone for the display
+// toggle). Against no server it fails CH_UNREACHABLE — the point is the
+// JSON error shape, not the content.
+func TestConnectResponse_ErrorShape(t *testing.T) {
+	cfg := &config.Config{}
+	api := New(clickhouse.NewPool(), nil)
+	router := Router(cfg, api, nil)
+
+	req := httptest.NewRequest("POST", "/api/connect", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var body struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v (%s)", err, w.Body.String())
+	}
+	if body.Code != "CH_UNREACHABLE" {
+		t.Errorf("code = %q, want CH_UNREACHABLE", body.Code)
+	}
+}

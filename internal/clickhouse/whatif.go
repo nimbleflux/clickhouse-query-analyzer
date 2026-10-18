@@ -94,11 +94,11 @@ func (c *Client) ValidateIndexSuggestion(ctx context.Context, database, table, c
 	idxName := fmt.Sprintf("clicklens_whatif_%s", strings.ReplaceAll(column, "`", ""))
 	create := fmt.Sprintf(
 		"CREATE HYPOTHETICAL INDEX %s ON %s.%s (%s) TYPE %s GRANULARITY %d",
-		quoteID(idxName), quoteID(database), quoteID(table), quoteID(column), indexType, granularity)
+		quoteIdent(idxName), quoteIdent(database), quoteIdent(table), quoteIdent(column), indexType, granularity)
 	if err := c.conn.Exec(ctx, create); err != nil {
 		// A leftover hypothetical index from an earlier probe on the same
 		// pooled connection: drop and retry once.
-		if err2 := c.conn.Exec(ctx, fmt.Sprintf("DROP INDEX IF EXISTS %s.%s.%s", quoteID(database), quoteID(table), quoteID(idxName))); err2 == nil {
+		if err2 := c.conn.Exec(ctx, fmt.Sprintf("DROP INDEX IF EXISTS %s.%s.%s", quoteIdent(database), quoteIdent(table), quoteIdent(idxName))); err2 == nil {
 			if err3 := c.conn.Exec(ctx, create); err3 != nil {
 				return unavailable(fmt.Sprintf("Hypothetical index probe failed: %v", err3))
 			}
@@ -110,12 +110,12 @@ func (c *Client) ValidateIndexSuggestion(ctx context.Context, database, table, c
 		// Hypothetical indexes are session-scoped; drop it so the pooled
 		// connection doesn't accumulate probe artifacts. Best-effort.
 		_ = c.conn.Exec(context.WithoutCancel(ctx),
-			fmt.Sprintf("DROP INDEX IF EXISTS %s.%s.%s", quoteID(database), quoteID(table), quoteID(idxName)))
+			fmt.Sprintf("DROP INDEX IF EXISTS %s.%s.%s", quoteIdent(database), quoteIdent(table), quoteIdent(idxName)))
 	}()
 
 	probe := fmt.Sprintf(
 		"EXPLAIN WHATIF SELECT 1 FROM %s.%s WHERE %s = %s",
-		quoteID(database), quoteID(table), quoteID(column), sampleLiteral(sample))
+		quoteIdent(database), quoteIdent(table), quoteIdent(column), sampleLiteral(sample))
 
 	rows, err := c.conn.Query(ctx, probe)
 	if err != nil {
