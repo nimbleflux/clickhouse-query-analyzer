@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { Plug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge, Menu, X, Network, Layers, FlaskConical, ChevronRight, PanelLeft, PanelLeftClose, GitMerge, Users, BarChart3, TrendingUp, ChevronsUpDown, ChevronsDownUp, Waypoints, type LucideIcon } from "lucide-react";
+import { Plug, Loader2, AlertCircle, GitCompare, Code, Sun, Moon, Wrench, List, Activity, Fingerprint, Gauge, Menu, X, Network, Layers, FlaskConical, ChevronRight, PanelLeft, PanelLeftClose, GitMerge, Users, BarChart3, TrendingUp, ChevronsUpDown, ChevronsDownUp, Waypoints, Archive, Globe, type LucideIcon } from "lucide-react";
 import type { ConnectionParams } from "../api/connection";
 import { setConnectionHeaders } from "../api/connection";
 import { testConnection } from "../api/client";
 import { ThemeContext } from "../api/theme";
+import { useAppSettings } from "@/hooks/useAppSettings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/input";
@@ -25,6 +26,7 @@ const NAV_SECTIONS: NavSectionDef[] = [
       { to: "/ddl", icon: Layers, label: "DDL" },
       { to: "/mutations", icon: FlaskConical, label: "Mutations" },
       { to: "/merges", icon: GitMerge, label: "Merges" },
+      { to: "/backups", icon: Archive, label: "Backups" },
       { to: "/system-metrics", icon: BarChart3, label: "System Metrics" },
       { to: "/trends", icon: TrendingUp, label: "Trends" },
     ],
@@ -69,6 +71,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/optimizer": "Table Optimizer",
   "/editor": "SQL Editor",
   "/compare": "Query Comparison",
+  "/backups": "Backups",
 };
 
 export function Layout({
@@ -104,6 +107,7 @@ export function Layout({
     if (!title) {
       if (path.startsWith("/query/")) title = "Query Detail";
       else if (path.startsWith("/fingerprints/")) title = "Fingerprint Detail";
+      else if (path.startsWith("/tables/")) title = "Table Parts";
       else title = "ClickLens";
     }
     const tab = new URLSearchParams(location.search).get("tab");
@@ -139,6 +143,11 @@ export function Layout({
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     try { return (localStorage.getItem("ch-theme") as "dark" | "light") || "dark"; } catch { return "dark"; }
   });
+  // Display-timezone preference: "server" renders ClickHouse's stored
+  // wall-clock strings as-is (default); "browser" converts them to the
+  // browser's zone (plumbing in hooks/useAppSettings.ts; pages adopt the
+  // conversion in a follow-up).
+  const { settings: appSettings, setDisplayTimezone } = useAppSettings();
 
   const toggleTheme = () => {
     setTheme((prev) => {
@@ -279,7 +288,7 @@ export function Layout({
             title={`Connected — ${connectionLabel}${clusterNote ? " (local mode)" : ""}`}
             className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-text-primary)] ${rail ? "justify-center" : ""}`}
           >
-            <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+            <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-[var(--color-success)]" />
             {!rail && (
               <span className="min-w-0 flex-1 text-left truncate">
                 {connectionLabel}
@@ -311,6 +320,18 @@ export function Layout({
             className="rounded p-1.5 text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-text-primary)]"
           >
             {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </button>
+          <button
+            onClick={() => setDisplayTimezone(appSettings.displayTimezone === "server" ? "browser" : "server")}
+            title={
+              appSettings.displayTimezone === "server"
+                ? "Times shown as stored by ClickHouse (server timezone). Click to convert them to your browser's timezone."
+                : "Times converted to your browser's timezone. Click to show them as stored by ClickHouse."
+            }
+            aria-pressed={appSettings.displayTimezone === "browser"}
+            className={`rounded p-1.5 hover:bg-[var(--surface-hover)] ${appSettings.displayTimezone === "browser" ? "text-[var(--color-accent)]" : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"}`}
+          >
+            <Globe className="h-4 w-4" />
           </button>
           <a
             href="https://github.com/nimbleflux/clickhouse-query-analyzer"

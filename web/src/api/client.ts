@@ -35,13 +35,103 @@ import { ApiError, type ApiErrorCode } from "./errors";
 
 const BASE = "/api";
 
+// ---------------------------------------------------------------------------
+// Auth token (-auth-token flag on the backend). The token lives in
+// sessionStorage (per-tab, cleared on close) and rides along as X-Auth-Token
+// on every request, next to the connection headers.
+// ---------------------------------------------------------------------------
+const AUTH_TOKEN_KEY = "ch-auth-token";
+
+export function getAuthToken(): string {
+  try { return sessionStorage.getItem(AUTH_TOKEN_KEY) || ""; } catch { return ""; }
+}
+
+export function setAuthToken(token: string): void {
+  try {
+    if (token) sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+    else sessionStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch {}
+}
+
+export function clearAuthToken(): void {
+  setAuthToken("");
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken();
+  return token ? { "X-Auth-Token": token } : {};
+}
+
+/**
+ * Fired when the backend answers 401 with code UNAUTHORIZED. App-level UI
+ * (components/AuthDialog.tsx) listens for this and asks for the token.
+ */
+function notifyUnauthorized(res: Response): void {
+  if (res.status !== 401) return;
+  res
+    .clone()
+    .json()
+    .then((body: { code?: string; error?: string; hint?: string }) => {
+      if (body?.code === "UNAUTHORIZED") {
+        window.dispatchEvent(
+          new CustomEvent("clicklens:unauthorized", { detail: { error: body.error ?? "", hint: body.hint ?? "" } }),
+        );
+      }
+    })
+    .catch(() => {});
+}
+
+// ---------------------------------------------------------------------------
+// Server timezone, captured from the POST /api/connect response at connect
+// time. Display-side conversion (browser-zone rendering of server wall-clock
+// strings) lives in hooks/useAppSettings.ts.
+// ---------------------------------------------------------------------------
+const SERVER_TIMEZONE_KEY = "ch-server-timezone";
+let serverTimezone = "";
+try { serverTimezone = sessionStorage.getItem(SERVER_TIMEZONE_KEY) || ""; } catch {}
+
+const timezoneListeners = new Set<() => void>();
+
+export function setServerTimezone(tz: string): void {
+  if (!tz || tz === serverTimezone) return;
+  serverTimezone = tz;
+  try { sessionStorage.setItem(SERVER_TIMEZONE_KEY, tz); } catch {}
+  for (const fn of timezoneListeners) fn();
+}
+
+export function getServerTimezone(): string {
+  return serverTimezone;
+}
+
+/** Subscribe to server-timezone changes (used by useServerTimezone). */
+export function subscribeServerTimezone(fn: () => void): () => void {
+  timezoneListeners.add(fn);
+  return () => timezoneListeners.delete(fn);
+}
+
+// Default timeout for JSON requests so a hung request fails after a minute
+// instead of spinning forever. Streaming endpoints (executeQuery) opt out —
+// progress keeps legitimately long queries alive there.
+const DEFAULT_TIMEOUT_MS = 60_000;
+
+/**
+ * Compose the caller's signal with a default timeout. The timeout only arms
+ * fetchJSON paths; executeQuery passes its own signal straight through.
+ */
+function withDefaultTimeout(signal?: AbortSignal | null): AbortSignal {
+  const timeout = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   let res: Response;
   try {
     res = await fetch(url, {
       ...options,
+      signal: withDefaultTimeout(options?.signal),
       headers: {
         ...getConnectionHeaders(),
+        ...authHeaders(),
         ...(options?.headers || {}),
       },
     });
@@ -49,9 +139,17 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
     throw ApiError.wrap(e);
   }
   if (!res.ok) {
+    notifyUnauthorized(res);
     throw await ApiError.fromResponse(res);
   }
-  return res.json();
+  try {
+    return await res.json();
+  } catch {
+    // Truncated or non-JSON body (proxy error page, etc.) — keep the error
+    // shape consistent with every other failure instead of leaking a raw
+    // SyntaxError to callers.
+    throw new ApiError("Invalid JSON in server response", res.status, "NETWORK_ERROR", "", true);
+  }
 }
 
 export type ConnectResponse = {
@@ -59,6 +157,8 @@ export type ConnectResponse = {
   cluster?: string;
   is_cluster?: boolean;
   cluster_note?: string;
+  /** Server IANA timezone (system.timezone); empty when detection failed. */
+  timezone?: string;
 };
 
 export type ServerConfig = {
@@ -76,7 +176,11 @@ export async function fetchServerConfig(signal?: AbortSignal): Promise<ServerCon
 }
 
 export async function testConnection(): Promise<ConnectResponse> {
-  return fetchJSON<ConnectResponse>(`${BASE}/connect`, { method: "POST" });
+  const res = await fetchJSON<ConnectResponse>(`${BASE}/connect`, { method: "POST" });
+  // Capture the server timezone at the single point every connect flow goes
+  // through (main.tsx auto-connect AND the Layout connection bar).
+  setServerTimezone(res.timezone || "");
+  return res;
 }
 
 export async function fetchQueries(params: QueryListParams, signal?: AbortSignal): Promise<QueryListResponse> {
@@ -118,20 +222,11 @@ export async function fetchComparison(idA: string, idB: string, signal?: AbortSi
 }
 
 export async function fetchExplain(queryId: string, pretty = false, signal?: AbortSignal): Promise<ExplainResult> {
-  let res: Response;
-  try {
-    res = await fetch(`${BASE}/queries/${encodeURIComponent(queryId)}/explain${pretty ? "?pretty=1" : ""}`, {
-      method: "POST",
-      headers: { ...getConnectionHeaders(), "Content-Type": "application/json" },
-      signal,
-    });
-  } catch (e) {
-    throw ApiError.wrap(e);
-  }
-  if (!res.ok) {
-    throw await ApiError.fromResponse(res);
-  }
-  return res.json();
+  return fetchJSON<ExplainResult>(`${BASE}/queries/${encodeURIComponent(queryId)}/explain${pretty ? "?pretty=1" : ""}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal,
+  });
 }
 
 export async function fetchExplainAnalyze(
@@ -139,21 +234,11 @@ export async function fetchExplainAnalyze(
   processors = false,
   signal?: AbortSignal,
 ): Promise<ExplainAnalyze> {
-  const sp = processors ? "?processors=1" : "";
-  let res: Response;
-  try {
-    res = await fetch(`${BASE}/queries/${encodeURIComponent(queryId)}/explain-analyze${sp}`, {
-      method: "POST",
-      headers: { ...getConnectionHeaders(), "Content-Type": "application/json" },
-      signal,
-    });
-  } catch (e) {
-    throw ApiError.wrap(e);
-  }
-  if (!res.ok) {
-    throw await ApiError.fromResponse(res);
-  }
-  return res.json();
+  return fetchJSON<ExplainAnalyze>(`${BASE}/queries/${encodeURIComponent(queryId)}/explain-analyze${processors ? "?processors=1" : ""}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal,
+  });
 }
 
 export async function fetchThreadSummaries(queryId: string, signal?: AbortSignal): Promise<ThreadSummary[]> {
@@ -174,9 +259,11 @@ export async function executeQuery(
   onProgress?: (p: QueryProgress) => void,
   onStarted?: (queryId: string) => void,
   params?: Record<string, string>,
+  tag?: string,
 ): Promise<QueryResult> {
   const headers: Record<string, string> = {
     ...getConnectionHeaders(),
+    ...authHeaders(),
     "Content-Type": "application/json",
   };
   if (readonly) {
@@ -187,20 +274,24 @@ export async function executeQuery(
     res = await fetch(`${BASE}/execute`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ query, limit, offset, settings, params }),
+      body: JSON.stringify({ query, limit, offset, settings, params, tag }),
       signal,
     });
   } catch (e) {
     throw ApiError.wrap(e);
   }
   if (!res.ok) {
+    notifyUnauthorized(res);
     throw await ApiError.fromResponse(res);
   }
 
   // Consume the NDJSON event stream: started → progress* → result|error.
   // The first event arrives before the query runs, which keeps reverse-proxy
   // read timeouts from firing on long-running queries.
-  const reader = res.body!.getReader();
+  if (!res.body) {
+    throw new ApiError("Query stream unavailable", res.status, "NETWORK_ERROR", "", true);
+  }
+  const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   while (true) {
@@ -291,11 +382,12 @@ export async function executeDetached(
   settings?: Record<string, string>,
   params?: Record<string, string>,
   signal?: AbortSignal,
+  tag?: string,
 ): Promise<{ job_id: string; query_id: string }> {
   return fetchJSON(`${BASE}/execute`, {
     method: "POST",
-    headers: { ...getConnectionHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ query, limit, offset, settings, params, detached: true }),
+    headers: { ...getConnectionHeaders(), ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ query, limit, offset, settings, params, tag, detached: true }),
     signal,
   });
 }
@@ -366,9 +458,10 @@ export function streamBulkAnalysis(
     try {
       const res = await fetch(url, {
         signal: ctrl.signal,
-        headers: getConnectionHeaders(),
+        headers: { ...getConnectionHeaders(), ...authHeaders() },
       });
       if (!res.ok) {
+        notifyUnauthorized(res);
         throw await ApiError.fromResponse(res);
       }
 
@@ -554,3 +647,74 @@ export type SettingValue = {
   name: string;
   value: string;
 };
+
+// ---------------------------------------------------------------------------
+// Backups (system.backups) — the Backups page.
+// ---------------------------------------------------------------------------
+
+export type BackupEntry = {
+  id: string;
+  name: string;
+  status: string;
+  error?: string;
+  start_time: string;
+  end_time?: string;
+  num_files: number;
+  total_size: number;
+  files_read: number;
+  bytes_read: number;
+};
+
+export async function fetchBackups(limit = 200, signal?: AbortSignal): Promise<{ backups: BackupEntry[] }> {
+  return fetchJSON(`${BASE}/backups?limit=${limit}`, { signal });
+}
+
+// ---------------------------------------------------------------------------
+// Table parts explorer (system.parts) — /tables/{db}/{table}/parts.
+// ---------------------------------------------------------------------------
+
+export type PartDetail = {
+  name: string;
+  partition: string;
+  rows: number;
+  bytes_on_disk: number;
+  marks: number;
+  modification_time: string;
+  age_seconds: number;
+  primary_key_size_in_memory: number;
+  is_committed: number;
+};
+
+export type PartsPartitionSummary = {
+  partition: string;
+  parts: number;
+  rows: number;
+  bytes_on_disk: number;
+};
+
+export type PartsSummary = {
+  parts: number;
+  rows: number;
+  bytes_on_disk: number;
+  partition: string;
+  per_partition: PartsPartitionSummary[];
+};
+
+export type TablePartsResponse = {
+  parts: PartDetail[];
+  summary: PartsSummary;
+  limit: number;
+  total_parts: number;
+};
+
+export async function fetchTableParts(
+  db: string,
+  table: string,
+  limit = 500,
+  signal?: AbortSignal,
+): Promise<TablePartsResponse> {
+  return fetchJSON(
+    `${BASE}/schema/${encodeURIComponent(db)}/${encodeURIComponent(table)}/parts?limit=${limit}`,
+    { signal },
+  );
+}

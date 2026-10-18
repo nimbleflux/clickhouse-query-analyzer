@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend build clean docker dev-clickhouse dev-clickhouse-repl dev-clickhouse-s3 seed seed-replication test test-unit test-integration lint vulncheck fmt-check tidy-check
+.PHONY: dev dev-backend dev-frontend build clean docker dev-clickhouse dev-clickhouse-repl dev-clickhouse-s3 seed seed-replication test test-unit test-integration e2e lint vulncheck fmt-check tidy-check
 
 BINARY := clickhouse-query-analyzer
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -107,6 +107,13 @@ test: test-unit
 
 test-unit:
 	go test -race -count=1 ./internal/...
+
+# Browser e2e suite against the real release artifact (embedded frontend,
+# CSP, auth). Requires the dev ClickHouse: make dev-clickhouse && make seed.
+e2e: build-frontend
+	CGO_ENABLED=0 go build -o clickhouse-query-analyzer-e2e ./cmd/server
+	cd web && npx playwright install chromium
+	cd web && npx playwright test
 
 test-integration:
 	go test -race -count=1 -tags=integration ./tests/integration/...

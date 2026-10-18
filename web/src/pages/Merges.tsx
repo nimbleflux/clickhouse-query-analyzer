@@ -1,13 +1,12 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { RefreshCw, Search, Layers, GitMerge, HardDrive, Clock, Pause, Play } from "lucide-react";
 import { fetchMerges } from "../api/client";
 import type { MergeDetail } from "../api/types";
-import { ApiError } from "../api/errors";
-import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { usePollingQuery } from "@/hooks/usePollingQuery";
 import { TableSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { StatCard } from "@/components/ui/card";
 import { Input, Select } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
@@ -16,56 +15,29 @@ import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 import { TableName } from "@/components/TableName";
 import { formatBytes, formatDuration, formatNumber } from "../utils";
 
-function StatCard({ label, value, icon: Icon }: { label: string; value: string; icon: typeof Clock }) {
-  return (
-    <Card className="p-4">
-      <div className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
-        <Icon className="h-3 w-3" /> {label}
-      </div>
-      <div className="mt-1 font-mono text-lg font-semibold text-[var(--color-text-primary)]">{value}</div>
-    </Card>
-  );
-}
-
 export function Merges({ connected }: { connected: boolean }) {
-  const [merges, setMerges] = useState<MergeDetail[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [canceled, setCanceled] = useState(false);
   const [search, setSearch] = useState("");
   const [minElapsed, setMinElapsed] = useState(0); // seconds; 0 = all
-  const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(5);
-  const intervalRef = useRef<ReturnType<typeof setInterval>>(null);
-  const controllerRef = useRef<AbortController | null>(null);
-  const elapsed = useElapsedTimer(loading);
 
-  const load = useCallback(async () => {
-    setCanceled(false);
-    setLoading(true);
-    setError(null);
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    try {
-      setMerges(await fetchMerges(controller.signal));
-    } catch (e) {
-      if (e instanceof ApiError && e.isAbort()) return;
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      setError(e instanceof ApiError ? e : ApiError.wrap(e));
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
-  }, []);
+  const fetcher = useCallback((signal: AbortSignal) => fetchMerges(signal), []);
 
-  useEffect(() => { if (connected) load(); }, [load, connected]);
+  const {
+    data,
+    loading,
+    error,
+    canceled,
+    elapsed,
+    cancel,
+    reload,
+    live: autoRefresh,
+    setLive: setAutoRefresh,
+  } = usePollingQuery<MergeDetail[]>(fetcher, {
+    enabled: connected,
+    intervalMs: refreshInterval * 1000,
+  });
 
-  useEffect(() => {
-    if (!connected || !autoRefresh) return;
-    intervalRef.current = setInterval(load, refreshInterval * 1000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [autoRefresh, refreshInterval, load, connected]);
-
-  const cancel = useCallback(() => { setCanceled(true); controllerRef.current?.abort(); setLoading(false); }, []);
+  const merges = data ?? [];
 
   const filtered = useMemo(() => {
     let out = merges;
@@ -107,7 +79,7 @@ export function Merges({ connected }: { connected: boolean }) {
   }, [merges]);
 
   if (!connected) return <NotConnectedState />;
-  if (error && merges.length === 0) return <PageContainer><ErrorState error={error} onRetry={load} /></PageContainer>;
+  if (error && merges.length === 0) return <PageContainer><ErrorState error={error} onRetry={reload} /></PageContainer>;
 
   return (
     <PageContainer>
@@ -131,7 +103,7 @@ export function Merges({ connected }: { connected: boolean }) {
               {autoRefresh ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
               Live
             </Button>
-            <Button variant="secondary" size="md" onClick={load} disabled={loading}>
+            <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               Refresh
             </Button>
@@ -139,7 +111,7 @@ export function Merges({ connected }: { connected: boolean }) {
         }
       />
 
-      {error && merges.length > 0 && <div className="mb-4"><ErrorState error={error} onRetry={load} /></div>}
+      {error && merges.length > 0 && <div className="mb-4"><ErrorState error={error} onRetry={reload} /></div>}
 
       {loading && merges.length === 0 ? (
         <div className="py-4">
@@ -147,14 +119,14 @@ export function Merges({ connected }: { connected: boolean }) {
           <LoadingNotice elapsed={elapsed} onCancel={cancel} />
         </div>
       ) : canceled && merges.length === 0 ? (
-        <LoadingNotice canceled onRetry={load} />
+        <LoadingNotice canceled onRetry={reload} />
       ) : (
         <>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <StatCard label="Active merges" value={formatNumber(stats.total)} icon={GitMerge} />
-            <StatCard label="Bytes merging" value={formatBytes(stats.bytes)} icon={HardDrive} />
-            <StatCard label="Slowest" value={stats.slowest ? formatDuration(stats.slowest * 1000) : "-"} icon={Clock} />
-            <StatCard label="Mutation merges" value={formatNumber(stats.mutations)} icon={Layers} />
+            <StatCard label="Active merges" value={formatNumber(stats.total)} icon={<GitMerge className="h-3 w-3" />} />
+            <StatCard label="Bytes merging" value={formatBytes(stats.bytes)} icon={<HardDrive className="h-3 w-3" />} />
+            <StatCard label="Slowest" value={stats.slowest ? formatDuration(stats.slowest * 1000) : "-"} icon={<Clock className="h-3 w-3" />} />
+            <StatCard label="Mutation merges" value={formatNumber(stats.mutations)} icon={<Layers className="h-3 w-3" />} />
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">

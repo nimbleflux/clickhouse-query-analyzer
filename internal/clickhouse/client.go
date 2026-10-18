@@ -27,7 +27,10 @@ const (
 	// ClickLens issues itself (introspection, health checks, etc.). It lets the
 	// Queries and Fingerprints pages filter out ClickLens's own queries so the
 	// user only sees the queries they consciously executed. User-submitted SQL
-	// from the Query Editor bypasses the driver and is therefore not tagged.
+	// from the Query Editor goes through the same driver connection, so
+	// executeQueryNative explicitly overrides log_comment per query (see
+	// ExecuteOptions.LogComment) — otherwise the connection default here
+	// would tag editor queries as internal and hide them from the history.
 	managedLogComment = "clicklens"
 )
 
@@ -48,8 +51,13 @@ type Client struct {
 	// means detection failed or hasn't run; callers should check versionErr.
 	version    string
 	versionErr error
-	// advisor caches the remote-engine table list for the editor advisor
-	// (nil until first use; guarded by its own mutex internally).
+	// serverTimezone is the ClickHouse server's IANA zone name (timezone()),
+	// detected once at connect. Empty when detection failed. The frontend
+	// uses it to convert server-wall-clock timestamps for display.
+	serverTimezone string
+	// advisor caches the remote-engine table list for the editor advisor.
+	// Initialized in connect() so concurrent editor runs never race on the
+	// pointer; its contents are guarded by advisor.mu internally.
 	advisor *advisorCache
 	// queryLogFallback tracks that the full system.query_log is access-denied
 	// for this user and reads should use system.user_query_log (26.8+),
@@ -58,7 +66,9 @@ type Client struct {
 	queryLogFallback atomic.Bool
 	queryLogDenied   atomic.Bool
 	createdAt        time.Time
-	lastUsedAt       time.Time
+	// lastUsed is unix-nano, atomic because Get() writes it on every hit
+	// while the LRU eviction scan in connect() reads it under p.mu.
+	lastUsed atomic.Int64
 }
 
 type ConnParams struct {
@@ -67,7 +77,10 @@ type ConnParams struct {
 	Password string
 	Database string
 	SkipTLS  bool
-	Readonly bool
+	// NOTE: there is deliberately no connection-level Readonly flag —
+	// read-only enforcement lives in the API layer (X-CH-Readonly header +
+	// rejectWriteQuery) because it is per-request, not per-connection, in
+	// this pool. Real enforcement is a read-only ClickHouse user.
 }
 
 func (p ConnParams) key() string {
@@ -105,13 +118,26 @@ func (p *Pool) Get(ctx context.Context, params ConnParams) (*Client, error) {
 
 	if ok {
 		if time.Since(c.createdAt) < connMaxAge {
-			c.lastUsedAt = time.Now()
+			c.touch()
 			return c, nil
 		}
 		p.evict(key, c)
 	}
 
 	return p.connect(ctx, params, key)
+}
+
+// touch records pool-level last use (LRU ordering only; not query tracking).
+func (c *Client) touch() {
+	c.lastUsed.Store(time.Now().UnixNano())
+}
+
+// idleFor reports how long since the client was last handed out by Get().
+func (c *Client) idleFor() time.Duration {
+	if ts := c.lastUsed.Load(); ts > 0 {
+		return time.Since(time.Unix(0, ts))
+	}
+	return time.Since(c.createdAt)
 }
 
 func (p *Pool) healthLoop() {
@@ -264,7 +290,7 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 	p.mu.RUnlock()
 	if ok {
 		if time.Since(c.createdAt) < connMaxAge {
-			c.lastUsedAt = time.Now()
+			c.touch()
 			return c, nil
 		}
 		p.evict(key, c)
@@ -290,6 +316,7 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 
 	isCluster, cluster, clusterErr := detectCluster(ctx, conn)
 	version, versionErr := detectVersion(ctx, conn)
+	tz := detectTimezone(ctx, conn)
 
 	var httpCl *http.Client
 	if params.SkipTLS {
@@ -316,29 +343,40 @@ func (p *Pool) connect(ctx context.Context, params ConnParams, key string) (*Cli
 		clusterDetectErr: clusterErr,
 		version:          version,
 		versionErr:       versionErr,
+		serverTimezone:   tz,
+		advisor:          &advisorCache{},
 		createdAt:        time.Now(),
-		lastUsedAt:       time.Now(),
 	}
+	c.touch()
 
 	p.mu.Lock()
-	if len(p.clients) >= maxPoolSize {
-		var oldestKey string
-		var oldestURL string
-		var oldestTime time.Time
+	// Pool full: evict the least-recently-used client, preferring one that
+	// has been idle for a while — closing a connection that some request is
+	// actively querying fails that query mid-flight. The idle threshold
+	// keeps eviction from stalling entirely on a fully-hot pool.
+	const idleEvictThreshold = time.Minute
+	var oldestKey string
+	var oldestURL string
+	var maxIdle time.Duration
+	for k, v := range p.clients {
+		if idle := v.idleFor(); idle >= idleEvictThreshold && idle > maxIdle {
+			oldestKey, oldestURL, maxIdle = k, v.connURL, idle
+		}
+	}
+	if oldestKey == "" {
+		// Everything is hot: fall back to strict LRU by last use.
 		for k, v := range p.clients {
-			if oldestKey == "" || v.lastUsedAt.Before(oldestTime) {
-				oldestKey = k
-				oldestURL = v.connURL
-				oldestTime = v.lastUsedAt
+			if idle := v.idleFor(); idle > maxIdle {
+				oldestKey, oldestURL, maxIdle = k, v.connURL, idle
 			}
 		}
-		if oldestKey != "" {
-			slog.Info("evicting oldest connection to make room", "url", redactURL(oldestURL))
-			if old, ok := p.clients[oldestKey]; ok {
-				old.conn.Close()
-				delete(p.clients, oldestKey)
-				metrics.PoolEvictions.Inc()
-			}
+	}
+	if oldestKey != "" {
+		slog.Info("evicting connection to make room", "url", redactURL(oldestURL), "idle", maxIdle.Round(time.Second))
+		if old, ok := p.clients[oldestKey]; ok {
+			old.conn.Close()
+			delete(p.clients, oldestKey)
+			metrics.PoolEvictions.Inc()
 		}
 	}
 	p.clients[key] = c
@@ -412,7 +450,9 @@ func (c *Client) TableRef(table string) string {
 
 func (c *Client) tableRef(table string) string {
 	if c.isCluster {
-		return fmt.Sprintf("clusterAllReplicas('%s', system.%s)", c.cluster, table)
+		// quoteStr handles quotes/backslashes in odd cluster names — a
+		// broken name would otherwise corrupt every cluster-wide query.
+		return fmt.Sprintf("clusterAllReplicas(%s, system.%s)", quoteStr(c.cluster), table)
 	}
 	return fmt.Sprintf("system.%s", table)
 }
@@ -437,7 +477,7 @@ func detectCluster(ctx context.Context, conn driver.Conn) (bool, string, error) 
 		// cluster-wide queries everywhere; failure degrades to local-node.
 		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		probe, probeErr := conn.Query(probeCtx, fmt.Sprintf("SELECT 1 FROM clusterAllReplicas('%s', system.one) LIMIT 1", cluster))
+		probe, probeErr := conn.Query(probeCtx, fmt.Sprintf("SELECT 1 FROM clusterAllReplicas(%s, system.one) LIMIT 1", quoteStr(cluster)))
 		if probeErr != nil {
 			return false, "", fmt.Errorf("cluster %q unusable (%w) — using the local node", cluster, probeErr)
 		}
@@ -457,6 +497,22 @@ func detectVersion(ctx context.Context, conn driver.Conn) (string, error) {
 		return "", err
 	}
 	return version, nil
+}
+
+// detectTimezone reads the server's IANA zone name once at connect. Best
+// effort: an empty result just means the UI shows timestamps as stored.
+func detectTimezone(ctx context.Context, conn driver.Conn) string {
+	var tz string
+	if err := conn.QueryRow(ctx, "SELECT timezone()").Scan(&tz); err != nil {
+		return ""
+	}
+	return tz
+}
+
+// ServerTimezone returns the server's IANA timezone name ("" if detection
+// failed at connect). Safe for concurrent reads: written once at connect.
+func (c *Client) ServerTimezone(_ context.Context) string {
+	return c.serverTimezone
 }
 
 func mustPort(port string) int {

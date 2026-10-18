@@ -1,11 +1,10 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { RefreshCw, Users, KeyRound, ShieldAlert, Trash2, BadgeCheck, AlertTriangle, Search, ChevronRight, ChevronsUpDown, ChevronsDownUp, FileCode } from "lucide-react";
+import { RefreshCw, Users, KeyRound, ShieldAlert, Trash2, BadgeCheck, Search, ChevronRight, ChevronsUpDown, ChevronsDownUp, FileCode } from "lucide-react";
 import { fetchAccess, dropUser, dropRole, revokeGrant, fetchUserGrants, fetchRoleGrants } from "../api/client";
 import type { AccessOverview, UserRow, RoleRow, GrantRow, RoleGrant, QuotaUsageRow, QuotaDef } from "../api/types";
-import { ApiError } from "../api/errors";
 import { useToast } from "../components/Toast";
-import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { usePollingQuery } from "@/hooks/usePollingQuery";
 import { TableSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
@@ -13,7 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
-import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice, PartialErrorsBanner } from "@/components/ui/state";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Pagination } from "@/components/ui/Pagination";
 import { SqlStatementDialog } from "@/components/ui/SqlStatementDialog";
@@ -23,13 +22,16 @@ import { formatBytes, formatNumber } from "../utils";
 type Tab = "users" | "roles" | "grants" | "quota";
 type DropTarget = { kind: "user" | "role"; name: string };
 
+// The ?tab= param is user-editable, so it can't be cast blindly — an unknown
+// value would leave every tab branch unmatched and render an empty page.
+// Validate against the known tab ids and fall back to "users".
+export function tabFromParam(v: string | null): Tab {
+  return v === "roles" || v === "grants" || v === "quota" ? v : "users";
+}
+
 export function UsersAccess({ connected }: { connected: boolean }) {
-  const [data, setData] = useState<AccessOverview | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [canceled, setCanceled] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
-  const [tab, setTabRaw] = useState<Tab>((searchParams.get("tab") as Tab) || "users");
+  const [tab, setTabRaw] = useState<Tab>(tabFromParam(searchParams.get("tab")));
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [query, setQuery] = useState("");
@@ -44,29 +46,18 @@ export function UsersAccess({ connected }: { connected: boolean }) {
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<GrantRow | null>(null);
   const [grantsTarget, setGrantsTarget] = useState<DropTarget | null>(null);
-  const controllerRef = useRef<AbortController | null>(null);
-  const elapsed = useElapsedTimer(loading);
   const { toast } = useToast();
 
-  const load = useCallback(async () => {
-    setCanceled(false);
-    setLoading(true);
-    setError(null);
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    try {
-      setData(await fetchAccess(controller.signal));
-    } catch (e) {
-      if (e instanceof ApiError && e.isAbort()) return;
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      setError(e instanceof ApiError ? e : ApiError.wrap(e));
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { if (connected) load(); }, [load, connected]);
-  const cancel = useCallback(() => { setCanceled(true); controllerRef.current?.abort(); setLoading(false); }, []);
+  const fetcher = useCallback((signal: AbortSignal) => fetchAccess(signal), []);
+  const {
+    data,
+    loading,
+    error,
+    canceled,
+    elapsed,
+    cancel,
+    reload,
+  } = usePollingQuery<AccessOverview>(fetcher, { enabled: connected });
 
   const canManage = !!data?.can_manage_access;
 
@@ -76,7 +67,7 @@ export function UsersAccess({ connected }: { connected: boolean }) {
       if (dropTarget.kind === "user") await dropUser(dropTarget.name);
       else await dropRole(dropTarget.name);
       toast(`${dropTarget.kind === "user" ? "User" : "Role"} '${dropTarget.name}' dropped`, "success");
-      setTimeout(load, 800);
+      setTimeout(reload, 800);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Failed to drop", "error");
     } finally {
@@ -92,7 +83,7 @@ export function UsersAccess({ connected }: { connected: boolean }) {
     try {
       await revokeGrant(kind, grantee, g.access_type, g.database, g.table, g.column, g.grant_option === 1);
       toast(`Revoked ${g.access_type} from ${grantee}`, "success");
-      setTimeout(load, 800);
+      setTimeout(reload, 800);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Failed to revoke", "error");
     } finally {
@@ -108,7 +99,7 @@ export function UsersAccess({ connected }: { connected: boolean }) {
   }, [grantsTarget]);
 
   if (!connected) return <NotConnectedState />;
-  if (error && !data) return <PageContainer><ErrorState error={error} onRetry={load} /></PageContainer>;
+  if (error && !data) return <PageContainer><ErrorState error={error} onRetry={reload} /></PageContainer>;
 
   const tabs: { id: Tab; label: string; count: number }[] = [
     { id: "users", label: "Users", count: data?.users.length ?? 0 },
@@ -125,7 +116,7 @@ export function UsersAccess({ connected }: { connected: boolean }) {
         actions={
           <>
             {loading && data && <RefreshIndicator elapsed={elapsed} />}
-            <Button variant="secondary" size="md" onClick={load} disabled={loading}>
+            <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               Refresh
             </Button>
@@ -141,16 +132,10 @@ export function UsersAccess({ connected }: { connected: boolean }) {
       )}
 
       {data?.partial_errors && data.partial_errors.length > 0 && (
-        <div
-          className="flex items-start gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)] px-4 py-2 text-xs text-[var(--color-text-secondary)]"
-          title={data.partial_errors.map((t) => `${t}: ${data.partial_error_details?.[t] ?? ""}`).join("\n")}
-        >
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
-          <span>Some sections are unavailable ({data.partial_errors.join(", ")}). Hover for details.</span>
-        </div>
+        <PartialErrorsBanner errors={data.partial_errors} details={data.partial_error_details} />
       )}
 
-      {error && data && <div className="mb-4"><ErrorState error={error} onRetry={load} /></div>}
+      {error && data && <div className="mb-4"><ErrorState error={error} onRetry={reload} /></div>}
 
       {loading && !data ? (
         <div className="py-4">
@@ -158,7 +143,7 @@ export function UsersAccess({ connected }: { connected: boolean }) {
           <LoadingNotice elapsed={elapsed} onCancel={cancel} />
         </div>
       ) : canceled && !data ? (
-        <LoadingNotice canceled onRetry={load} />
+        <LoadingNotice canceled onRetry={reload} />
       ) : data ? (
         <>
           <div className="mb-4 flex gap-1 border-b border-[var(--color-border)]">

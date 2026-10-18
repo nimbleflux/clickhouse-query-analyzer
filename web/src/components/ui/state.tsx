@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { AlertCircle, Loader2, Plug, RefreshCw, type LucideIcon } from "lucide-react";
+import { AlertCircle, AlertTriangle, Loader2, Plug, RefreshCw, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ApiError } from "@/api/errors";
 import { Button } from "./button";
@@ -190,6 +190,41 @@ export function RefreshIndicator({ elapsed, showAfter = 3 }: { elapsed: number; 
       <RefreshCw className="h-3 w-3 animate-spin" />
       Refreshing{elapsed > showAfter ? `… ${elapsed}s` : "…"}
     </span>
+  );
+}
+
+interface PartialErrorsBannerProps {
+  /** Names of the backend sections that failed (e.g. ["query_log", "metrics"]). */
+  errors: string[];
+  /** Optional per-section error text, keyed by the section name. */
+  details?: Record<string, string>;
+}
+
+/**
+ * Disclosure for pages whose backend response aggregates several queries and
+ * some of them failed (missing grants, aged-out tables, …). Expands (instead
+ * of a hover-only `title` tooltip) so the details are reachable on touch and
+ * keyboard. Renders nothing when there are no errors.
+ */
+export function PartialErrorsBanner({ errors, details }: PartialErrorsBannerProps) {
+  if (!errors || errors.length === 0) return null;
+  return (
+    <details className="rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)] px-4 py-2 text-xs text-[var(--color-text-secondary)]">
+      <summary className="flex cursor-pointer select-none items-center gap-2">
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
+        <span>
+          Partial data ({errors.length}) — some sections are unavailable ({errors.join(", ")}). Expand for details.
+        </span>
+      </summary>
+      <ul className="mt-2 list-disc pl-6">
+        {errors.map((t) => (
+          <li key={t} className="break-words">
+            <span className="font-mono">{t}</span>
+            {details?.[t] ? <span className="opacity-90">: {details[t]}</span> : null}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

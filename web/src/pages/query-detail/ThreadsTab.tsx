@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, Fragment } from "react";
 import { ChevronDown, ChevronRight, ArrowDown, ArrowUp } from "lucide-react";
 import { fetchThreadSummaries, fetchThreadProfile } from "@/api/client";
 import type { ThreadEntry, ThreadSummary, ThreadProfile } from "@/api/types";
+import type { ApiError } from "@/api/errors";
 import { formatBytes, formatDuration, formatNumber } from "@/utils";
 import { ChartSection, SettingHint, parsePipeline, KEY_PROFILE_EVENTS } from "./shared";
 import { ThreadGantt } from "./ThreadGantt";
@@ -10,6 +11,9 @@ import { LoadingState, EmptyState, ErrorState } from "@/components/ui/state";
 interface ThreadsTabProps {
   queryId: string;
   threads: ThreadEntry[];
+  /** Set when the parent's thread-list fetch failed; renders an ErrorState instead of the "no data" hint. */
+  threadsError?: ApiError | null;
+  onRetryThreads?: () => void;
   pipelineStr?: string;
   querySettings?: Record<string, string>;
 }
@@ -31,7 +35,7 @@ function sortValue(t: ThreadSummary, key: SortKey): number {
   }
 }
 
-export function ThreadsTab({ queryId, threads, pipelineStr, querySettings }: ThreadsTabProps) {
+export function ThreadsTab({ queryId, threads, threadsError, onRetryThreads, pipelineStr, querySettings }: ThreadsTabProps) {
   const [threadSummaries, setThreadSummaries] = useState<ThreadSummary[]>([]);
   const [summariesLoading, setSummariesLoading] = useState(threads.length > 0);
   const [summariesError, setSummariesError] = useState("");
@@ -46,22 +50,47 @@ export function ThreadsTab({ queryId, threads, pipelineStr, querySettings }: Thr
 
   useEffect(() => {
     if (threads.length === 0) return;
+    // Abort on queryId change / unmount so a slow stale response can't win
+    // over a newer one (both effects fetch per-query data).
+    const controller = new AbortController();
     setSummariesLoading(true);
     setSummariesError("");
-    fetchThreadSummaries(queryId)
-      .then((s) => { setThreadSummaries(s); setSummariesError(""); })
-      .catch((e) => { setSummariesError(e instanceof Error ? e.message : "Failed to load thread summaries"); })
-      .finally(() => setSummariesLoading(false));
+    fetchThreadSummaries(queryId, controller.signal)
+      .then((s) => {
+        if (controller.signal.aborted) return;
+        setThreadSummaries(s);
+        setSummariesError("");
+      })
+      .catch((e) => {
+        if (controller.signal.aborted) return;
+        setSummariesError(e instanceof Error ? e.message : "Failed to load thread summaries");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSummariesLoading(false);
+      });
+    return () => controller.abort();
   }, [threads.length, queryId]);
 
   useEffect(() => {
     if (selectedThread === null) { setThreadProfile(null); setProfileError(""); return; }
+    const controller = new AbortController();
     setProfileLoading(true);
     setProfileError("");
-    fetchThreadProfile(queryId, selectedThread)
-      .then((p) => { setThreadProfile(p); setProfileError(""); })
-      .catch((e) => { setThreadProfile(null); setProfileError(e instanceof Error ? e.message : "Failed to load thread profile"); })
-      .finally(() => setProfileLoading(false));
+    fetchThreadProfile(queryId, selectedThread, controller.signal)
+      .then((p) => {
+        if (controller.signal.aborted) return;
+        setThreadProfile(p);
+        setProfileError("");
+      })
+      .catch((e) => {
+        if (controller.signal.aborted) return;
+        setThreadProfile(null);
+        setProfileError(e instanceof Error ? e.message : "Failed to load thread profile");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setProfileLoading(false);
+      });
+    return () => controller.abort();
   }, [selectedThread, queryId]);
 
   const pipelineSteps = pipelineStr ? parsePipeline(pipelineStr) : [];
@@ -111,6 +140,18 @@ export function ThreadsTab({ queryId, threads, pipelineStr, querySettings }: Thr
       default: return "bg-[var(--color-text-secondary)]/10 text-[var(--color-text-secondary)]";
     }
   };
+
+  // The parent's thread-list fetch failed: surface it instead of letting the
+  // empty list fall through to the "no thread data" empty state.
+  if (threadsError && threads.length === 0) {
+    return (
+      <ErrorState
+        error={threadsError}
+        title="Failed to load threads"
+        onRetry={onRetryThreads}
+      />
+    );
+  }
 
   if (summariesLoading && threadSummaries.length === 0) {
     return <LoadingState message="Loading thread data..." />;

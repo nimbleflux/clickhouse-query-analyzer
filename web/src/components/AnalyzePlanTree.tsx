@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { ChevronRight, ChevronDown } from "lucide-react";
 import type { ExplainAnalyze } from "@/api/types";
 import { formatBytes, formatNumber, formatDuration } from "@/utils";
@@ -714,7 +714,9 @@ function SummaryStrip({ s }: { s: ExplainAnalyze["summary"] }) {
 }
 
 export function AnalyzePlanTree({ result }: { result: ExplainAnalyze }) {
-  const tree = parseAnalyzePlan(result.raw);
+  // The parse is a full-text pass over the raw plan; memoize it so node
+  // expand/collapse re-renders don't re-parse on every render.
+  const tree = useMemo(() => parseAnalyzePlan(result.raw), [result.raw]);
 
   return (
     <div>

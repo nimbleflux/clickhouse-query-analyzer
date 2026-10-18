@@ -3,18 +3,21 @@ package clickhouse
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
-
-	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
-func quoteID(s string) string {
-	return "`" + strings.ReplaceAll(s, "`", "``") + "`"
-}
-
+// quoteStr single-quotes a string literal for ClickHouse SQL. ClickHouse
+// honors BOTH ” and \' escapes inside single-quoted literals, so backslashes
+// must be doubled before quotes — otherwise a value ending in \ escapes the
+// closing quote and everything after it executes as SQL. Callers should
+// prefer bound ? parameters; this exists for places the driver can't bind
+// (currently none in this package) and is tested against quote-breakout
+// payloads in table_optimizer_test.go.
 func quoteStr(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
@@ -146,6 +149,10 @@ type BulkDone struct {
 	Analyzed int `json:"analyzed"`
 	Skipped  int `json:"skipped"`
 	Errors   int `json:"errors"`
+	// Error carries the reason when Errors > 0 was caused by a stream-level
+	// failure (e.g. the table listing itself failed) — without it the UI can
+	// only show "1 error" with no cause.
+	Error string `json:"error,omitempty"`
 }
 
 type BulkFilters struct {
@@ -212,23 +219,31 @@ func (c *Client) AnalyzeTable(ctx context.Context, database, table string) (*Tab
 }
 
 func (c *Client) ListOptimizableTables(ctx context.Context, database string, filters BulkFilters) ([]TableInfo, error) {
-	query := fmt.Sprintf(`
+	query := `
 		SELECT name, engine, total_rows
 		FROM system.tables
-		WHERE database = %s
+		WHERE database = ?
 		  AND engine IN ('MergeTree', 'ReplacingMergeTree', 'SummingMergeTree', 'AggregatingMergeTree', 'CollapsingMergeTree', 'VersionedCollapsingMergeTree', 'GraphiteMergeTree', 'ReplicatedMergeTree', 'ReplicatedReplacingMergeTree', 'ReplicatedSummingMergeTree', 'ReplicatedAggregatingMergeTree', 'ReplicatedCollapsingMergeTree', 'ReplicatedVersionedCollapsingMergeTree')
-	`, quoteStr(database))
-
+	`
+	args := []any{database}
 	if filters.Engine != "" {
-		query += fmt.Sprintf(" AND engine = %s", quoteStr(filters.Engine))
+		query += " AND engine = ?"
+		args = append(args, filters.Engine)
 	}
 	if filters.MinRows > 0 {
-		query += fmt.Sprintf(" AND total_rows >= %d", filters.MinRows)
+		query += " AND total_rows >= ?"
+		args = append(args, filters.MinRows)
+	}
+	if filters.MinBytes > 0 {
+		// total_bytes is Nullable for some engines; COALESCE keeps the
+		// comparison three-valued-safe.
+		query += " AND COALESCE(total_bytes, 0) >= ?"
+		args = append(args, filters.MinBytes)
 	}
 
 	query += " ORDER BY name"
 
-	rows, err := c.conn.Query(ctx, query)
+	rows, err := c.conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing tables: %w", err)
 	}
@@ -249,7 +264,7 @@ func (c *Client) ListOptimizableTables(ctx context.Context, database string, fil
 func (c *Client) StreamBulkAnalysis(ctx context.Context, database string, filters BulkFilters, fn func(BulkEvent)) {
 	tables, err := c.ListOptimizableTables(ctx, database, filters)
 	if err != nil {
-		fn(BulkEvent{Type: "done", Done: &BulkDone{Errors: 1}})
+		fn(BulkEvent{Type: "done", Done: &BulkDone{Errors: 1, Error: err.Error()}})
 		return
 	}
 
@@ -310,7 +325,7 @@ func (c *Client) StreamBulkAnalysis(ctx context.Context, database string, filter
 }
 
 func (c *Client) gatherTableMeta(ctx context.Context, a *TableAnalysis) error {
-	query := fmt.Sprintf(`
+	row := c.conn.QueryRow(ctx, `
 		SELECT
 			engine,
 			COALESCE(partition_key, ''),
@@ -320,10 +335,8 @@ func (c *Client) gatherTableMeta(ctx context.Context, a *TableAnalysis) error {
 			COALESCE(total_rows, 0),
 			COALESCE(total_bytes, 0)
 		FROM system.tables
-		WHERE database = %s AND name = %s
-	`, quoteStr(a.Database), quoteStr(a.Table))
-
-	row := c.conn.QueryRow(ctx, query)
+		WHERE database = ? AND name = ?
+	`, a.Database, a.Table)
 	return row.Scan(&a.Engine, &a.PartitionKey, &a.OrderByKey, &a.PrimaryKey, &a.SamplingKey, &a.TotalRows, &a.TotalBytes)
 }
 
@@ -409,30 +422,42 @@ func (c *Client) sampleColumns(ctx context.Context, a *TableAnalysis) error {
 	if !isMergeTreeEngine(a.Engine) || a.Database == "system" {
 		return nil
 	}
-	sampleClause := sampleClause(a.TotalRows)
-	fqn := fmt.Sprintf("%s.%s", quoteID(a.Database), quoteID(a.Table))
+	sample := sampleSource(a.TotalRows, a.SamplingKey)
+	fqn := fmt.Sprintf("%s.%s", quoteIdent(a.Database), quoteIdent(a.Table))
 
+	processed, failed := 0, 0
+	var firstErr error
 	for i := range a.Columns {
 		col := &a.Columns[i]
 		if col.DefaultKind == "MATERIALIZED" || col.DefaultKind == "ALIAS" {
 			continue
 		}
+		processed++
 
-		colName := quoteID(col.Name)
+		colName := quoteIdent(col.Name)
 		query := fmt.Sprintf(`
 			SELECT
 				uniqExact(%s),
 				count(),
 				sum(CAST(isNull(%s) AS UInt64)),
-				any(%s),
-				any(%s)
+				any(toString(%s)),
+				any(toString(%s))
 			FROM %s %s
-		`, colName, colName, fmt.Sprintf("toString(%s)", colName), fmt.Sprintf("toString(%s)", colName), fqn, sampleClause)
+		`, colName, colName, colName, colName, fqn, sample)
 
 		row := c.conn.QueryRow(ctx, query)
 		var distinct, total, nullCount uint64
 		var minVal, maxVal string
 		if err := row.Scan(&distinct, &total, &nullCount, &minVal, &maxVal); err != nil {
+			// A failure here used to be swallowed with `continue`, which hid
+			// the fact that ALL sampling was failing (e.g. SAMPLE emitted for
+			// a table without a sampling key) and silently zeroed every
+			// data-type recommendation. Record it; fail the table only when
+			// nothing could be sampled at all.
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
 		col.DistinctCount = distinct
@@ -444,13 +469,22 @@ func (c *Client) sampleColumns(ctx context.Context, a *TableAnalysis) error {
 		if isNumericType(col.Type) && total > 1 && !col.IsInOrderByKey {
 			diffQuery := fmt.Sprintf(`
 				SELECT avg(abs(%s - lagInFrame(%s) OVER (ORDER BY %s))
-			) FROM %s %s LIMIT 10000
-			`, colName, colName, colName, fqn, sampleClause)
+			) FROM %s %s
+			`, colName, colName, colName, fqn, sample)
 			var avgDiff float64
-			if err := c.conn.QueryRow(ctx, diffQuery).Scan(&avgDiff); err == nil && avgDiff != 0 {
+			if err := c.conn.QueryRow(ctx, diffQuery).Scan(&avgDiff); err != nil {
+				// Best-effort refinement — the stats above are already valid.
+				slog.Debug("column avg-diff sampling failed", "table", fqn, "column", col.Name, "error", err)
+			} else if avgDiff != 0 {
 				col.AvgDiff = &avgDiff
 			}
 		}
+	}
+	if processed > 0 && failed == processed {
+		return fmt.Errorf("sampling %s: %w", fqn, firstErr)
+	}
+	if failed > 0 {
+		slog.Warn("some columns could not be sampled", "table", fqn, "failed", failed, "error", firstErr)
 	}
 	return nil
 }
@@ -499,7 +533,7 @@ func (c *Client) recommendLowCardinality(a *TableAnalysis, cc confidenceCtx) []R
 			Current:     col.Type,
 			Suggested:   newType,
 			Impact:      fmt.Sprintf("Reduces storage by ~%s, speeds up GROUP BY and IN operations", estimatedSavings),
-			DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s;", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), newType),
+			DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s;", quoteIdent(a.Database), quoteIdent(a.Table), quoteIdent(col.Name), newType),
 		})
 	}
 	return recs
@@ -535,7 +569,7 @@ func (c *Client) recommendIntegerResize(a *TableAnalysis, cc confidenceCtx) []Re
 			Current:     col.Type,
 			Suggested:   newType,
 			Impact:      fmt.Sprintf("Reduces column size from %d bytes to %d bytes per value", intTypeSize(stripNullable(col.Type)), intTypeSize(suggested)),
-			DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s;", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), newType),
+			DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s;", quoteIdent(a.Database), quoteIdent(a.Table), quoteIdent(col.Name), newType),
 		})
 	}
 	return recs
@@ -565,7 +599,7 @@ func (c *Client) recommendRemoveNullable(a *TableAnalysis, cc confidenceCtx) []R
 			Current:     col.Type,
 			Suggested:   inner,
 			Impact:      "Eliminates null bitmap overhead, improves scan performance",
-			DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s;", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), inner),
+			DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s;", quoteIdent(a.Database), quoteIdent(a.Table), quoteIdent(col.Name), inner),
 		})
 	}
 	return recs
@@ -617,7 +651,7 @@ func (c *Client) recommendOrderBy(a *TableAnalysis, cc confidenceCtx) []Recommen
 
 	var orderCols []string
 	for _, c2 := range candidates[:limit] {
-		orderCols = append(orderCols, fmt.Sprintf("`%s`", c2.name))
+		orderCols = append(orderCols, quoteIdent(c2.name))
 	}
 
 	suggested := strings.Join(orderCols, ", ")
@@ -630,7 +664,7 @@ func (c *Client) recommendOrderBy(a *TableAnalysis, cc confidenceCtx) []Recommen
 		Current:          "(none)",
 		Suggested:        suggested,
 		Impact:           "Enables proper data compression and efficient range scans",
-		DDL:              fmt.Sprintf("-- Requires table recreation:\n-- CREATE TABLE %s.%s ... ORDER BY (%s);", quoteID(a.Database), quoteID(a.Table), suggested),
+		DDL:              fmt.Sprintf("-- Requires table recreation:\n-- CREATE TABLE %s.%s ... ORDER BY (%s);", quoteIdent(a.Database), quoteIdent(a.Table), suggested),
 		RequiresRecreate: true,
 	})
 	return recs
@@ -642,7 +676,7 @@ func (c *Client) recommendPartitionBy(a *TableAnalysis, cc confidenceCtx) []Reco
 	if a.PartitionKey == "" {
 		for _, col := range a.Columns {
 			if isDateOrDateTimeType(col.Type) && !col.IsInOrderByKey {
-				expr := fmt.Sprintf("toYYYYMM(`%s`)", col.Name)
+				expr := fmt.Sprintf("toYYYYMM(%s)", quoteIdent(col.Name))
 				conf := cc.forCategory("partition_by").withSample(col.TotalSampled).assess()
 				recs = append(recs, Recommendation{
 					Category:         "partition_by",
@@ -653,7 +687,7 @@ func (c *Client) recommendPartitionBy(a *TableAnalysis, cc confidenceCtx) []Reco
 					Current:          "(none)",
 					Suggested:        expr,
 					Impact:           "Enables partition pruning for date-filtered queries, supports efficient DROP PARTITION for data retention",
-					DDL:              fmt.Sprintf("-- Requires table recreation:\n-- CREATE TABLE %s.%s ... PARTITION BY %s;", quoteID(a.Database), quoteID(a.Table), expr),
+					DDL:              fmt.Sprintf("-- Requires table recreation:\n-- CREATE TABLE %s.%s ... PARTITION BY %s;", quoteIdent(a.Database), quoteIdent(a.Table), expr),
 					RequiresRecreate: true,
 				})
 				break
@@ -684,7 +718,7 @@ func (c *Client) recommendPartitionBy(a *TableAnalysis, cc confidenceCtx) []Reco
 			Current:     fmt.Sprintf("%d parts", totalParts),
 			Suggested:   "< 100 parts",
 			Impact:      "Reduces merge overhead and improves query planning",
-			DDL:         fmt.Sprintf("OPTIMIZE TABLE `%s`.`%s` FINAL;", a.Database, a.Table),
+			DDL:         fmt.Sprintf("OPTIMIZE TABLE %s.%s FINAL;", quoteIdent(a.Database), quoteIdent(a.Table)),
 		})
 	}
 
@@ -739,12 +773,12 @@ func (c *Client) recommendSkippingIndices(a *TableAnalysis, cc confidenceCtx) []
 		if col.TotalSampled == 0 {
 			continue
 		}
-		colExpr := quoteID(col.Name)
+		colExpr := quoteIdent(col.Name)
 		if existingIdxCols[colExpr] {
 			continue
 		}
 
-		idxName := quoteID(fmt.Sprintf("idx_%s", col.Name))
+		idxName := quoteIdent(fmt.Sprintf("idx_%s", col.Name))
 		conf := cc.forCategory("index").withSample(col.TotalSampled).assess()
 
 		if isStringType(col.Type) {
@@ -759,7 +793,7 @@ func (c *Client) recommendSkippingIndices(a *TableAnalysis, cc confidenceCtx) []
 					Current:     "(none)",
 					Suggested:   fmt.Sprintf("bloom_filter(%s)", colExpr),
 					Impact:      "Speeds up WHERE col = ... and WHERE col LIKE ... queries by skipping granules",
-					DDL:         fmt.Sprintf("ALTER TABLE %s.%s ADD INDEX %s bloom_filter(%s) TYPE bloom_filter GRANULARITY 4;", quoteID(a.Database), quoteID(a.Table), idxName, colExpr),
+					DDL:         fmt.Sprintf("ALTER TABLE %s.%s ADD INDEX %s bloom_filter(%s) TYPE bloom_filter GRANULARITY 4;", quoteIdent(a.Database), quoteIdent(a.Table), idxName, colExpr),
 				})
 			}
 		} else if isNumericType(col.Type) {
@@ -772,7 +806,7 @@ func (c *Client) recommendSkippingIndices(a *TableAnalysis, cc confidenceCtx) []
 				Current:     "(none)",
 				Suggested:   fmt.Sprintf("minmax(%s)", colExpr),
 				Impact:      "Speeds up WHERE col > ... and WHERE col BETWEEN ... queries",
-				DDL:         fmt.Sprintf("ALTER TABLE %s.%s ADD INDEX %s minmax(%s) TYPE minmax GRANULARITY 4;", quoteID(a.Database), quoteID(a.Table), idxName, colExpr),
+				DDL:         fmt.Sprintf("ALTER TABLE %s.%s ADD INDEX %s minmax(%s) TYPE minmax GRANULARITY 4;", quoteIdent(a.Database), quoteIdent(a.Table), idxName, colExpr),
 			})
 		}
 	}
@@ -802,7 +836,7 @@ func (c *Client) recommendCodecs(a *TableAnalysis, cc confidenceCtx) []Recommend
 					Current:     col.Type,
 					Suggested:   col.Type + " CODEC(DoubleDelta, LZ4)",
 					Impact:      "Can reduce storage by 90%+ for timestamp columns",
-					DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s CODEC(DoubleDelta, LZ4);", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), col.Type),
+					DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s CODEC(DoubleDelta, LZ4);", quoteIdent(a.Database), quoteIdent(a.Table), quoteIdent(col.Name), col.Type),
 				})
 			} else {
 				recs = append(recs, Recommendation{
@@ -814,7 +848,7 @@ func (c *Client) recommendCodecs(a *TableAnalysis, cc confidenceCtx) []Recommend
 					Current:     col.Type,
 					Suggested:   col.Type + " CODEC(Gorilla, LZ4)",
 					Impact:      "Reduces storage for timestamp/time-series data",
-					DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s CODEC(Gorilla, LZ4);", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), col.Type),
+					DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s CODEC(Gorilla, LZ4);", quoteIdent(a.Database), quoteIdent(a.Table), quoteIdent(col.Name), col.Type),
 				})
 			}
 			continue
@@ -830,7 +864,7 @@ func (c *Client) recommendCodecs(a *TableAnalysis, cc confidenceCtx) []Recommend
 				Current:     col.Type,
 				Suggested:   col.Type + " CODEC(Delta, LZ4)",
 				Impact:      "Reduces storage for sequential integer columns",
-				DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s CODEC(Delta, LZ4);", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), col.Type),
+				DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s CODEC(Delta, LZ4);", quoteIdent(a.Database), quoteIdent(a.Table), quoteIdent(col.Name), col.Type),
 			})
 			continue
 		}
@@ -847,7 +881,7 @@ func (c *Client) recommendCodecs(a *TableAnalysis, cc confidenceCtx) []Recommend
 					Current:     col.Type,
 					Suggested:   col.Type + " CODEC(ZSTD(3))",
 					Impact:      "Improves compression ratio for high-cardinality strings",
-					DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s CODEC(ZSTD(3));", quoteID(a.Database), quoteID(a.Table), quoteID(col.Name), col.Type),
+					DDL:         fmt.Sprintf("ALTER TABLE %s.%s MODIFY COLUMN %s %s CODEC(ZSTD(3));", quoteIdent(a.Database), quoteIdent(a.Table), quoteIdent(col.Name), col.Type),
 				})
 			}
 		}
@@ -905,14 +939,27 @@ func isMergeTreeEngine(engine string) bool {
 	return false
 }
 
-func sampleClause(totalRows uint64) string {
+// sampleSource returns the FROM-tail used by column-sampling queries.
+//
+// Tables WITH a sampling key get proportional SAMPLE — cheap and random.
+// Tables WITHOUT one would reject SAMPLE with SAMPLING_NOT_ENABLED, so they
+// fall back to a bounded LIMIT read in natural (insertion) order: recent
+// data, which is also the most relevant for schema advice. Small tables are
+// read whole either way.
+func sampleSource(totalRows uint64, samplingKey string) string {
 	if totalRows < 100_000 {
 		return ""
 	}
-	if totalRows < 10_000_000 {
-		return "SAMPLE 0.01"
+	if samplingKey != "" {
+		if totalRows < 10_000_000 {
+			return "SAMPLE 0.01"
+		}
+		return "SAMPLE 0.001"
 	}
-	return "SAMPLE 0.001"
+	if totalRows < 10_000_000 {
+		return "LIMIT 100000"
+	}
+	return "LIMIT 1000000"
 }
 
 func splitKey(key string) []string {
@@ -1066,5 +1113,3 @@ func formatBytes(b uint64) string {
 	}
 	return fmt.Sprintf("%.1f TB", float64(b)/(1024*1024*1024*1024))
 }
-
-var _ driver.Conn = nil

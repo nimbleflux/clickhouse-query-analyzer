@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 type SystemMetrics struct {
@@ -77,76 +80,73 @@ type NodeInfo struct {
 }
 
 type DashboardData struct {
-	Metrics             []SystemMetrics         `json:"metrics"`
-	RecentEvents        []SystemEvent           `json:"recent_events"`
-	DatabaseSizes       []DatabaseSize          `json:"database_sizes"`
-	TopTablesBySize     []PartSummary           `json:"top_tables_by_size"`
-	TopTablesByParts    []PartSummary           `json:"top_tables_by_parts"`
-	PartsToDelayInsert  uint64                  `json:"parts_to_delay_insert"`
-	PartsToThrowInsert  uint64                  `json:"parts_to_throw_insert"`
-	ReplicationQueue    []ReplicationQueueEntry `json:"replication_queue"`
-	ReplicaStatuses     []ReplicaStatus         `json:"replica_statuses"`
-	Nodes               []NodeInfo              `json:"nodes"`
-	LogTables           []LogTableSize          `json:"log_tables"`
-	Settings            []SettingValue          `json:"settings"`
-	Warnings            []string                `json:"warnings"`
-	Cluster             string                  `json:"cluster"`
-	IsCluster           bool                    `json:"is_cluster"`
-	ClusterNote         string                  `json:"cluster_note,omitempty"`
-	Database            string                  `json:"database"`
-	User                string                  `json:"user"`
-	HostName            string                  `json:"host_name"`
-	PartialErrors       []string                `json:"partial_errors"`
-	PartialErrorDetails map[string]string       `json:"partial_error_details,omitempty"`
-}
+	Metrics            []SystemMetrics         `json:"metrics"`
+	RecentEvents       []SystemEvent           `json:"recent_events"`
+	DatabaseSizes      []DatabaseSize          `json:"database_sizes"`
+	TopTablesBySize    []PartSummary           `json:"top_tables_by_size"`
+	TopTablesByParts   []PartSummary           `json:"top_tables_by_parts"`
+	PartsToDelayInsert uint64                  `json:"parts_to_delay_insert"`
+	PartsToThrowInsert uint64                  `json:"parts_to_throw_insert"`
+	ReplicationQueue   []ReplicationQueueEntry `json:"replication_queue"`
+	ReplicaStatuses    []ReplicaStatus         `json:"replica_statuses"`
+	Nodes              []NodeInfo              `json:"nodes"`
+	LogTables          []LogTableSize          `json:"log_tables"`
+	Settings           []SettingValue          `json:"settings"`
+	Warnings           []string                `json:"warnings"`
+	Cluster            string                  `json:"cluster"`
+	IsCluster          bool                    `json:"is_cluster"`
+	ClusterNote        string                  `json:"cluster_note,omitempty"`
+	Database           string                  `json:"database"`
+	User               string                  `json:"user"`
+	HostName           string                  `json:"host_name"`
 
-// addPartial records a partial failure for one of the system.* tables the
-// dashboard queries: the clean table name goes in the banner list, the raw
-// error message goes in PartialErrorDetails for the hover tooltip. This mirrors
-// DDLStatus.addPartial / ReplicationStatus.addPartial. The banner no longer
-// assumes the cause is access rights — the real error (permission denied,
-// missing column, version skew, a query bug) is surfaced.
-func (d *DashboardData) addPartial(table string, err error) {
-	if err == nil {
-		return
-	}
-	if d.PartialErrorDetails == nil {
-		d.PartialErrorDetails = map[string]string{}
-	}
-	if _, ok := d.PartialErrorDetails[table]; !ok {
-		d.PartialErrors = append(d.PartialErrors, table)
-	}
-	d.PartialErrorDetails[table] = err.Error()
+	PartialErrors
 }
 
 func (c *Client) GetDashboard(ctx context.Context) (*DashboardData, error) {
 	d := &DashboardData{
-		LogTables:     []LogTableSize{},
-		Settings:      []SettingValue{},
-		Warnings:      []string{},
-		Cluster:       c.cluster,
-		IsCluster:     c.isCluster,
-		ClusterNote:   c.ClusterNote(),
-		Database:      c.connDB,
-		User:          c.connUser,
-		PartialErrors: []string{},
+		LogTables:   []LogTableSize{},
+		Settings:    []SettingValue{},
+		Warnings:    []string{},
+		Cluster:     c.cluster,
+		IsCluster:   c.isCluster,
+		ClusterNote: c.ClusterNote(),
+		Database:    c.connDB,
+		User:        c.connUser,
 	}
+	d.initPartialErrors()
 
-	c.queryMetrics(ctx, d)
-	c.queryRecentEvents(ctx, d)
-	c.queryDatabaseSizes(ctx, d)
-	c.queryTopTables(ctx, d)
-	c.queryMergeTreeInsertThresholds(ctx, d)
-	c.queryReplication(ctx, d)
-	c.queryServerInfo(ctx, d)
+	// All sections are independent reads; the driver conn is safe for
+	// concurrent queries (MaxOpenConns 10 on the native pool). Sequential
+	// execution used to serialize several cluster fan-outs on every page
+	// load. fillHostName and the health report depend on queryServerInfo's
+	// Nodes, so they stay sequential afterwards.
+	var wg sync.WaitGroup
+	for _, fn := range []func(context.Context, *DashboardData){
+		c.queryMetrics,
+		c.queryRecentEvents,
+		c.queryDatabaseSizes,
+		c.queryTopTables,
+		c.queryMergeTreeInsertThresholds,
+		c.queryReplication,
+		c.queryServerInfo,
+	} {
+		wg.Add(1)
+		go func(fn func(context.Context, *DashboardData)) {
+			defer wg.Done()
+			fn(ctx, d)
+		}(fn)
+	}
+	wg.Wait()
+
 	c.fillHostName(ctx, d)
 
 	report := &HealthReport{}
 	if len(d.Nodes) > 0 {
 		report.Uptime = d.Nodes[0].Uptime
 	}
-	c.queryLogTableSizes(ctx, report)
-	c.querySettings(ctx, report)
+	c.queryLogTableSizes(ctx, report, &d.PartialErrors)
+	c.querySettings(ctx, report, &d.PartialErrors)
 	c.deriveWarnings(report)
 	d.LogTables = report.LogTables
 	d.Settings = report.Settings
@@ -251,79 +251,77 @@ func (c *Client) queryDatabaseSizes(ctx context.Context, d *DashboardData) {
 }
 
 func (c *Client) queryTopTables(ctx context.Context, d *DashboardData) {
-	table := c.tableRef("parts")
 	// Group by partition first, then aggregate to table level. parts stays the
 	// table's total active part count (used to rank the "top by parts" list);
 	// max_parts_in_partition is the largest partition — the value ClickHouse
 	// actually checks against parts_to_delay_insert / parts_to_throw_insert
 	// (insert throttling/rejection is per-partition, not per-table-total).
-	query := fmt.Sprintf(`SELECT
-		database, table,
-		sum(parts_in_part) AS parts,
-		max(parts_in_part) AS max_parts_in_partition,
-		sum(rows) AS rows,
-		sum(bytes_on_disk) AS compressed_bytes,
-		sum(uncompressed_bytes) AS uncompressed_bytes
-	FROM (
-		SELECT database, table, partition,
-			count() AS parts_in_part,
+	// The aggregation happens in ClickHouse either way, but ORDER BY + LIMIT
+	// here means only 10 rows per list cross the wire — the old version
+	// fetched every table on the cluster (per node, via clusterAllReplicas)
+	// and bubble-sorted the full slice in Go, twice.
+	const inner = `
+		SELECT database, table,
+			sum(parts_in_part) AS parts,
+			max(parts_in_part) AS max_parts_in_partition,
 			sum(rows) AS rows,
-			sum(bytes_on_disk) AS bytes_on_disk,
-			sum(data_uncompressed_bytes) AS uncompressed_bytes
-		FROM %s WHERE active
-		GROUP BY database, table, partition
-	)
-	GROUP BY database, table`, table)
+			sum(bytes_on_disk) AS compressed_bytes,
+			sum(uncompressed_bytes) AS uncompressed_bytes
+		FROM (
+			SELECT database, table, partition,
+				count() AS parts_in_part,
+				sum(rows) AS rows,
+				sum(bytes_on_disk) AS bytes_on_disk,
+				sum(data_uncompressed_bytes) AS uncompressed_bytes
+			FROM %s WHERE active
+			GROUP BY database, table, partition
+		)
+		GROUP BY database, table`
 
-	rows, err := c.conn.Query(ctx, query)
+	scan := func(rows driver.Rows) ([]PartSummary, error) {
+		defer rows.Close()
+		var out []PartSummary
+		for rows.Next() {
+			var ps PartSummary
+			if err := rows.Scan(&ps.Database, &ps.Table, &ps.Parts, &ps.MaxPartsInPartition, &ps.Rows, &ps.CompressedBytes, &ps.UncompressedBytes); err != nil {
+				return nil, err
+			}
+			out = append(out, ps)
+		}
+		return out, rows.Err()
+	}
+
+	table := c.tableRef("parts")
+	rows, err := c.conn.Query(ctx, fmt.Sprintf(inner+` ORDER BY compressed_bytes DESC LIMIT 10`, table))
 	if err != nil {
 		d.TopTablesBySize = []PartSummary{}
 		d.TopTablesByParts = []PartSummary{}
 		d.addPartial("system.parts", err)
 		return
 	}
-	defer rows.Close()
-
-	var all []PartSummary
-	for rows.Next() {
-		var ps PartSummary
-		if err := rows.Scan(&ps.Database, &ps.Table, &ps.Parts, &ps.MaxPartsInPartition, &ps.Rows, &ps.CompressedBytes, &ps.UncompressedBytes); err != nil {
-			d.TopTablesBySize = []PartSummary{}
-			d.TopTablesByParts = []PartSummary{}
-			return
-		}
-		all = append(all, ps)
+	d.TopTablesBySize, err = scan(rows)
+	if err != nil {
+		d.TopTablesBySize = []PartSummary{}
+		d.addPartial("system.parts", err)
+	}
+	if d.TopTablesBySize == nil {
+		d.TopTablesBySize = []PartSummary{}
 	}
 
-	bySize := make([]PartSummary, len(all))
-	copy(bySize, all)
-	for i := 0; i < len(bySize)-1; i++ {
-		for j := i + 1; j < len(bySize); j++ {
-			if bySize[j].CompressedBytes > bySize[i].CompressedBytes {
-				bySize[i], bySize[j] = bySize[j], bySize[i]
-			}
-		}
+	rows2, err := c.conn.Query(ctx, fmt.Sprintf(inner+` ORDER BY parts DESC LIMIT 10`, table))
+	if err != nil {
+		d.TopTablesByParts = []PartSummary{}
+		d.addPartial("system.parts", err)
+		return
 	}
-	limit := 10
-	if len(bySize) < limit {
-		limit = len(bySize)
+	d.TopTablesByParts, err = scan(rows2)
+	if err != nil {
+		d.TopTablesByParts = []PartSummary{}
+		d.addPartial("system.parts", err)
 	}
-	d.TopTablesBySize = bySize[:limit]
-
-	byParts := make([]PartSummary, len(all))
-	copy(byParts, all)
-	for i := 0; i < len(byParts)-1; i++ {
-		for j := i + 1; j < len(byParts); j++ {
-			if byParts[j].Parts > byParts[i].Parts {
-				byParts[i], byParts[j] = byParts[j], byParts[i]
-			}
-		}
+	if d.TopTablesByParts == nil {
+		d.TopTablesByParts = []PartSummary{}
 	}
-	limit = 10
-	if len(byParts) < limit {
-		limit = len(byParts)
-	}
-	d.TopTablesByParts = byParts[:limit]
 }
 
 // queryMergeTreeInsertThresholds reads the live parts_to_delay_insert and
@@ -380,7 +378,10 @@ func (c *Client) queryReplication(ctx context.Context, d *DashboardData) {
 		toString(last_exception)
 	FROM %s ORDER BY create_time DESC LIMIT 50`, table))
 	if err != nil {
+		// Surface the cause — an empty queue must be distinguishable from
+		// "this user cannot read system.replication_queue".
 		d.ReplicationQueue = []ReplicationQueueEntry{}
+		d.addPartial("system.replication_queue", err)
 	} else {
 		defer rows.Close()
 		for rows.Next() {
@@ -406,6 +407,7 @@ func (c *Client) queryReplication(ctx context.Context, d *DashboardData) {
 	FROM %s ORDER BY absolute_delay DESC`, rt))
 	if err != nil {
 		d.ReplicaStatuses = []ReplicaStatus{}
+		d.addPartial("system.replicas", err)
 	} else {
 		defer rows2.Close()
 		for rows2.Next() {
@@ -426,7 +428,7 @@ func (c *Client) queryReplication(ctx context.Context, d *DashboardData) {
 
 func (c *Client) queryServerInfo(ctx context.Context, d *DashboardData) {
 	if c.isCluster {
-		query := fmt.Sprintf(`SELECT hostName() AS host, uptime(), version() FROM clusterAllReplicas('%s', system.one)`, c.cluster)
+		query := fmt.Sprintf(`SELECT hostName() AS host, uptime(), version() FROM clusterAllReplicas(%s, system.one)`, quoteStr(c.cluster))
 		rows, err := c.conn.Query(ctx, query)
 		if err == nil {
 			defer rows.Close()

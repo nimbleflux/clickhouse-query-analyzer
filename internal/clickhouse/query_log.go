@@ -130,6 +130,112 @@ func (c *Client) tryUserQueryLogFallback(ctx context.Context, err error) bool {
 	return true
 }
 
+// queryLogFilter accumulates the bound-argument WHERE/PREWHERE fragments
+// shared by every query-history surface (ListQueries, ListFingerprints).
+// Keeping the builders in one place is what guarantees the surfaces apply
+// the same predicates — ListFingerprints used to silently drop half the
+// filters documented on QueryListParams.
+type queryLogFilter struct {
+	prewhereParts []string
+	prewhereArgs  []any
+	whereParts    []string
+	whereArgs     []any
+}
+
+func (f *queryLogFilter) prewhere(cond string, args ...any) {
+	f.prewhereParts = append(f.prewhereParts, cond)
+	f.prewhereArgs = append(f.prewhereArgs, args...)
+}
+
+func (f *queryLogFilter) where(cond string, args ...any) {
+	f.whereParts = append(f.whereParts, cond)
+	f.whereArgs = append(f.whereArgs, args...)
+}
+
+func (f *queryLogFilter) prewhereClause() string {
+	if len(f.prewhereParts) == 0 {
+		return ""
+	}
+	return "PREWHERE " + strings.Join(f.prewhereParts, " AND ")
+}
+
+func (f *queryLogFilter) whereClause() string {
+	return "WHERE " + strings.Join(f.whereParts, " AND ")
+}
+
+// dataArgs are the args for a query using prewhereClause() + whereClause();
+// countArgs for one using countClause() (all predicates as plain WHERE).
+func (f *queryLogFilter) dataArgs() []any {
+	return append(append([]any{}, f.prewhereArgs...), f.whereArgs...)
+}
+
+func (f *queryLogFilter) countClause() string {
+	return "WHERE " + strings.Join(append(append([]string{}, f.prewhereParts...), f.whereParts...), " AND ")
+}
+
+func (f *queryLogFilter) countArgs() []any {
+	return f.dataArgs()
+}
+
+// buildQueryLogFilters turns user-facing params into SQL predicates. The
+// base predicates apply to every surface:
+//   - terminal rows only (running queries come from system.processes);
+//   - not the health probe (`SELECT 1`);
+//   - is_initial_query = 1 — on clusterAllReplicas reads every distributed
+//     query contributes one terminal row per node, which would inflate
+//     fingerprint counts/percentiles several-fold.
+func buildQueryLogFilters(params QueryListParams) *queryLogFilter {
+	f := &queryLogFilter{}
+	// PREWHERE: selective filters on cheap columns (date range + search).
+	// ClickHouse reads only these columns first, then the expensive ones
+	// (Settings, ProfileEvents, …) for surviving rows.
+	if params.FromTime != "" {
+		f.prewhere("event_time >= ?", params.FromTime)
+	}
+	if params.ToTime != "" {
+		f.prewhere("event_time <= ?", params.ToTime)
+	}
+	if params.Search != "" {
+		f.prewhere("query ILIKE ?", "%"+params.Search+"%")
+	}
+
+	// WHERE: base predicates, then the optional filters.
+	f.where("query != 'SELECT 1'")
+	f.where("type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')")
+	f.where("is_initial_query = 1")
+	if params.HideSystemQueries {
+		f.where(hideSystemQueriesClause())
+	}
+	if params.User != "" {
+		f.where("user = ?", params.User)
+	}
+	if params.Database != "" {
+		f.where("has(databases, ?)", params.Database)
+	}
+	if params.Table != "" {
+		f.where("has(tables, ?)", params.Table)
+	}
+	if params.QueryKind != "" {
+		f.where("query_kind = ?", params.QueryKind)
+	}
+	if params.MinDuration > 0 {
+		f.where("query_duration_ms >= ?", params.MinDuration)
+	}
+	if params.MinMemory > 0 {
+		f.where("memory_usage >= ?", params.MinMemory)
+	}
+	if params.MinReadBytes > 0 {
+		f.where("read_bytes >= ?", params.MinReadBytes)
+	}
+	if params.ErrorsOnly {
+		f.where("exception_code != 0")
+	}
+	if params.LogComment != "" {
+		f.where("log_comment ILIKE ?", params.LogComment)
+	}
+	return f
+}
+
 func (c *Client) ListQueries(ctx context.Context, params QueryListParams) ([]QueryLogEntry, uint64, error) {
 	entries, total, err := c.listQueriesWithTable(ctx, params, c.queryLogRef())
 	if err != nil {
@@ -161,68 +267,7 @@ func (c *Client) listQueriesWithTable(ctx context.Context, params QueryListParam
 	// PREWHERE: selective filters on cheap columns (date range + search).
 	// ClickHouse reads only these columns first, then reads expensive columns
 	// (Settings, ProfileEvents, etc.) only for surviving rows.
-	prewhereParts := []string{}
-	prewhereArgs := []interface{}{}
-
-	if params.FromTime != "" {
-		prewhereParts = append(prewhereParts, "event_time >= ?")
-		prewhereArgs = append(prewhereArgs, params.FromTime)
-	}
-	if params.ToTime != "" {
-		prewhereParts = append(prewhereParts, "event_time <= ?")
-		prewhereArgs = append(prewhereArgs, params.ToTime)
-	}
-	if params.Search != "" {
-		prewhereParts = append(prewhereParts, "query ILIKE ?")
-		prewhereArgs = append(prewhereArgs, "%"+params.Search+"%")
-	}
-
-	// WHERE: remaining filters applied after PREWHERE.
-	whereParts := []string{
-		"type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')",
-		"query != 'SELECT 1'",
-		"is_initial_query = 1",
-	}
-	whereArgs := []interface{}{}
-
-	if params.HideSystemQueries {
-		whereParts = append(whereParts, hideSystemQueriesClause())
-	}
-	if params.User != "" {
-		whereParts = append(whereParts, "user = ?")
-		whereArgs = append(whereArgs, params.User)
-	}
-	if params.Database != "" {
-		whereParts = append(whereParts, "has(databases, ?)")
-		whereArgs = append(whereArgs, params.Database)
-	}
-	if params.Table != "" {
-		whereParts = append(whereParts, "has(tables, ?)")
-		whereArgs = append(whereArgs, params.Table)
-	}
-	if params.QueryKind != "" {
-		whereParts = append(whereParts, "query_kind = ?")
-		whereArgs = append(whereArgs, params.QueryKind)
-	}
-	if params.MinDuration > 0 {
-		whereParts = append(whereParts, "query_duration_ms >= ?")
-		whereArgs = append(whereArgs, params.MinDuration)
-	}
-	if params.MinMemory > 0 {
-		whereParts = append(whereParts, "memory_usage >= ?")
-		whereArgs = append(whereArgs, params.MinMemory)
-	}
-	if params.MinReadBytes > 0 {
-		whereParts = append(whereParts, "read_bytes >= ?")
-		whereArgs = append(whereArgs, params.MinReadBytes)
-	}
-	if params.ErrorsOnly {
-		whereParts = append(whereParts, "exception_code != 0")
-	}
-	if params.LogComment != "" {
-		whereParts = append(whereParts, "log_comment ILIKE ?")
-		whereArgs = append(whereArgs, params.LogComment)
-	}
+	f := buildQueryLogFilters(params)
 
 	allowedSorts := map[string]bool{
 		"event_time": true, "query_start_time": true, "query_duration_ms": true,
@@ -240,26 +285,15 @@ func (c *Client) listQueriesWithTable(ctx context.Context, params QueryListParam
 
 	// Combined WHERE clause for count() (all conditions, no PREWHERE needed
 	// since count() only reads filtered columns, not expensive Maps).
-	allParts := append(append([]string{}, prewhereParts...), whereParts...)
-	allArgs := append(append([]interface{}{}, prewhereArgs...), whereArgs...)
-	countWhere := "WHERE " + strings.Join(allParts, " AND ")
-
-	countQuery := fmt.Sprintf("SELECT count() FROM %s %s", table, countWhere)
 	var total uint64
 	if params.IncludeCount {
-		if err := c.conn.QueryRow(ctx, countQuery, allArgs...).Scan(&total); err != nil {
+		countQuery := fmt.Sprintf("SELECT count() FROM %s %s", table, f.countClause())
+		if err := c.conn.QueryRow(ctx, countQuery, f.countArgs()...).Scan(&total); err != nil {
 			return nil, 0, fmt.Errorf("counting queries: %w", err)
 		}
 	}
 
 	// Data query: PREWHERE (selective) + WHERE (rest) for column-read efficiency.
-	prewhereClause := ""
-	if len(prewhereParts) > 0 {
-		prewhereClause = "PREWHERE " + strings.Join(prewhereParts, " AND ")
-	}
-	whereClause := "WHERE " + strings.Join(whereParts, " AND ")
-	dataArgs := append(prewhereArgs, whereArgs...)
-
 	dataQuery := fmt.Sprintf(`SELECT
 		type, event_time, query_start_time, query_duration_ms, query_id, query,
 		normalized_query_hash, query_kind, user,
@@ -268,9 +302,9 @@ func (c *Client) listQueriesWithTable(ctx context.Context, params QueryListParam
 		databases, tables, is_initial_query, initial_query_id,
 		COALESCE(Settings, map('','')), COALESCE(ProfileEvents, map('','')),
 		used_functions, used_storages, used_aggregate_functions
-	FROM %s %s %s ORDER BY %s %s, query_id LIMIT %d OFFSET %d`, table, prewhereClause, whereClause, sortCol, sortDir, params.Limit, params.Offset)
+	FROM %s %s %s ORDER BY %s %s, query_id LIMIT %d OFFSET %d`, table, f.prewhereClause(), f.whereClause(), sortCol, sortDir, params.Limit, params.Offset)
 
-	rows, err := c.conn.Query(ctx, dataQuery, dataArgs...)
+	rows, err := c.conn.Query(ctx, dataQuery, f.dataArgs()...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("querying query_log: %w", err)
 	}
@@ -429,50 +463,18 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 	if params.Limit <= 0 {
 		params.Limit = 50
 	}
+	if params.Limit > 500 {
+		params.Limit = 500
+	}
 	if params.Offset < 0 {
 		params.Offset = 0
 	}
 
 	table := c.queryLogRef()
 
-	// PREWHERE: selective filters on cheap columns (date range + search).
-	// Mirrors ListQueries: pruning on event_time (the partition key) before
-	// the aggregates read query_duration_ms / memory_usage / etc. for every
-	// surviving row. Without this, a missing time window walks the full TTL.
-	prewhereParts := []string{}
-	prewhereArgs := []interface{}{}
-
-	if params.FromTime != "" {
-		prewhereParts = append(prewhereParts, "event_time >= ?")
-		prewhereArgs = append(prewhereArgs, params.FromTime)
-	}
-	if params.ToTime != "" {
-		prewhereParts = append(prewhereParts, "event_time <= ?")
-		prewhereArgs = append(prewhereArgs, params.ToTime)
-	}
-	if params.Search != "" {
-		prewhereParts = append(prewhereParts, "query ILIKE ?")
-		prewhereArgs = append(prewhereArgs, "%"+params.Search+"%")
-	}
-
-	// WHERE: remaining filters applied after PREWHERE.
-	whereParts := []string{
-		"query != 'SELECT 1'",
-		"type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')",
-	}
-	whereArgs := []interface{}{}
-
-	if params.HideSystemQueries {
-		whereParts = append(whereParts, hideSystemQueriesClause())
-	}
-	if params.User != "" {
-		whereParts = append(whereParts, "user = ?")
-		whereArgs = append(whereArgs, params.User)
-	}
-	if params.LogComment != "" {
-		whereParts = append(whereParts, "log_comment ILIKE ?")
-		whereArgs = append(whereArgs, params.LogComment)
-	}
+	// Same filter set as ListQueries (shared builder — this function used to
+	// silently drop the database/table/min_*/errors_only filters).
+	f := buildQueryLogFilters(params)
 
 	sortBy := "last_seen"
 	sortDir := "DESC"
@@ -484,27 +486,15 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 		sortDir = "ASC"
 	}
 
-	// Combined WHERE clause (all conditions) for count().
-	allParts := append(append([]string{}, prewhereParts...), whereParts...)
-	allArgs := append(append([]interface{}{}, prewhereArgs...), whereArgs...)
-	countWhere := "WHERE " + strings.Join(allParts, " AND ")
-
 	var total uint64
 	if params.IncludeCount {
-		countQuery := fmt.Sprintf(`SELECT count() FROM (SELECT normalized_query_hash FROM %s %s GROUP BY normalized_query_hash)`, table, countWhere)
-		if err := c.conn.QueryRow(ctx, countQuery, allArgs...).Scan(&total); err != nil {
+		countQuery := fmt.Sprintf(`SELECT count() FROM (SELECT normalized_query_hash FROM %s %s GROUP BY normalized_query_hash)`, table, f.countClause())
+		if err := c.conn.QueryRow(ctx, countQuery, f.countArgs()...).Scan(&total); err != nil {
 			return nil, 0, fmt.Errorf("counting fingerprints: %w", err)
 		}
 	}
 
-	// Data query: PREWHERE (selective) + WHERE (rest) for column-read efficiency.
-	prewhereClause := ""
-	if len(prewhereParts) > 0 {
-		prewhereClause = "PREWHERE " + strings.Join(prewhereParts, " AND ")
-	}
-	whereClause := "WHERE " + strings.Join(whereParts, " AND ")
-	dataArgs := append(prewhereArgs, whereArgs...)
-	dataArgs = append(dataArgs, params.Limit, params.Offset)
+	dataArgs := append(f.dataArgs(), params.Limit, params.Offset)
 
 	query := fmt.Sprintf(`SELECT
 		normalized_query_hash,
@@ -528,7 +518,7 @@ func (c *Client) ListFingerprints(ctx context.Context, params QueryListParams) (
 	FROM %s %s %s
 	GROUP BY normalized_query_hash
 	ORDER BY %s %s
-	LIMIT ? OFFSET ?`, table, prewhereClause, whereClause, sortBy, sortDir)
+	LIMIT ? OFFSET ?`, table, f.prewhereClause(), f.whereClause(), sortBy, sortDir)
 
 	rows, err := c.conn.Query(ctx, query, dataArgs...)
 	if err != nil {
@@ -577,15 +567,30 @@ type FingerprintQuery struct {
 	Exception       string    `json:"exception"`
 }
 
-func (c *Client) ListFingerprintQueries(ctx context.Context, hash uint64, limit int, offset int) ([]FingerprintQuery, uint64, error) {
+// ListFingerprintQueries drills into one fingerprint. hideSystemQueries
+// mirrors the parent list so a hidden fingerprint can't resurface here, and
+// is_initial_query = 1 keeps cluster fan-out from double-counting rows.
+func (c *Client) ListFingerprintQueries(ctx context.Context, hash uint64, limit int, offset int, hideSystemQueries bool) ([]FingerprintQuery, uint64, error) {
 	table := c.queryLogRef()
 
 	if limit <= 0 {
 		limit = 20
 	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	base := "type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')"
+	if hideSystemQueries {
+		base += " AND " + hideSystemQueriesClause()
+	}
+	base += " AND is_initial_query = 1"
 
 	var total uint64
-	countQuery := fmt.Sprintf(`SELECT count() FROM %s WHERE normalized_query_hash = ? AND type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')`, table)
+	countQuery := fmt.Sprintf(`SELECT count() FROM %s WHERE normalized_query_hash = ? AND %s`, table, base)
 	if err := c.conn.QueryRow(ctx, countQuery, hash).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("counting fingerprint queries: %w", err)
 	}
@@ -595,9 +600,9 @@ func (c *Client) ListFingerprintQueries(ctx context.Context, hash uint64, limit 
 		read_rows, read_bytes, result_rows, peak_threads_usage,
 		user, type, exception
 	FROM %s
-	WHERE normalized_query_hash = ? AND type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')
+	WHERE normalized_query_hash = ? AND %s
 	ORDER BY event_time DESC
-	LIMIT ? OFFSET ?`, table)
+	LIMIT ? OFFSET ?`, table, base)
 
 	rows, err := c.conn.Query(ctx, query, hash, limit, offset)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 
@@ -29,6 +30,27 @@ func defaultQueryLogWindow(r *http.Request) (string, bool) {
 		return "", false
 	}
 	return time.Now().Add(-24 * time.Hour).Format("2006-01-02 15:04:05"), true
+}
+
+// sanitizeLogComment vets the editor's optional query tag before it becomes
+// the log_comment setting: single line, control-char free, bounded length.
+func sanitizeLogComment(tag string) string {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range tag {
+		if r == '\n' || r == '\r' || unicode.IsControl(r) {
+			b.WriteRune(' ')
+			continue
+		}
+		b.WriteRune(r)
+		if b.Len() >= 256 {
+			break
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (a *API) GetQueryHealthTrend(w http.ResponseWriter, r *http.Request) {
@@ -427,6 +449,7 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		MaxRows  int               `json:"max_rows"`
 		Settings map[string]string `json:"settings"`
 		Params   map[string]string `json:"params"`
+		Tag      string            `json:"tag"`
 		Detached bool              `json:"detached"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -440,6 +463,7 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 	if isReadonly(r) && rejectWriteQuery(w, req.Query) {
 		return
 	}
+	tag := sanitizeLogComment(req.Tag)
 
 	// Prefer the explicit limit/offset window (server-side pagination).
 	// Fall back to max_rows for backwards compatibility with older clients.
@@ -463,7 +487,7 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 	// results. Must be handled before the NDJSON preamble switches this
 	// response to event streaming.
 	if req.Detached {
-		a.startDetachedJob(w, r, ch, req.Query, limit, offset, req.Settings, req.Params)
+		a.startDetachedJob(w, r, ch, req.Query, limit, offset, req.Settings, req.Params, tag)
 		return
 	}
 
@@ -541,12 +565,13 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	result, err := ch.ExecuteQuery(ctx, clickhouse.ExecuteOptions{
-		Query:    req.Query,
-		Limit:    limit,
-		Offset:   offset,
-		Settings: req.Settings,
-		Params:   req.Params,
-		QueryID:  queryID,
+		Query:      req.Query,
+		Limit:      limit,
+		Offset:     offset,
+		Settings:   req.Settings,
+		Params:     req.Params,
+		LogComment: tag,
+		QueryID:    queryID,
 	})
 	if err != nil {
 		writeEvent(executeStreamEvent{Type: "error", QueryID: queryID, Error: apiErrorFromErr(err, a.queryTimeout)})
@@ -892,8 +917,9 @@ func (a *API) ListFingerprintQueries(w http.ResponseWriter, r *http.Request) {
 
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	hideSystem := r.URL.Query().Get("hide_system_queries") != "false"
 
-	queries, total, err := ch.ListFingerprintQueries(r.Context(), hash, limit, offset)
+	queries, total, err := ch.ListFingerprintQueries(r.Context(), hash, limit, offset, hideSystem)
 	if err != nil {
 		respondErr(w, err, false)
 		return

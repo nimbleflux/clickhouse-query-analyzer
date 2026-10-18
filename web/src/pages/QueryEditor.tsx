@@ -34,9 +34,10 @@ import {
   loadSettings, saveSettings,
   loadSidebarSections, saveSidebarSections,
   loadHistory, addToHistory, clearHistory,
-  PAGE_SIZE_KEY,
+  PAGE_SIZE_KEY, ACTIVE_TAB_KEY, MAX_EXEC_KEY, SIDEBAR_WIDTH_KEY, EDITOR_HEIGHT_KEY, SECTION_HEIGHTS_KEY,
 } from "./editor/storage";
-import { splitQueries, formatElapsed, formatBytes, errorText, mod } from "./editor/utils";
+import { splitQueries, stripLeadingComments, formatElapsed, formatBytes, errorText, mod } from "./editor/utils";
+import { useDragResizer } from "./editor/useDragResizer";
 import { formatNumber } from "@/utils";
 import { ResultTable } from "./editor/ResultTable";
 import { SchemaSidebar } from "./editor/SchemaSidebar";
@@ -45,6 +46,12 @@ import { HistoryPanel } from "./editor/HistoryPanel";
 import { ParametersPanel } from "./editor/ParametersPanel";
 import { SettingsBar, SaveQueryDialog } from "./editor/SettingsBar";
 import { SectionDivider } from "./editor/AccordionSection";
+import { PARAM_REGEX } from "@/api/saved-queries";
+
+// TODO(move): storage key constants live in editor/storage.ts — this one is
+// defined inline here only because storage.ts is outside this change's scope.
+// One editor-wide log-comment tag (log_comment) for query tagging.
+const LOG_TAG_KEY = "cl-editor-log-tag";
 
 export function QueryEditor({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
@@ -53,7 +60,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
   const copy = useCopyToClipboard();
   const [tabs, setTabs] = useState<EditorTab[]>(loadTabs);
   const [activeTabId, setActiveTabId] = useState(() => {
-    try { return localStorage.getItem("ch-editor-active-tab") || tabs[0]?.id; } catch { return tabs[0]?.id; }
+    try { return localStorage.getItem(ACTIVE_TAB_KEY) || tabs[0]?.id; } catch { return tabs[0]?.id; }
   });
   const [databases, setDatabases] = useState<string[]>(getCachedDatabases);
   const [schemaData, setSchemaData] = useState<SchemaData>(getCachedSchemaData);
@@ -67,18 +74,18 @@ export function QueryEditor({ connected }: { connected: boolean }) {
   });
   const [settings, setSettings] = useState<EditorSettings>(loadSettings);
   const [maxExecSeconds, setMaxExecSeconds] = useState(() => {
-    try { return localStorage.getItem("ch-editor-max-exec") || ""; } catch { return ""; }
+    try { return localStorage.getItem(MAX_EXEC_KEY) || ""; } catch { return ""; }
   });
   const [sidebarWidth, setSidebarWidth] = useState(() => {
-    try { return Number(localStorage.getItem("ch-editor-sidebar-width")) || 256; } catch { return 256; }
+    try { return Number(localStorage.getItem(SIDEBAR_WIDTH_KEY)) || 256; } catch { return 256; }
   });
   const [editorHeight, setEditorHeight] = useState(() => {
-    try { return Math.max(120, Number(localStorage.getItem("ch-editor-editor-height")) || 192); } catch { return 192; }
+    try { return Math.max(120, Number(localStorage.getItem(EDITOR_HEIGHT_KEY)) || 192); } catch { return 192; }
   });
   const [sidebarSections, setSidebarSections] = useState<SidebarSections>(loadSidebarSections);
   const [sectionHeights, setSectionHeights] = useState(() => {
     try {
-      const raw = localStorage.getItem("ch-editor-section-heights");
+      const raw = localStorage.getItem(SECTION_HEIGHTS_KEY);
       if (raw) return JSON.parse(raw);
     } catch {}
     return { schema: 0.4, saved: 0.3, params: 0.3 };
@@ -93,6 +100,9 @@ export function QueryEditor({ connected }: { connected: boolean }) {
   const [savingParamSetName, setSavingParamSetName] = useState("");
   const [showSaveParamSetDialog, setShowSaveParamSetDialog] = useState(false);
   const [formatting, setFormatting] = useState(false);
+  const [logTag, setLogTag] = useState(() => {
+    try { return localStorage.getItem(LOG_TAG_KEY) || ""; } catch { return ""; }
+  });
   const editorRef = useRef<unknown>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -104,7 +114,17 @@ export function QueryEditor({ connected }: { connected: boolean }) {
   const sqlText = activeTab?.sql || "";
   const paramValues = activeTab?.paramValues || {};
 
-  const detectedParams = settings.enable_params ? detectParams(sqlText) : [];
+  // Hot path: these run on every render (each keystroke re-renders the
+  // editor), so keep the parses memoized on the SQL text.
+  const stmts = useMemo(() => splitQueries(sqlText), [sqlText]);
+  const detectedParams = useMemo(
+    () => (settings.enable_params ? detectParams(sqlText) : []),
+    [settings.enable_params, sqlText],
+  );
+  const emptyParams = useMemo(
+    () => detectedParams.filter((p) => !paramValues[p]?.trim()),
+    [detectedParams, paramValues],
+  );
 
   const updateTab = useCallback((id: string, updates: Partial<EditorTab>) => {
     setTabs((prev) => prev.map((t) => t.id === id ? { ...t, ...updates } : t));
@@ -196,7 +216,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
 
   useEffect(() => {
     saveTabs(tabs);
-    try { localStorage.setItem("ch-editor-active-tab", activeTab.id); } catch {}
+    try { localStorage.setItem(ACTIVE_TAB_KEY, activeTab.id); } catch {}
   }, [tabs, activeTab.id]);
 
   useEffect(() => {
@@ -206,20 +226,24 @@ export function QueryEditor({ connected }: { connected: boolean }) {
   useEffect(() => { saveSettings(settings); }, [settings]);
 
   useEffect(() => {
-    try { localStorage.setItem("ch-editor-sidebar-width", String(sidebarWidth)); } catch {}
+    try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth)); } catch {}
   }, [sidebarWidth]);
 
   useEffect(() => {
-    try { localStorage.setItem("ch-editor-editor-height", String(editorHeight)); } catch {}
+    try { localStorage.setItem(EDITOR_HEIGHT_KEY, String(editorHeight)); } catch {}
   }, [editorHeight]);
 
   useEffect(() => {
-    try { localStorage.setItem("ch-editor-section-heights", JSON.stringify(sectionHeights)); } catch {}
+    try { localStorage.setItem(SECTION_HEIGHTS_KEY, JSON.stringify(sectionHeights)); } catch {}
   }, [sectionHeights]);
 
   useEffect(() => {
-    try { if (maxExecSeconds) localStorage.setItem("ch-editor-max-exec", maxExecSeconds); else localStorage.removeItem("ch-editor-max-exec"); } catch {}
+    try { if (maxExecSeconds) localStorage.setItem(MAX_EXEC_KEY, maxExecSeconds); else localStorage.removeItem(MAX_EXEC_KEY); } catch {}
   }, [maxExecSeconds]);
+
+  useEffect(() => {
+    try { if (logTag) localStorage.setItem(LOG_TAG_KEY, logTag); else localStorage.removeItem(LOG_TAG_KEY); } catch {}
+  }, [logTag]);
 
   const startTimer = useCallback(() => {
     startTimeRef.current = Date.now();
@@ -260,8 +284,6 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     return s;
   }, [settings, maxExecSeconds]);
 
-  const emptyParams = detectedParams.filter((p) => !paramValues[p]?.trim());
-
   const runAllQueries = useCallback(async (sqlToRun?: string) => {
     const input = sqlToRun || sqlText;
     if (!input.trim()) return;
@@ -270,21 +292,21 @@ export function QueryEditor({ connected }: { connected: boolean }) {
         results: [],
         errors: [`Missing parameter values: ${emptyParams.map((p) => `{{${p}}}`).join(", ")}`],
         running: false,
-        resultPage: 0,
+        resultPages: [],
       });
       return;
     }
     // The SQL runs as written: {{param}} placeholders are bound server-side
     // as ClickHouse query parameters, so values never touch the SQL text.
-    const stmts = splitQueries(input);
-    if (stmts.length === 0) return;
+    const runStmts = splitQueries(input);
+    if (runStmts.length === 0) return;
 
-    if (!settings.readonly && hasDestructiveStatement(stmts)) {
+    if (!settings.readonly && hasDestructiveStatement(runStmts)) {
       setPendingSql(input);
       return;
     }
 
-    executeStatements(stmts, input);
+    executeStatements(runStmts, input);
   }, [sqlText, activeTab.id, updateTab, emptyParams, settings.readonly]);
 
   // Streaming execute of one statement. Progress events and the query_id
@@ -302,11 +324,12 @@ export function QueryEditor({ connected }: { connected: boolean }) {
       onProgress,
       (queryId) => updateTab(activeTab.id, { runningQueryId: queryId }),
       settings.enable_params ? paramValues : undefined,
+      logTag,
     );
-  }, [buildSettingsMap, settings.readonly, settings.enable_params, paramValues, pageSize, activeTab.id, updateTab]);
+  }, [buildSettingsMap, settings.readonly, settings.enable_params, paramValues, pageSize, activeTab.id, updateTab, logTag]);
 
   const executeStatements = useCallback(async (stmts: string[], historyInput: string) => {
-    updateTab(activeTab.id, { results: [], errors: [], running: true, resultPage: 0, statements: stmts, progress: null, runningQueryId: undefined });
+    updateTab(activeTab.id, { results: [], errors: [], running: true, resultPages: stmts.map(() => 0), statements: stmts, progress: null, runningQueryId: undefined });
     abortRef.current = new AbortController();
     startTimer();
 
@@ -328,7 +351,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
       }
     }
 
-    updateTab(activeTab.id, { results: allResults, errors: allErrors, running: false, resultPage: 0, progress: null, runningQueryId: undefined, runningStatement: undefined });
+    updateTab(activeTab.id, { results: allResults, errors: allErrors, running: false, resultPages: stmts.map(() => 0), progress: null, runningQueryId: undefined, runningStatement: undefined });
     stopTimer();
     abortRef.current = null;
     if (!allErrors.every((e) => e)) {
@@ -337,29 +360,41 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     }
   }, [activeTab.id, updateTab, startTimer, stopTimer, runOneStatement]);
 
-  const loadResultPage = useCallback(async (page: number) => {
-    const stmts = activeTab.statements;
-    if (!stmts || stmts.length === 0) return;
-    updateTab(activeTab.id, { resultPage: page, pageLoading: true });
+  // Paging result i re-executes ONLY statements[i] at the new offset and
+  // splices it back into results[i]/errors[i]. Results from a multi-statement
+  // run are positional, so every other result keeps its own page and content.
+  const loadResultPage = useCallback(async (page: number, index: number) => {
+    const tabStmts = activeTab.statements;
+    if (!tabStmts || index < 0 || index >= tabStmts.length) return;
+    updateTab(activeTab.id, {
+      resultPages: (activeTab.resultPages || []).map((p, i) => (i === index ? page : p)),
+      pageLoading: true,
+    });
     abortRef.current?.abort();
     abortRef.current = new AbortController();
     const offset = page * pageSize;
-    const allResults: QueryResult[] = [];
-    const allErrors: string[] = [];
-    for (let i = 0; i < stmts.length; i++) {
-      try {
-        const r = await runOneStatement(stmts[i], offset, abortRef.current?.signal, undefined);
-        allResults.push(r);
-        allErrors.push("");
-      } catch (e) {
-        if (e instanceof DOMException && e.name === "AbortError") return;
-        allResults.push({ columns: [], rows: [], row_count: 0, total_rows: -1, timing_ms: 0, query_id: "" });
-        allErrors.push(errorText(e));
-      }
+    const splice = (result: QueryResult, error: string) => {
+      setTabs((prev) => prev.map((t) => {
+        if (t.id !== activeTab.id) return t;
+        const results = [...t.results];
+        const errors = [...t.errors];
+        results[index] = result;
+        errors[index] = error;
+        return { ...t, results, errors, pageLoading: false, runningQueryId: undefined };
+      }));
+    };
+    try {
+      const r = await runOneStatement(tabStmts[index], offset, abortRef.current?.signal, undefined);
+      splice(r, "");
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      splice(
+        { columns: [], rows: [], row_count: 0, total_rows: -1, timing_ms: 0, query_id: "" },
+        errorText(e),
+      );
     }
-    updateTab(activeTab.id, { results: allResults, errors: allErrors, pageLoading: false, runningQueryId: undefined });
     abortRef.current = null;
-  }, [activeTab.id, activeTab.statements, updateTab, runOneStatement, pageSize]);
+  }, [activeTab.id, activeTab.statements, activeTab.resultPages, setTabs, updateTab, runOneStatement, pageSize]);
 
   const runSelection = useCallback(async () => {
     const view = (editorRef.current as { view?: { state: { selection: { main: { from: number; to: number; head: number } }; sliceDoc: (from: number, to: number) => string; doc: { toString: () => string } } } })?.view;
@@ -407,7 +442,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
         let input = sqlText;
         const placeholders: string[] = [];
         if (settings.enable_params) {
-          input = input.replace(/(?<!\\)\{\{(\w+)\}\}/g, (m) => {
+          input = input.replace(PARAM_REGEX, (m) => {
             placeholders.push(m);
             return `__PARAM_${placeholders.length - 1}__`;
           });
@@ -435,22 +470,30 @@ export function QueryEditor({ connected }: { connected: boolean }) {
 
   // Detached execution: the statement runs server-side, decoupled from this
   // request — long S3 scans survive reverse-proxy timeouts entirely. The
-  // job is polled for progress and the result lands in the tab when done.
-  const [detachedJob, setDetachedJob] = useState<DetachedJob | null>(null);
-  const detachedPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // job lives on the tab (each tab owns at most one) and polls are keyed by
+  // tab id, so starting a job in tab B never abandons tab A's job.
+  const detachedPollsRef = useRef<Map<string, { timer: ReturnType<typeof setInterval> | null; failures: number }>>(new Map());
 
-  const stopDetachedPoll = useCallback(() => {
-    if (detachedPollRef.current) {
-      clearInterval(detachedPollRef.current);
-      detachedPollRef.current = null;
+  const stopDetachedPoll = useCallback((tabId: string) => {
+    const entry = detachedPollsRef.current.get(tabId);
+    if (entry?.timer) {
+      clearInterval(entry.timer);
+      detachedPollsRef.current.delete(tabId);
     }
   }, []);
 
-  useEffect(() => stopDetachedPoll, [stopDetachedPoll]);
+  // Unmount: stop every tab's poll, or the intervals leak.
+  useEffect(() => () => {
+    for (const entry of detachedPollsRef.current.values()) {
+      if (entry.timer) clearInterval(entry.timer);
+    }
+    detachedPollsRef.current.clear();
+  }, []);
+
+  const detachedJob = activeTab?.detachedJob;
 
   const runDetached = useCallback(async () => {
     if (emptyParams.length > 0) return;
-    const stmts = splitQueries(sqlText);
     if (stmts.length !== 1) return; // detached is single-statement by design
     const stmt = stmts[0];
     if (!settings.readonly && hasDestructiveStatement([stmt])) {
@@ -458,42 +501,58 @@ export function QueryEditor({ connected }: { connected: boolean }) {
       setPendingSql(sqlText);
       return;
     }
-    stopDetachedPoll();
+    const tabId = activeTab.id;
+    stopDetachedPoll(tabId);
     try {
-      const started = await executeDetached(stmt, pageSize, 0, buildSettingsMap(), settings.enable_params ? paramValues : undefined);
-      setDetachedJob({ id: started.job_id, query_id: started.query_id, statement: stmt, status: "running", started_at: new Date().toISOString() });
-      detachedPollRef.current = setInterval(async () => {
+      const started = await executeDetached(stmt, pageSize, 0, buildSettingsMap(), settings.enable_params ? paramValues : undefined, undefined, logTag);
+      const job: DetachedJob = { id: started.job_id, query_id: started.query_id, statement: stmt, status: "running", started_at: new Date().toISOString() };
+      updateTab(tabId, { detachedJob: job });
+      const poll = { timer: null as ReturnType<typeof setInterval> | null, failures: 0 };
+      poll.timer = setInterval(async () => {
         try {
           const j = await fetchJob(started.job_id);
-          setDetachedJob(j);
+          poll.failures = 0;
           if (j.status !== "running") {
-            stopDetachedPoll();
+            stopDetachedPoll(tabId);
             if (j.status === "done" && j.result) {
-              updateTab(activeTab.id, { results: [j.result], errors: [""], running: false, resultPage: 0, statements: [stmt] });
+              updateTab(tabId, { results: [j.result], errors: [""], running: false, resultPages: [0], statements: [stmt], detachedJob: undefined });
               addToHistory(sqlText);
               setQueryHistory(loadHistory());
             } else {
               const msg = j.error
                 ? `${j.error.error ?? "Job failed"}${j.error.hint ? ` — ${j.error.hint}` : ""}`
                 : "Job canceled";
-              updateTab(activeTab.id, { results: [], errors: [msg], running: false, resultPage: 0 });
+              updateTab(tabId, { results: [], errors: [msg], running: false, resultPages: [], detachedJob: undefined });
             }
-            setDetachedJob(null);
+          } else {
+            updateTab(tabId, { detachedJob: j });
           }
         } catch {
-          // transient poll errors are ignored; the next tick retries
+          // Transient poll errors are retried; after 3 in a row the backend
+          // is likely gone — surface the failure instead of spinning forever.
+          poll.failures++;
+          if (poll.failures >= 3) {
+            stopDetachedPoll(tabId);
+            updateTab(tabId, {
+              errors: ["Detached job lost: polling failed 3 times — the backend may be down. The job may still be running server-side."],
+              running: false,
+              resultPages: [],
+              detachedJob: undefined,
+            });
+          }
         }
       }, 1500);
+      detachedPollsRef.current.set(tabId, poll);
     } catch (e) {
-      updateTab(activeTab.id, { results: [], errors: [errorText(e)], running: false, resultPage: 0 });
+      updateTab(activeTab.id, { results: [], errors: [errorText(e)], running: false, resultPages: [] });
     }
-  }, [sqlText, emptyParams.length, settings.readonly, settings.enable_params, paramValues, buildSettingsMap, pageSize, activeTab.id, updateTab, stopDetachedPoll]);
+  }, [sqlText, stmts, emptyParams.length, settings.readonly, settings.enable_params, paramValues, buildSettingsMap, pageSize, activeTab.id, updateTab, stopDetachedPoll, logTag]);
 
   const cancelDetachedJob = useCallback(async () => {
-    if (detachedJob) {
-      await cancelJob(detachedJob.id);
+    if (activeTab?.detachedJob) {
+      await cancelJob(activeTab.detachedJob.id);
     }
-  }, [detachedJob]);
+  }, [activeTab?.detachedJob]);
 
   const runAllQueriesRef = useRef(runAllQueries);
   runAllQueriesRef.current = runAllQueries;
@@ -568,6 +627,8 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     if (tabs.length <= 1) return;
     const idx = tabs.findIndex((t) => t.id === id);
     const next = tabs.filter((t) => t.id !== id);
+    // No tab, no poll — drop the closed tab's detached job tracking.
+    stopDetachedPoll(id);
     if (activeTabId === id) {
       const newIdx = Math.min(idx, next.length - 1);
       setActiveTabId(next[newIdx].id);
@@ -733,18 +794,18 @@ export function QueryEditor({ connected }: { connected: boolean }) {
   );
 
   const openCount = Object.values(sidebarSections).filter(Boolean).length;
+  const beginDrag = useDragResizer();
 
   const makeSectionDrag = (upper: keyof SidebarSections, lower: keyof SidebarSections) => (e: React.MouseEvent) => {
-    e.preventDefault();
+    const sidebarEl = sidebarRef.current;
+    if (!sidebarEl) return;
     const startY = e.clientY;
     const startUpper = sectionHeights[upper];
     const startLower = sectionHeights[lower];
-    const sidebarEl = sidebarRef.current;
-    if (!sidebarEl) return;
     const headersH = sidebarEl.querySelectorAll('[data-section-header]').length * 33;
     const totalContent = sidebarEl.clientHeight - headersH;
     if (totalContent <= 0) return;
-    const onMove = (ev: MouseEvent) => {
+    beginDrag(e, (ev) => {
       const delta = ev.clientY - startY;
       const frac = delta / totalContent;
       let newUpper = Math.max(0.05, Math.min(0.95, startUpper + frac));
@@ -754,17 +815,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
         newUpper = startUpper + startLower - 0.05;
       }
       setSectionHeights((prev: Record<string, number>) => ({ ...prev, [upper]: newUpper, [lower]: newLower }));
-    };
-    const onUp = () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
+    }, "row-resize");
   };
 
   const sectionStyle = (key: keyof SidebarSections): React.CSSProperties => {
@@ -926,19 +977,12 @@ export function QueryEditor({ connected }: { connected: boolean }) {
           else if (e.key === "ArrowRight") { e.preventDefault(); setSidebarWidth((w) => Math.min(600, w + 24)); }
         }}
         onMouseDown={(e) => {
-          e.preventDefault();
           const startX = e.clientX;
           const startWidth = sidebarWidth;
-          const onMove = (ev: MouseEvent) => {
+          beginDrag(e, (ev) => {
             const next = Math.max(180, Math.min(600, startWidth + ev.clientX - startX));
             setSidebarWidth(next);
-          };
-          const onUp = () => {
-            document.removeEventListener("mousemove", onMove);
-            document.removeEventListener("mouseup", onUp);
-          };
-          document.addEventListener("mousemove", onMove);
-          document.addEventListener("mouseup", onUp);
+          });
         }}
       />
 
@@ -1005,7 +1049,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
                 </button>
                 <button
                   onClick={runDetached}
-                  disabled={!sqlText.trim() || splitQueries(sqlText).length !== 1 || emptyParams.length > 0}
+                  disabled={!sqlText.trim() || stmts.length !== 1 || emptyParams.length > 0}
                   title="Run detached: the query runs server-side and outlives proxies/timeouts. Single statements only; poll here for progress."
                   className="flex items-center gap-1.5 rounded border border-[var(--color-border)] px-2.5 py-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
                 >
@@ -1081,7 +1125,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
                 copy(url, "Shareable URL copied!");
               }}
               className="flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-              title="Copy shareable URL (encodes SQL in URL hash)"
+              title="Copy shareable URL (the link contains the query text and parameter values — share with care)"
             >
               <Share2 className="h-3 w-3" />
               Share
@@ -1096,14 +1140,32 @@ export function QueryEditor({ connected }: { connected: boolean }) {
             </button>
           </div>
           {showSettings && (
-            <SettingsBar
-              settings={settings}
-              onChange={onSettingsChange}
-              pageSize={pageSize}
-              onPageSizeChange={setPageSize}
-              maxExecSeconds={maxExecSeconds}
-              onMaxExecChange={setMaxExecSeconds}
-            />
+            <>
+              <SettingsBar
+                settings={settings}
+                onChange={onSettingsChange}
+                pageSize={pageSize}
+                onPageSizeChange={setPageSize}
+                maxExecSeconds={maxExecSeconds}
+                onMaxExecChange={setMaxExecSeconds}
+              />
+              <div className="border-b border-[var(--color-border)] bg-[var(--surface-hover)] px-4 py-2">
+                <div className="flex items-center gap-2 text-xs text-[var(--color-text-primary)]">
+                  <span>Log comment tag:</span>
+                  <input
+                    type="text"
+                    value={logTag}
+                    onChange={(e) => setLogTag(e.target.value)}
+                    maxLength={256}
+                    placeholder="e.g. dbt-nightly"
+                    className="w-64 rounded border border-[var(--color-border)] bg-[var(--surface-base)] px-2 py-1 font-mono text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] outline-none focus:border-[var(--color-accent)]"
+                  />
+                </div>
+                <p className="mt-0.5 text-[10px] text-[var(--color-text-secondary)]">
+                  Tags the query in system.query_log (log_comment) — filter the Queries page by it.
+                </p>
+              </div>
+            </>
           )}
           <div style={{ height: editorHeight }}>
             <CodeMirror
@@ -1130,24 +1192,13 @@ export function QueryEditor({ connected }: { connected: boolean }) {
             else if (e.key === "ArrowDown") { e.preventDefault(); setEditorHeight((h) => Math.min(window.innerHeight - 280, h + 32)); }
           }}
           onMouseDown={(e) => {
-            e.preventDefault();
             const startY = e.clientY;
             const startH = editorHeight;
-            const onMove = (ev: MouseEvent) => {
+            beginDrag(e, (ev) => {
               // Leave room for the tabs/toolbar above and a usable results panel below.
               const next = Math.max(120, Math.min(window.innerHeight - 280, startH + ev.clientY - startY));
               setEditorHeight(next);
-            };
-            const onUp = () => {
-              document.body.style.cursor = "";
-              document.body.style.userSelect = "";
-              document.removeEventListener("mousemove", onMove);
-              document.removeEventListener("mouseup", onUp);
-            };
-            document.body.style.cursor = "row-resize";
-            document.body.style.userSelect = "none";
-            document.addEventListener("mousemove", onMove);
-            document.addEventListener("mouseup", onUp);
+            }, "row-resize");
           }}
         />
 
@@ -1180,13 +1231,13 @@ export function QueryEditor({ connected }: { connected: boolean }) {
                     <ResultTable
                       result={result}
                       pageSize={pageSize}
-                      resultPage={activeTab.resultPage}
+                      resultPage={activeTab.resultPages?.[i] ?? 0}
                       pageLoading={activeTab.pageLoading}
                       statement={activeTab.statements?.[i]}
                       onSuggestion={applySuggestion}
                       setResultPage={(fn) => {
-                        const next = fn(activeTab.resultPage);
-                        loadResultPage(next);
+                        const current = activeTab.resultPages?.[i] ?? 0;
+                        loadResultPage(fn(current), i);
                       }}
                       onNavigate={(path) => navigate(path)}
                     />
@@ -1209,7 +1260,13 @@ const DESTRUCTIVE_PREFIXES = [
 
 function hasDestructiveStatement(stmts: string[]): boolean {
   return stmts.some((s) => {
-    const upper = s.trimStart().toUpperCase();
+    // Comments ahead of the keyword (e.g. "-- nightly purge\nDROP TABLE t")
+    // must not hide it. stripLeadingComments mirrors the backend's
+    // StripLeadingComments; an unterminated comment returns "" and we fail
+    // closed (treat as destructive) — same default as the backend.
+    const stripped = stripLeadingComments(s);
+    if (!stripped) return true;
+    const upper = stripped.toUpperCase();
     return DESTRUCTIVE_PREFIXES.some((p) => upper.startsWith(p));
   });
 }

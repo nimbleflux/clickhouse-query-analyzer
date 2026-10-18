@@ -7,17 +7,18 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
 import { useTheme } from "../api/theme";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
-import { fetchFingerprintTrend, fetchFingerprintQueries } from "../api/client";
+import { fetchFingerprintTrend, fetchFingerprintQueries, fetchQuery } from "../api/client";
 import type { TrendPoint, FingerprintQuery } from "../api/types";
 import { CardSkeleton } from "../components/Skeleton";
-import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor, queryStatus } from "../utils";
+import { formatDuration, formatBytes, formatNumber, formatDateTime, durationColor, memoryColor, queryStatus } from "../utils";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, ChartCard } from "@/components/ui/card";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { sendToEditor } from "@/lib/send-to-editor";
 import { ApiError } from "@/api/errors";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { useChartTheme } from "@/hooks/useChartTheme";
 import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 
 type Interval = "hour" | "day";
@@ -33,24 +34,12 @@ function labelFmt(fn: (l: string) => string) {
   return (label: any) => fn(String(label));
 }
 
-interface ChartCardProps {
-  title: string;
-  children: React.ReactNode;
-}
-
-function ChartCard({ title, children }: ChartCardProps) {
-  return (
-    <Card className="p-4">
-      <div className="mb-3 text-xs font-medium text-[var(--color-text-secondary)]">{title}</div>
-      {children}
-    </Card>
-  );
-}
-
 export function FingerprintDetail({ connected }: { connected: boolean }) {
   const { hash } = useParams<{ hash: string }>();
   const location = useLocation();
-  const sampleQuery = (location.state as { query?: string } | null)?.query;
+  const locationSample = (location.state as { query?: string } | null)?.query;
+  const [fetchedSample, setFetchedSample] = useState<string | null>(null);
+  const sampleQuery = locationSample ?? fetchedSample;
   const theme = useTheme();
   const copy = useCopyToClipboard();
   const navigate = useNavigate();
@@ -122,6 +111,29 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
     return () => controller.abort();
   }, [load, connected]);
 
+  // The sample query comes in via location.state, which vanishes on refresh
+  // and deep links. Fall back to the fingerprint's most recent execution —
+  // fetched quietly (no spinner; the card pops in when it resolves) and
+  // best-effort (abort/404/missing rows just mean no card). The fingerprint
+  // queries endpoint doesn't return query text, so resolve one query_id and
+  // then fetch that entry.
+  useEffect(() => {
+    if (locationSample || !hash || !connected) return;
+    const controller = new AbortController();
+    fetchFingerprintQueries(hash, 1, undefined, controller.signal)
+      .then((r) => {
+        const id = r.queries[0]?.query_id;
+        if (!id) return;
+        return fetchQuery(id, controller.signal).then((q) => {
+          if (!controller.signal.aborted && q.query) setFetchedSample(q.query);
+        });
+      })
+      .catch(() => {
+        // Sample is best-effort; ignore aborts and failures.
+      });
+    return () => controller.abort();
+  }, [connected, hash, locationSample]);
+
   const cancel = useCallback(() => {
     setCanceled(true);
     controllerRef.current?.abort();
@@ -134,22 +146,21 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
     return <PageContainer><ErrorState error="Invalid fingerprint hash" /></PageContainer>;
   }
 
-  const isDark = theme === "dark";
-  const gridColor = isDark ? "#334155" : "#e2e8f0";
-  const textColor = isDark ? "#94a3b8" : "#64748b";
+  // Chart scaffolding colors come from the CSS design tokens (theme-aware).
+  const { gridColor, textColor, series, tooltipStyle } = useChartTheme();
+  // series = [accent, violet, error, warning, success, cyan, pink, orange]
+  const [accent, violet, errorColor, warningColor, successColor, cyan, , orange] = series;
 
   const fmtDuration = (v: number) => formatDuration(v);
   const fmtBucket = (v: string) => {
     try {
       const d = new Date(v);
       if (interval === "day") return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-      return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      return formatDateTime(v);
     } catch {
       return v;
     }
   };
-
-  const tooltipStyle = { background: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 };
 
   return (
     <PageContainer>
@@ -232,9 +243,9 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
                 <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                 <YAxis tickFormatter={fmtDuration} tick={{ fill: textColor, fontSize: 10 }} width={70} />
                 <Tooltip contentStyle={tooltipStyle} labelFormatter={labelFmt(fmtBucket)} formatter={tooltipFmt(fmtDuration)} />
-                <Area type="monotone" dataKey="p95_duration_ms" stroke="#ef4444" fill="#ef444420" strokeWidth={1.5} name="P95" />
-                <Area type="monotone" dataKey="p50_duration_ms" stroke="#f59e0b" fill="#f59e0b20" strokeWidth={1.5} name="P50" />
-                <Area type="monotone" dataKey="avg_duration_ms" stroke="#3b82f6" fill="#3b82f620" strokeWidth={1.5} name="Avg" />
+                <Area type="monotone" dataKey="p95_duration_ms" stroke={errorColor} fill={`${errorColor}20`} strokeWidth={1.5} name="P95" />
+                <Area type="monotone" dataKey="p50_duration_ms" stroke={warningColor} fill={`${warningColor}20`} strokeWidth={1.5} name="P50" />
+                <Area type="monotone" dataKey="avg_duration_ms" stroke={accent} fill={`${accent}20`} strokeWidth={1.5} name="Avg" />
               </AreaChart>
             </ResponsiveContainer>
           </ChartCard>
@@ -247,8 +258,8 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tickFormatter={(v: number) => formatBytes(v)} tick={{ fill: textColor, fontSize: 10 }} width={70} />
                   <Tooltip contentStyle={tooltipStyle} labelFormatter={labelFmt(fmtBucket)} formatter={tooltipFmt(formatBytes)} />
-                  <Area type="monotone" dataKey="max_memory_usage" stroke="#a855f7" fill="#a855f720" strokeWidth={1.5} />
-                  <Area type="monotone" dataKey="avg_memory_usage" stroke="#8b5cf6" fill="#8b5cf620" strokeWidth={1.5} />
+                  <Area type="monotone" dataKey="max_memory_usage" stroke={violet} fill={`${violet}20`} strokeWidth={1.5} />
+                  <Area type="monotone" dataKey="avg_memory_usage" stroke={violet} strokeOpacity={0.65} fill={`${violet}20`} strokeWidth={1.5} />
                 </AreaChart>
               </ResponsiveContainer>
             </ChartCard>
@@ -260,7 +271,7 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tick={{ fill: textColor, fontSize: 10 }} width={40} />
                   <Tooltip contentStyle={tooltipStyle} labelFormatter={labelFmt(fmtBucket)} formatter={tooltipFmt(formatNumber)} />
-                  <Bar dataKey="execution_count" fill="#3b82f680" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="execution_count" fill={`${accent}80`} radius={[2, 2, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </ChartCard>
@@ -274,8 +285,8 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tickFormatter={(v: number) => formatBytes(v)} tick={{ fill: textColor, fontSize: 10 }} width={70} />
                   <Tooltip contentStyle={tooltipStyle} labelFormatter={labelFmt(fmtBucket)} formatter={tooltipFmt(formatBytes)} />
-                  <Area type="monotone" dataKey="max_read_bytes" stroke="#f97316" fill="#f9731620" strokeWidth={1.5} />
-                  <Area type="monotone" dataKey="avg_read_bytes" stroke="#fb923c" fill="#fb923c20" strokeWidth={1.5} />
+                  <Area type="monotone" dataKey="max_read_bytes" stroke={orange} fill={`${orange}20`} strokeWidth={1.5} />
+                  <Area type="monotone" dataKey="avg_read_bytes" stroke={orange} strokeOpacity={0.65} fill={`${orange}20`} strokeWidth={1.5} />
                 </AreaChart>
               </ResponsiveContainer>
             </ChartCard>
@@ -287,8 +298,8 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tickFormatter={(v: number) => formatNumber(v)} tick={{ fill: textColor, fontSize: 10 }} width={60} />
                   <Tooltip contentStyle={tooltipStyle} labelFormatter={labelFmt(fmtBucket)} formatter={tooltipFmt(formatNumber)} />
-                  <Area type="monotone" dataKey="max_read_rows" stroke="#22c55e" fill="#22c55e20" strokeWidth={1.5} />
-                  <Area type="monotone" dataKey="avg_read_rows" stroke="#4ade80" fill="#4ade8020" strokeWidth={1.5} />
+                  <Area type="monotone" dataKey="max_read_rows" stroke={successColor} fill={`${successColor}20`} strokeWidth={1.5} />
+                  <Area type="monotone" dataKey="avg_read_rows" stroke={successColor} strokeOpacity={0.65} fill={`${successColor}20`} strokeWidth={1.5} />
                 </AreaChart>
               </ResponsiveContainer>
             </ChartCard>
@@ -302,8 +313,8 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tickFormatter={(v: number) => formatNumber(v)} tick={{ fill: textColor, fontSize: 10 }} width={60} />
                   <Tooltip contentStyle={tooltipStyle} labelFormatter={labelFmt(fmtBucket)} formatter={tooltipFmt(formatNumber)} />
-                  <Area type="monotone" dataKey="max_result_rows" stroke="#06b6d4" fill="#06b6d420" strokeWidth={1.5} />
-                  <Area type="monotone" dataKey="avg_result_rows" stroke="#22d3ee" fill="#22d3ee20" strokeWidth={1.5} />
+                  <Area type="monotone" dataKey="max_result_rows" stroke={cyan} fill={`${cyan}20`} strokeWidth={1.5} />
+                  <Area type="monotone" dataKey="avg_result_rows" stroke={cyan} strokeOpacity={0.65} fill={`${cyan}20`} strokeWidth={1.5} />
                 </AreaChart>
               </ResponsiveContainer>
             </ChartCard>
@@ -315,8 +326,8 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tickFormatter={(v: number) => formatNumber(v)} tick={{ fill: textColor, fontSize: 10 }} width={40} />
                   <Tooltip contentStyle={tooltipStyle} labelFormatter={labelFmt(fmtBucket)} formatter={tooltipFmt(formatNumber)} />
-                  <Area type="monotone" dataKey="max_peak_threads" stroke="#eab308" fill="#eab30820" strokeWidth={1.5} />
-                  <Area type="monotone" dataKey="avg_peak_threads" stroke="#facc15" fill="#facc1520" strokeWidth={1.5} />
+                  <Area type="monotone" dataKey="max_peak_threads" stroke={warningColor} fill={`${warningColor}20`} strokeWidth={1.5} />
+                  <Area type="monotone" dataKey="avg_peak_threads" stroke={warningColor} strokeOpacity={0.65} fill={`${warningColor}20`} strokeWidth={1.5} />
                 </AreaChart>
               </ResponsiveContainer>
             </ChartCard>
@@ -330,7 +341,7 @@ export function FingerprintDetail({ connected }: { connected: boolean }) {
                   <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" />
                   <YAxis tick={{ fill: textColor, fontSize: 10 }} width={40} />
                   <Tooltip contentStyle={tooltipStyle} labelFormatter={labelFmt(fmtBucket)} formatter={tooltipFmt(formatNumber)} />
-                  <Bar dataKey="error_count" fill="#ef444480" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="error_count" fill={`${errorColor}80`} radius={[2, 2, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </ChartCard>
@@ -426,14 +437,14 @@ function RegressionAnalysisCard({ trend }: { trend: TrendPoint[] }) {
   const improvements = metrics.filter((m) => m.higherIsWorse && m.deltaPct < -25);
 
   const titleIcon = regressions.length > 0
-    ? <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+    ? <AlertTriangle className="h-3.5 w-3.5 text-[var(--color-warning)]" />
     : improvements.length > 0
-      ? <TrendingUp className="h-3.5 w-3.5 text-emerald-500" />
+      ? <TrendingUp className="h-3.5 w-3.5 text-[var(--color-success)]" />
       : <TrendingUp className="h-3.5 w-3.5 text-[var(--color-text-secondary)]" />;
   const titleColor = regressions.length > 0
-    ? "text-amber-500"
+    ? "text-[var(--color-warning)]"
     : improvements.length > 0
-      ? "text-emerald-500"
+      ? "text-[var(--color-success)]"
       : "text-[var(--color-text-secondary)]";
 
   return (
@@ -457,7 +468,7 @@ function RegressionAnalysisCard({ trend }: { trend: TrendPoint[] }) {
           </thead>
           <tbody>
             {metrics.map((m) => {
-              const color = m.deltaPct > 25 ? "text-rose-500" : m.deltaPct < -25 ? "text-emerald-500" : "text-[var(--color-text-secondary)]";
+              const color = m.deltaPct > 25 ? "text-[var(--color-error)]" : m.deltaPct < -25 ? "text-[var(--color-success)]" : "text-[var(--color-text-secondary)]";
               const arrow = m.deltaPct > 25 ? "↑" : m.deltaPct < -25 ? "↓" : "→";
               return (
                 <tr key={m.label} className="border-b border-[var(--color-border)] last:border-0">
@@ -474,12 +485,12 @@ function RegressionAnalysisCard({ trend }: { trend: TrendPoint[] }) {
         </table>
       </div>
       {regressions.length > 0 && (
-        <p className="mt-3 text-xs text-amber-500">
+        <p className="mt-3 text-xs text-[var(--color-warning)]">
           ⚠ {regressions.length} metric{regressions.length > 1 ? "s" : ""} regressed by &gt;25% vs baseline.
         </p>
       )}
       {regressions.length === 0 && improvements.length > 0 && (
-        <p className="mt-3 text-xs text-emerald-500">
+        <p className="mt-3 text-xs text-[var(--color-success)]">
           ✓ {improvements.length} metric{improvements.length > 1 ? "s" : ""} improved by &gt;25% vs baseline.
         </p>
       )}
@@ -557,19 +568,32 @@ function RecentExecutionsCard({
                 <tr
                   key={q.query_id}
                   onClick={() => onNavigate(q.query_id)}
-                  className={`cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)] transition-colors ${selected.has(q.query_id) ? "bg-[var(--state-accent)]" : ""}`}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onNavigate(q.query_id);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="link"
+                  aria-label={`Open query from ${formatDateTime(q.event_time)}`}
+                  className={`cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)] ${selected.has(q.query_id) ? "bg-[var(--state-accent)]" : ""}`}
                 >
-                  <td className="px-2 py-1.5" onClick={(e) => { e.stopPropagation(); onToggleSelect(q.query_id); }}>
+                  <td className="px-2 py-1.5" onClick={(e) => { e.stopPropagation(); }}>
                     <input
                       type="checkbox"
                       checked={selected.has(q.query_id)}
-                      disabled={!selected.has(q.query_id) && selected.size >= 2}
-                      readOnly
-                      className="h-3.5 w-3.5 rounded border-[var(--color-border)] accent-[var(--color-accent)]"
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        onToggleSelect(q.query_id);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      aria-label="Select query for comparison"
+                      className="h-3.5 w-3.5 cursor-pointer rounded border-[var(--color-border)] accent-[var(--color-accent)]"
                     />
                   </td>
                   <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--color-text-secondary)]">
-                    {formatTime(q.event_time)}
+                    {formatDateTime(q.event_time)}
                   </td>
                   <td className={`whitespace-nowrap px-3 py-1.5 text-right font-mono text-xs ${durationColor(q.query_duration_ms)}`}>
                     {formatDuration(q.query_duration_ms)}

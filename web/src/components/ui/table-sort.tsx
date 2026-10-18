@@ -17,6 +17,50 @@ export function useTableSort<K extends string>(initialField?: K, initialDir: Sor
   return { field, dir, toggle };
 }
 
+interface SortButtonProps<K extends string> {
+  field: K;
+  activeField?: K;
+  dir: SortDir;
+  onToggle: (field: K) => void;
+  label: string;
+  align?: "left" | "right";
+  className?: string;
+}
+
+/**
+ * The keyboard-activatable toggle inside a sort header, exposed separately for
+ * "tables" that aren't real <table> markup (e.g. QueryList's virtualized div
+ * rows), where {@link SortableHeader}'s <th> wrapper doesn't apply.
+ * For server-side sorting, pass the current query params as activeField/dir
+ * and issue the request update from onToggle — the component holds no state.
+ */
+export function SortButton<K extends string>({
+  field,
+  activeField,
+  dir,
+  onToggle,
+  label,
+  align = "left",
+  className,
+}: SortButtonProps<K>) {
+  const active = activeField === field;
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(field)}
+      aria-pressed={active}
+      className={cn(
+        "inline-flex cursor-pointer items-center gap-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]",
+        align === "right" && "flex-row-reverse",
+        className,
+      )}
+    >
+      {label}
+      {active && (dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
+    </button>
+  );
+}
+
 interface SortableHeaderProps<K extends string> {
   field: K;
   activeField?: K;
@@ -51,18 +95,7 @@ export function SortableHeader<K extends string>({
         className,
       )}
     >
-      <button
-        type="button"
-        onClick={() => onToggle(field)}
-        aria-pressed={active}
-        className={cn(
-          "inline-flex cursor-pointer items-center gap-1 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]",
-          align === "right" && "flex-row-reverse",
-        )}
-      >
-        {label}
-        {active && (dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
-      </button>
+      <SortButton field={field} activeField={activeField} dir={dir} onToggle={onToggle} label={label} align={align} />
     </th>
   );
 }

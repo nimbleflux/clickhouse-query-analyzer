@@ -1,9 +1,11 @@
 import { useState, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Copy, Check, ExternalLink, Download, ArrowUp, ArrowDown, ChevronLeft, ChevronRightIcon, Loader2, TriangleAlert } from "lucide-react";
+import { Copy, Check, ExternalLink, Download, ArrowUp, ArrowDown, ChevronLeft, ChevronRightIcon, Loader2, TriangleAlert, Table2, LineChart as LineChartIcon } from "lucide-react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { formatNumber } from "@/utils";
 import type { QueryResult } from "@/api/types";
 import { countQueryRows } from "@/api/client";
+import { isNumericType, defaultXColumn, buildChartPoints } from "@/lib/chartData";
 import { exportResult, formatElapsed, errorText } from "./utils";
 
 function CellValue({ val }: { val: unknown }) {
@@ -75,11 +77,138 @@ interface ResultTableProps {
   onSuggestion?: (action: string) => void;
 }
 
+// Token-backed series palette for multiple Y columns (theme-aware order:
+// accent first, then the semantic hues).
+const SERIES_COLORS = [
+  "var(--color-accent)",
+  "var(--color-success)",
+  "var(--color-warning)",
+  "var(--color-error)",
+  "var(--color-text-secondary)",
+];
+
+/**
+ * Chart rendering of the result: X axis picker, multi-select Y columns,
+ * one Line per selected column. Mounted with a key derived from the result
+ * identity, so axis selections reset when a new result arrives and each
+ * statement's result in a multi-statement run keeps its own state.
+ */
+function ChartView({ result }: { result: QueryResult }) {
+  const numericCols = useMemo(
+    () => result.columns.filter((c) => isNumericType(c.type)).map((c) => c.name),
+    [result.columns],
+  );
+  const [xCol, setXCol] = useState(() => defaultXColumn(result.columns));
+  const [yCols, setYCols] = useState<string[]>(() => numericCols.slice(0, 1));
+
+  const { points, truncated } = useMemo(
+    () => buildChartPoints(result.rows, xCol, yCols),
+    [result.rows, xCol, yCols],
+  );
+  // recharts wants flat records: { x, [yCol]: number | undefined }.
+  const data = useMemo(
+    () => points.map((p) => ({ x: p.x, ...p.values })),
+    [points],
+  );
+
+  const toggleY = (col: string) => {
+    setYCols((prev) => (prev.includes(col) ? prev.filter((c) => c !== col) : [...prev, col]));
+  };
+
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+        <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
+          X axis:
+          <select
+            value={xCol}
+            onChange={(e) => setXCol(e.target.value)}
+            className="rounded border border-[var(--color-border)] bg-[var(--surface-elevated)] px-1.5 py-0.5 text-xs text-[var(--color-text-primary)]"
+          >
+            {!defaultXColumn(result.columns) && result.columns.every((c) => isNumericType(c.type)) && (
+              <option value="">(row #)</option>
+            )}
+            {result.columns.map((c) => (
+              <option key={c.name} value={c.name}>{c.name}</option>
+            ))}
+          </select>
+        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-[var(--color-text-secondary)]">Y:</span>
+          {numericCols.map((col) => (
+            <label key={col} className="flex cursor-pointer items-center gap-1 text-xs text-[var(--color-text-primary)]">
+              <input
+                type="checkbox"
+                checked={yCols.includes(col)}
+                onChange={() => toggleY(col)}
+                className="accent-[var(--color-accent)]"
+              />
+              {col}
+            </label>
+          ))}
+        </div>
+        {truncated && (
+          <span className="text-xs text-[var(--color-text-secondary)]" title="Charts plot at most the first 1000 rows">
+            Showing first 1000 rows
+          </span>
+        )}
+      </div>
+      <div style={{ height: 320 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
+            <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" />
+            <XAxis dataKey="x" tick={{ fontSize: 10, fill: "var(--color-text-secondary)" }} minTickGap={32} />
+            <YAxis tick={{ fontSize: 10, fill: "var(--color-text-secondary)" }} width={64} />
+            <Tooltip
+              contentStyle={{
+                background: "var(--surface-card)",
+                border: "1px solid var(--color-border)",
+                borderRadius: 6,
+                fontSize: 12,
+                color: "var(--color-text-primary)",
+              }}
+              labelStyle={{ color: "var(--color-text-secondary)" }}
+              isAnimationActive={false}
+            />
+            {yCols.length > 1 && (
+              <Legend wrapperStyle={{ fontSize: 11, color: "var(--color-text-secondary)" }} />
+            )}
+            {yCols.map((col, i) => (
+              <Line
+                key={col}
+                type="monotone"
+                dataKey={col}
+                stroke={SERIES_COLORS[i % SERIES_COLORS.length]}
+                dot={false}
+                strokeWidth={1.5}
+                connectNulls={false}
+                isAnimationActive={false}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
 export function ResultTable({ result, pageSize, resultPage, pageLoading, setResultPage, onNavigate, statement, onSuggestion }: ResultTableProps) {
   const [colFilters, setColFilters] = useState<Record<string, string>>({});
   const [sortCol, setSortCol] = useState<string>("");
   const [sortAsc, setSortAsc] = useState(true);
   const [countState, setCountState] = useState<{ loading: boolean; value?: number; error?: string }>({ loading: false });
+  const [view, setView] = useState<"table" | "chart">("table");
+
+  // Chart view needs at least one numeric column and two points to say
+  // anything; text output (FORMAT queries) has no columns to plot.
+  const chartEligible = useMemo(() => {
+    if (result.is_text || result.rows.length < 2) return false;
+    return result.columns.some((c) => isNumericType(c.type));
+  }, [result.is_text, result.rows.length, result.columns]);
+
+  // Identity of this result: ChartView is keyed on it so axis selections
+  // reset when a new result lands (and stay per-statement in multi-runs).
+  const resultKey = `${result.query_id}|${result.timing_ms}|${result.row_count}|${result.rows.length}`;
 
   const countAllRows = async () => {
     if (!statement) return;
@@ -243,6 +372,26 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
           )}
           {result.rows.length > 0 && (
             <div className="ml-auto flex items-center gap-1">
+              {chartEligible && (
+                <div className="mr-1 flex items-center rounded border border-[var(--color-border)]">
+                  <button
+                    onClick={() => setView("table")}
+                    aria-pressed={view === "table"}
+                    className={`flex items-center gap-1 rounded-l px-2 py-0.5 text-[10px] ${view === "table" ? "bg-[var(--state-accent)] text-[var(--color-accent)]" : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"}`}
+                    title="Table view"
+                  >
+                    <Table2 className="h-3 w-3" />Table
+                  </button>
+                  <button
+                    onClick={() => setView("chart")}
+                    aria-pressed={view === "chart"}
+                    className={`flex items-center gap-1 rounded-r px-2 py-0.5 text-[10px] ${view === "chart" ? "bg-[var(--state-accent)] text-[var(--color-accent)]" : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"}`}
+                    title="Chart view"
+                  >
+                    <LineChartIcon className="h-3 w-3" />Chart
+                  </button>
+                </div>
+              )}
               <button
                 onClick={() => exportResult(result, "csv")}
                 className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
@@ -273,6 +422,9 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
           {result.output}
         </pre>
       ) : result.columns.length > 0 ? (
+        view === "chart" && chartEligible ? (
+          <ChartView key={resultKey} result={result} />
+        ) : (
         <>
           <div ref={scrollRef} className="max-h-[60vh] overflow-auto rounded-lg border border-[var(--color-border)]">
             <table className="w-full text-sm">
@@ -379,6 +531,7 @@ export function ResultTable({ result, pageSize, resultPage, pageLoading, setResu
             </div>
           )}
         </>
+        )
       ) : (
         <div className="text-sm text-[var(--color-text-secondary)]">Query executed successfully. No results returned.</div>
       )}

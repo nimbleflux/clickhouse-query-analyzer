@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration, formatBytes, formatNumber, durationColor, memoryColor, categorizeEvent, queryStatus, isException } from "../utils";
+import { formatDuration, formatBytes, formatNumber, formatDateTime, formatTime, durationColor, memoryColor, categorizeEvent, queryStatus, isException } from "../utils";
 
 describe("formatDuration", () => {
   it("returns 0ms for zero", () => {
@@ -76,6 +76,38 @@ describe("formatNumber", () => {
 
   it("formats billions", () => {
     expect(formatNumber(1500000000)).toBe("1.50B");
+  });
+});
+
+describe("formatDateTime", () => {
+  it("returns empty string for empty input", () => {
+    expect(formatDateTime("")).toBe("");
+  });
+
+  it("returns the input unchanged when unparseable", () => {
+    expect(formatDateTime("not-a-date")).toBe("not-a-date");
+  });
+
+  it("parses ClickHouse 'YYYY-MM-DD HH:MM:SS' the same as the ISO form", () => {
+    expect(formatDateTime("2024-03-05 14:03:22")).toBe(formatDateTime("2024-03-05T14:03:22"));
+  });
+
+  it("includes the year when the timestamp is not in the current year", () => {
+    const year = new Date().getFullYear() - 5;
+    expect(formatDateTime(`${year}-03-05 14:03:22`)).toContain(String(year));
+  });
+
+  it("omits the year for current-year timestamps", () => {
+    const year = new Date().getFullYear();
+    expect(formatDateTime(`${year}-03-05 14:03:22`)).not.toContain(String(year));
+  });
+});
+
+describe("formatTime", () => {
+  // formatTime is a deprecated wrapper kept for out-of-scope callers; its
+  // fixed MM/DD HH:MM:SS output must not regress.
+  it("renders the fixed MM/DD HH:MM:SS format", () => {
+    expect(formatTime("2024-03-05T14:03:22")).toBe("03/05 14:03:22");
   });
 });
 

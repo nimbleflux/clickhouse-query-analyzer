@@ -227,3 +227,62 @@ jobs:
           build-args: VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  e2e-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.20.0"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Start ClickHouse
+        run: cd dev && docker compose up -d clickhouse
+
+      - name: Wait for ClickHouse
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec dev-clickhouse-1 clickhouse-client --query "SELECT 1" >/dev/null 2>&1; then
+              echo "ClickHouse is ready"
+              break
+            fi
+            sleep 1
+            if [ "$i" = "60" ]; then echo "ClickHouse did not become ready"; exit 1; fi
+          done
+
+      - name: Seed data
+        run: |
+          for attempt in 1 2 3; do
+            if docker exec -i dev-clickhouse-1 clickhouse-client < dev/seed-ci.sql; then break; fi
+            sleep 5
+            if [ "$attempt" = "3" ]; then echo "Seed failed"; exit 1; fi
+          done
+
+      - name: Build frontend
+        run: make build-frontend
+
+      - name: Build e2e binary (release artifact with embedded frontend)
+        run: CGO_ENABLED=0 go build -o clickhouse-query-analyzer-e2e ./cmd/server
+
+      - name: Install Playwright browser
+        run: cd web && npx playwright install --with-deps chromium
+
+      - name: Run e2e suite
+        env:
+          CI: "true"
+        run: cd web && npx playwright test
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-results
+          path: web/test-results/
+          retention-days: 7

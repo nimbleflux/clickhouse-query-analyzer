@@ -1,6 +1,11 @@
 # Go
 clickhouse-query-analyzer
+clickhouse-query-analyzer-e2e
 *.exe
+
+# E2E
+web/test-results/
+web/playwright-report/
 
 # Frontend
 web/dist/

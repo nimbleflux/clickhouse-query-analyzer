@@ -1,41 +1,18 @@
-import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import { useNavigate } from "react-router-dom";
 import { Gauge, Database, HardDrive, Activity, RefreshCw, Server, AlertTriangle, Layers, Network, User, CheckCircle2, XCircle, Settings as SettingsIcon, ChevronDown, ChevronRight } from "lucide-react";
 import { fetchDashboard } from "../api/client";
 import type { DashboardData } from "../api/types";
-import { ApiError } from "../api/errors";
 import { formatBytes, formatNumber } from "../utils";
 import { CardSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/input";
-import { Card } from "@/components/ui/card";
+import { Card, StatCard } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
-import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice, PartialErrorsBanner } from "@/components/ui/state";
+import { usePollingQuery } from "@/hooks/usePollingQuery";
 import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
-
-interface StatCardProps {
-  label: string;
-  value: string;
-  icon?: React.ReactNode;
-  color?: string;
-  className?: string;
-}
-
-function StatCard({ label, value, icon, color, className }: StatCardProps) {
-  return (
-    <Card className={`p-4 ${className || ""}`}>
-      <div className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
-        {icon}
-        {label}
-      </div>
-      <div className={`mt-1 font-mono text-lg font-semibold ${color || "text-[var(--color-text-primary)]"}`}>
-        {value}
-      </div>
-    </Card>
-  );
-}
 
 interface TableCardProps {
   title: string;
@@ -74,51 +51,22 @@ function formatEventValue(name: string, value: number): string {
 
 export function Dashboard({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [canceled, setCanceled] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(30);
-  const intervalRef = useRef<ReturnType<typeof setInterval>>(null);
-  const controllerRef = useRef<AbortController | null>(null);
-  const elapsed = useElapsedTimer(loading);
-
-  const load = useCallback(async (signal?: AbortSignal) => {
-    setCanceled(false);
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await fetchDashboard(signal);
-      setData(result);
-    } catch (e) {
-      if (e instanceof ApiError && e.isAbort()) return;
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      setError(e instanceof ApiError ? e : ApiError.wrap(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!connected) return;
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    load(controller.signal);
-    return () => controller.abort();
-  }, [load, connected]);
-
-  const cancel = useCallback(() => {
-    setCanceled(true);
-    controllerRef.current?.abort();
-  }, []);
-
-  useEffect(() => {
-    if (!connected || !autoRefresh) return;
-    const controller = new AbortController();
-    intervalRef.current = setInterval(() => load(controller.signal), refreshInterval * 1000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); controller.abort(); };
-  }, [autoRefresh, refreshInterval, load, connected]);
+  const fetchDashboard_ = useCallback((signal: AbortSignal) => fetchDashboard(signal), []);
+  const {
+    data,
+    loading,
+    error,
+    canceled,
+    elapsed,
+    cancel,
+    reload,
+    live: autoRefresh,
+    setLive: setAutoRefresh,
+  } = usePollingQuery<DashboardData>(fetchDashboard_, {
+    enabled: connected,
+    intervalMs: refreshInterval * 1000,
+  });
 
   if (!connected) {
     return <NotConnectedState />;
@@ -127,7 +75,7 @@ export function Dashboard({ connected }: { connected: boolean }) {
   if (error) {
     return (
       <PageContainer>
-        <ErrorState error={error} onRetry={() => load()} />
+        <ErrorState error={error} onRetry={reload} />
       </PageContainer>
     );
   }
@@ -149,7 +97,7 @@ export function Dashboard({ connected }: { connected: boolean }) {
   if (canceled && !data) {
     return (
       <PageContainer>
-        <LoadingNotice canceled onRetry={() => load()} />
+        <LoadingNotice canceled onRetry={reload} />
       </PageContainer>
     );
   }
@@ -188,7 +136,7 @@ export function Dashboard({ connected }: { connected: boolean }) {
               <RefreshCw className={`h-3.5 w-3.5 ${autoRefresh ? "animate-spin" : ""}`} style={autoRefresh ? { animationDuration: `${refreshInterval}s` } : undefined} />
               Live
             </Button>
-            <Button variant="secondary" size="md" onClick={() => load()} disabled={loading}>
+            <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
               <RefreshCw className="h-3.5 w-3.5" />
               Refresh
             </Button>
@@ -197,15 +145,7 @@ export function Dashboard({ connected }: { connected: boolean }) {
       />
 
       {data.partial_errors?.length > 0 && (
-        <div
-          className="flex items-center gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)] px-4 py-2 text-xs text-[var(--color-text-secondary)]"
-          title={data.partial_errors.map((t) => `${t}: ${data.partial_error_details?.[t] ?? ""}`).join("\n")}
-        >
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
-          <span>
-            Some sections are unavailable ({data.partial_errors.join(", ")}). Hover for details.
-          </span>
-        </div>
+        <PartialErrorsBanner errors={data.partial_errors} details={data.partial_error_details} />
       )}
 
       <ClusterNoteBanner note={data.cluster_note} />
@@ -225,7 +165,7 @@ export function Dashboard({ connected }: { connected: boolean }) {
           label="Active Queries"
           value={formatNumber(queryCount)}
           icon={<Activity className="h-3 w-3" />}
-          color="text-[var(--color-accent)]"
+          tone="accent"
         />
         <StatCard
           label="Active Merges"
@@ -560,25 +500,27 @@ function AnomaliesAndWarningsCard({ data }: { data: DashboardData }) {
 
   return (
     <Card className="p-4">
-      <div
-        className={`mb-3 flex items-center gap-2 text-xs font-medium text-[var(--color-text-secondary)] ${collapsed ? "mb-0" : ""} cursor-pointer select-none hover:text-[var(--color-text-primary)]`}
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        className={`flex w-full items-center gap-2 text-left text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)] ${collapsed ? "mb-0" : "mb-3"}`}
         onClick={() => setCollapsed((c) => !c)}
       >
         {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-        <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+        <AlertTriangle className="h-3.5 w-3.5 text-[var(--color-warning)]" />
         Action Items ({anomalies.length})
-      </div>
+      </button>
       {!collapsed && (
         <ul className="space-y-2">
           {anomalies.map((a, i) => (
             <li key={i} className="flex items-start gap-2 text-xs">
               {a.severity === "error" ? (
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-500" />
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-error)]" />
               ) : (
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
               )}
               <div className="flex-1">
-                <div className={`font-medium ${a.severity === "error" ? "text-rose-500" : "text-amber-500"}`}>
+                <div className={`font-medium ${a.severity === "error" ? "text-[var(--color-error)]" : "text-[var(--color-warning)]"}`}>
                   {a.title}
                 </div>
                 <div className="text-[var(--color-text-secondary)]">{a.detail}</div>
@@ -709,11 +651,11 @@ function LogTablesCard({ data }: { data: DashboardData }) {
                     <td className="py-1.5 pr-3">
                       <div className="flex items-center gap-1.5">
                         {status === "ok" ? (
-                          <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                          <CheckCircle2 className="h-3 w-3 text-[var(--color-success)]" />
                         ) : status === "empty" ? (
-                          <AlertTriangle className="h-3 w-3 text-amber-500" />
+                          <AlertTriangle className="h-3 w-3 text-[var(--color-warning)]" />
                         ) : (
-                          <XCircle className="h-3 w-3 text-rose-500" />
+                          <XCircle className="h-3 w-3 text-[var(--color-error)]" />
                         )}
                         <span className="font-mono">{lt.table}</span>
                         {status === "disabled" && (
@@ -785,9 +727,9 @@ function SettingsCard({ data }: { data: DashboardData }) {
             <div key={s.name} className="flex items-center justify-between border-b border-[var(--color-border)] py-1 last:border-0">
               <span className="flex items-center gap-1.5 text-xs">
                 {isGood ? (
-                  <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                  <CheckCircle2 className="h-3 w-3 text-[var(--color-success)]" />
                 ) : (
-                  <XCircle className="h-3 w-3 text-rose-500" />
+                  <XCircle className="h-3 w-3 text-[var(--color-error)]" />
                 )}
                 <span className="font-mono">{s.name}</span>
               </span>

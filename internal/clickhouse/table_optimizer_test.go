@@ -281,20 +281,50 @@ func TestFormatBytes(t *testing.T) {
 	}
 }
 
-func TestSampleClause(t *testing.T) {
+func TestSampleSource(t *testing.T) {
 	tests := []struct {
-		rows     uint64
-		expected string
+		rows        uint64
+		samplingKey string
+		expected    string
 	}{
-		{99999, ""},
-		{100000, "SAMPLE 0.01"},
-		{9999999, "SAMPLE 0.01"},
-		{10000000, "SAMPLE 0.001"},
+		// Small tables are read whole regardless of a sampling key.
+		{99999, "", ""},
+		{99999, "id", ""},
+		// Tables with a sampling key get proportional SAMPLE.
+		{100000, "id", "SAMPLE 0.01"},
+		{9999999, "id", "SAMPLE 0.01"},
+		{10000000, "id", "SAMPLE 0.001"},
+		// Tables WITHOUT a sampling key must never get SAMPLE
+		// (SAMPLING_NOT_ENABLED) — they fall back to bounded LIMIT reads.
+		{100000, "", "LIMIT 100000"},
+		{9999999, "", "LIMIT 100000"},
+		{10000000, "", "LIMIT 1000000"},
 	}
 
 	for _, tt := range tests {
-		if got := sampleClause(tt.rows); got != tt.expected {
-			t.Errorf("sampleClause(%d) = %q, want %q", tt.rows, got, tt.expected)
+		if got := sampleSource(tt.rows, tt.samplingKey); got != tt.expected {
+			t.Errorf("sampleSource(%d, %q) = %q, want %q", tt.rows, tt.samplingKey, got, tt.expected)
+		}
+	}
+}
+
+// TestQuoteStr covers the backslash breakout: ClickHouse honors \'
+// escapes inside single-quoted literals, so quoteStr must double
+// backslashes before doubling quotes or a trailing \ terminates the
+// literal early and the rest of the value executes as SQL.
+func TestQuoteStr(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"plain", "'plain'"},
+		{"it's", "'it''s'"},
+		{`trailing\`, `'trailing\\'`},
+		{`x\' UNION SELECT 1 -- `, `'x\\'' UNION SELECT 1 -- '`},
+		{"", "''"},
+	}
+	for _, tt := range tests {
+		if got := quoteStr(tt.in); got != tt.want {
+			t.Errorf("quoteStr(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
 }

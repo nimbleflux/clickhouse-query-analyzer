@@ -21,6 +21,13 @@ type Config struct {
 	// /api/config, so an exposed instance doesn't advertise its internal
 	// ClickHouse URL and username to unauthenticated callers.
 	HideDefaultConnection bool
+	// AuthToken, when set, requires every /api and /metrics request to carry
+	// it (Authorization: Bearer … or X-Auth-Token). /health stays open for
+	// container healthchecks; static assets stay open so the browser can
+	// load the login UI. This is the tool's only application-level auth —
+	// without it, anyone who can reach the port can run SQL with the
+	// configured ClickHouse credentials.
+	AuthToken string
 	// QueryTimeout bounds a single ad-hoc statement from the SQL editor
 	// (and single-table optimizer analyses). Bulk analysis streams get
 	// BulkTimeout instead — they emit progress events the whole time, so
@@ -42,6 +49,7 @@ func Parse() *Config {
 	flag.DurationVar(&cfg.QueryTimeout, "query-timeout", 120*time.Second, "Per-statement budget for SQL editor queries and single-table analyses")
 	flag.DurationVar(&cfg.BulkTimeout, "bulk-analysis-timeout", 30*time.Minute, "Budget for bulk table-analysis streams (they emit progress continuously)")
 	flag.BoolVar(&cfg.HideDefaultConnection, "hide-default-connection", false, "Withhold the default connection URL/user from /api/config (for exposed instances)")
+	flag.StringVar(&cfg.AuthToken, "auth-token", "", "Require this bearer token on /api and /metrics requests (X-Auth-Token or Authorization: Bearer). Empty = no app-level auth.")
 	flag.Parse()
 
 	if v := os.Getenv("CLICKHOUSE_URL"); v != "" {
@@ -71,6 +79,9 @@ func Parse() *Config {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			cfg.BulkTimeout = d
 		}
+	}
+	if v := os.Getenv("AUTH_TOKEN"); v != "" {
+		cfg.AuthToken = v
 	}
 
 	cfg.ClickHouseURL = strings.TrimSpace(cfg.ClickHouseURL)

@@ -24,6 +24,7 @@ const (
 	CodeInvalidBody   ApiErrorCode = "INVALID_BODY"
 	CodeNotFound      ApiErrorCode = "NOT_FOUND"
 	CodeForbidden     ApiErrorCode = "FORBIDDEN"
+	CodeUnauthorized  ApiErrorCode = "UNAUTHORIZED"
 	CodeCHUnreachable ApiErrorCode = "CH_UNREACHABLE"
 	CodeCHException   ApiErrorCode = "CH_EXCEPTION"
 	CodeQueryTimeout  ApiErrorCode = "QUERY_TIMEOUT"
@@ -155,7 +156,6 @@ func CHException(w http.ResponseWriter, err error) {
 	}
 
 	status := http.StatusBadGateway
-	hint := ""
 	switch chErr.Code {
 	// CHMissingColumns shares 47 with CHUnknownIdentifier upstream, so one
 	// case covers both.
@@ -171,7 +171,6 @@ func CHException(w http.ResponseWriter, err error) {
 	writeApiError(w, &ApiError{
 		Message: chErr.Message,
 		Code:    CodeCHException,
-		Hint:    hint,
 		Retry:   chErr.IsRetryable(),
 		status:  status,
 	})
@@ -310,6 +309,9 @@ func apiErrorFromErr(err error, budget time.Duration) *ApiError {
 		"Verify the connection URL and credentials in the top connection bar.", true)
 }
 
+// timeoutApiError returns the payload instead of writing it — used by the
+// streaming execute handler, which must serialize errors as NDJSON events
+// after the response head is sent.
 func timeoutApiError(err error, budget time.Duration) *ApiError {
 	e := newApiError(http.StatusGatewayTimeout, CodeQueryTimeout,
 		extractMessage(err, "Query exceeded its time budget"), "", true)
@@ -340,9 +342,3 @@ func extractMessage(err error, fallback string) string {
 	}
 	return msg
 }
-
-// guard against unused-symbol warnings while bootstrapping the migration;
-// these will be wired into handlers as we touch them.
-var (
-	_ = errors.New
-)

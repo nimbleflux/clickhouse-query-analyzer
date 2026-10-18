@@ -1,15 +1,15 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { FlaskConical, RefreshCw, Search, AlertTriangle, Clock, Skull } from "lucide-react";
+import { useState, useCallback, useMemo } from "react";
+import { FlaskConical, RefreshCw, Search, AlertTriangle, Clock, Skull, Pause, Play } from "lucide-react";
 import { fetchMutations, killMutation } from "../api/client";
 import type { MutationDetail } from "../api/types";
 import { ApiError } from "../api/errors";
 import { useToast } from "../components/Toast";
-import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { usePollingQuery } from "@/hooks/usePollingQuery";
 import { TableSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Input, Checkbox } from "@/components/ui/input";
+import { StatCard } from "@/components/ui/card";
+import { Input, Checkbox, Select } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
@@ -18,60 +18,36 @@ import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 import { TableName } from "@/components/TableName";
 import { formatDuration, formatNumber } from "../utils";
 
-function StatCard({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "warning" | "error" }) {
-  const toneClass = tone === "error" ? "text-[var(--color-error)]" : tone === "warning" ? "text-[var(--color-warning)]" : "text-[var(--color-text-primary)]";
-  return (
-    <Card className="p-4">
-      <div className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
-        <Clock className="h-3 w-3" /> {label}
-      </div>
-      <div className={`mt-1 font-mono text-lg font-semibold ${toneClass}`}>{value}</div>
-    </Card>
-  );
-}
-
 export function Mutations({ connected }: { connected: boolean }) {
-  const [mutations, setMutations] = useState<MutationDetail[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [canceled, setCanceled] = useState(false);
   const [killing, setKilling] = useState<Set<string>>(new Set());
   const [killTarget, setKillTarget] = useState<MutationDetail | null>(null);
   const [search, setSearch] = useState("");
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [minAge, setMinAge] = useState(0); // seconds; 0 = all
-  const controllerRef = useRef<AbortController | null>(null);
-  const elapsed = useElapsedTimer(loading);
+  const [refreshInterval, setRefreshInterval] = useState(10);
   const { toast } = useToast();
 
-  const load = useCallback(async () => {
-    setCanceled(false);
-    setLoading(true);
-    setError(null);
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    try {
-      const result = await fetchMutations(controller.signal);
-      setMutations(result);
-    } catch (e) {
-      if (e instanceof ApiError && e.isAbort()) return;
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      setError(e instanceof ApiError ? e : ApiError.wrap(e));
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
-  }, []);
+  const fetcher = useCallback((signal: AbortSignal) => fetchMutations(signal), []);
 
-  useEffect(() => {
-    if (!connected) return;
-    load();
-  }, [load, connected]);
+  // Live refresh is opt-in: the page is heavy enough (tables + inline error
+  // cards) that silently polling every few seconds is a poor default. The
+  // user clicks "Live" when they're actively watching mutations drain.
+  const {
+    data,
+    loading,
+    error,
+    canceled,
+    elapsed,
+    cancel,
+    reload,
+    live: autoRefresh,
+    setLive: setAutoRefresh,
+  } = usePollingQuery<MutationDetail[]>(fetcher, {
+    enabled: connected,
+    intervalMs: refreshInterval * 1000,
+  });
 
-  const cancel = useCallback(() => {
-    setCanceled(true);
-    controllerRef.current?.abort();
-    setLoading(false);
-  }, []);
+  const mutations = data ?? [];
 
   const handleKill = async (m: MutationDetail) => {
     const key = `${m.database}.${m.table}.${m.mutation_id}`;
@@ -79,7 +55,7 @@ export function Mutations({ connected }: { connected: boolean }) {
     try {
       await killMutation(m.database, m.table, m.mutation_id);
       toast("Mutation kill issued — it finishes in-progress parts, then clears", "success");
-      setTimeout(load, 1500);
+      setTimeout(reload, 1500);
     } catch (e) {
       if (e instanceof ApiError && e.isAbort()) return;
       toast(e instanceof Error ? e.message : "Failed to kill mutation", "error");
@@ -130,7 +106,7 @@ export function Mutations({ connected }: { connected: boolean }) {
   if (error && mutations.length === 0) {
     return (
       <PageContainer>
-        <ErrorState error={error} onRetry={load} />
+        <ErrorState error={error} onRetry={reload} />
       </PageContainer>
     );
   }
@@ -143,7 +119,21 @@ export function Mutations({ connected }: { connected: boolean }) {
         actions={
           <>
             {loading && mutations.length > 0 && <RefreshIndicator elapsed={elapsed} />}
-            <Button variant="secondary" size="md" onClick={load} disabled={loading}>
+            <Select
+              value={refreshInterval}
+              onChange={(e) => setRefreshInterval(Number(e.target.value))}
+              disabled={!autoRefresh}
+              className={!autoRefresh ? "opacity-50" : ""}
+            >
+              <option value={5}>5s</option>
+              <option value={10}>10s</option>
+              <option value={30}>30s</option>
+            </Select>
+            <Button variant={autoRefresh ? "primary" : "secondary"} size="md" onClick={() => setAutoRefresh(!autoRefresh)}>
+              {autoRefresh ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+              Live
+            </Button>
+            <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               Refresh
             </Button>
@@ -151,7 +141,7 @@ export function Mutations({ connected }: { connected: boolean }) {
         }
       />
 
-      {error && mutations.length > 0 && <div className="mb-4"><ErrorState error={error} onRetry={load} /></div>}
+      {error && mutations.length > 0 && <div className="mb-4"><ErrorState error={error} onRetry={reload} /></div>}
 
       {loading && mutations.length === 0 ? (
         <div className="py-4">
@@ -159,14 +149,14 @@ export function Mutations({ connected }: { connected: boolean }) {
           <LoadingNotice elapsed={elapsed} onCancel={cancel} />
         </div>
       ) : canceled && mutations.length === 0 ? (
-        <LoadingNotice canceled onRetry={load} />
+        <LoadingNotice canceled onRetry={reload} />
       ) : (
         <>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <StatCard label="Active" value={formatNumber(stats.total)} tone={stats.total > 0 ? "warning" : "default"} />
-            <StatCard label="Failed" value={formatNumber(stats.failed)} tone={stats.failed > 0 ? "error" : "default"} />
-            <StatCard label="Killed" value={formatNumber(stats.killed)} />
-            <StatCard label="Oldest" value={stats.oldest ? formatDuration(stats.oldest * 1000) : "-"} />
+            <StatCard label="Active" value={formatNumber(stats.total)} icon={<Clock className="h-3 w-3" />} tone={stats.total > 0 ? "warning" : "default"} />
+            <StatCard label="Failed" value={formatNumber(stats.failed)} icon={<Clock className="h-3 w-3" />} tone={stats.failed > 0 ? "error" : "default"} />
+            <StatCard label="Killed" value={formatNumber(stats.killed)} icon={<Clock className="h-3 w-3" />} />
+            <StatCard label="Oldest" value={stats.oldest ? formatDuration(stats.oldest * 1000) : "-"} icon={<Clock className="h-3 w-3" />} />
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">

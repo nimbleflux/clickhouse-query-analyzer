@@ -36,7 +36,10 @@ func (c *Client) GetFingerprintTrend(ctx context.Context, hash uint64, interval 
 		interval = "hour"
 	}
 
-	where := "WHERE normalized_query_hash = ? AND type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')"
+	// Same base predicates as the other fingerprint surfaces: terminal rows,
+	// no health probe, no cluster fan-out double-count (is_initial_query).
+	where := "WHERE normalized_query_hash = ? AND type IN ('QueryFinish', 'ExceptionWhileProcessing', 'ExceptionBeforeStart')" +
+		" AND query != 'SELECT 1' AND is_initial_query = 1"
 	args := []interface{}{hash}
 
 	if fromTime != "" {

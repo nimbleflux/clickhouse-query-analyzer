@@ -173,7 +173,7 @@ func (j *job) finishedAt() time.Time {
 // answers with the job id immediately. The request's connection context does
 // not reach the query: disconnecting the browser does NOT cancel it (that is
 // the point) — only an explicit cancel does.
-func (a *API) startDetachedJob(w http.ResponseWriter, r *http.Request, ch *clickhouse.Client, query string, limit, offset int, settings, params map[string]string) {
+func (a *API) startDetachedJob(w http.ResponseWriter, r *http.Request, ch *clickhouse.Client, query string, limit, offset int, settings, params map[string]string, tag string) {
 	ctx, cancel := context.WithTimeout(context.Background(), jobBudget)
 	queryID := clickhouse.NewQueryID()
 	j := &job{
@@ -190,12 +190,13 @@ func (a *API) startDetachedJob(w http.ResponseWriter, r *http.Request, ch *click
 	go func() {
 		defer cancel()
 		result, err := ch.ExecuteQuery(ctx, clickhouse.ExecuteOptions{
-			Query:    query,
-			Limit:    limit,
-			Offset:   offset,
-			Settings: settings,
-			Params:   params,
-			QueryID:  queryID,
+			Query:      query,
+			Limit:      limit,
+			Offset:     offset,
+			Settings:   settings,
+			Params:     params,
+			LogComment: tag,
+			QueryID:    queryID,
 		})
 		if err != nil {
 			j.finish(nil, apiErrorFromErr(err, jobBudget), ctx.Err() == context.Canceled)

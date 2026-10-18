@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Search, Filter, ChevronLeft, ChevronRight, Clock, MemoryStick, Database, GitCompare, ArrowUp, ArrowDown, Copy, FileSearch, Code } from "lucide-react";
+import { Search, Filter, ChevronLeft, ChevronRight, Clock, MemoryStick, Database, GitCompare, Copy, FileSearch, Code, Download } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { fetchQueries } from "../api/client";
 import type { QueryListParams, QueryLogEntry } from "../api/types";
 import { ApiError } from "../api/errors";
-import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor } from "../utils";
+import { formatDuration, formatBytes, formatNumber, durationColor, memoryColor } from "../utils";
+import { useDisplayDateTime } from "../hooks/useAppSettings";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { sendToEditor } from "@/lib/send-to-editor";
+import { downloadTable } from "@/lib/export";
 import { TableSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
@@ -16,6 +18,7 @@ import { Input, Select, Checkbox } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
 import { Badge } from "@/components/ui/badge";
+import { SortButton } from "@/components/ui/table-sort";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 
@@ -32,6 +35,8 @@ function toCHDateTime(d: Date): string {
 }
 
 export function QueryList({ connected }: { connected: boolean }) {
+  // Honors the display-timezone setting (Layout footer Globe toggle).
+  const formatDateTime = useDisplayDateTime();
   const navigate = useNavigate();
   const copy = useCopyToClipboard();
   const [queries, setQueries] = useState<QueryLogEntry[]>([]);
@@ -48,9 +53,9 @@ export function QueryList({ connected }: { connected: boolean }) {
   const urlParam = (k: string) => searchParams.get(k) ?? "";
   const [params, setParams] = useState<QueryListParams>({
     limit: 50,
-    offset: 0,
-    sort_by: "event_time",
-    sort_dir: "DESC",
+    offset: Number(urlParam("offset")) || 0,
+    sort_by: urlParam("sort_by") || "event_time",
+    sort_dir: urlParam("sort_dir") === "ASC" ? "ASC" : "DESC",
     hide_system_queries: urlParam("hide_system") !== "false",
     from_time: urlParam("from_time") || toCHDateTime(new Date(Date.now() - 24 * 3600 * 1000)),
     to_time: urlParam("to_time"),
@@ -71,6 +76,8 @@ export function QueryList({ connected }: { connected: boolean }) {
 
   // Keep the URL in sync with the active filters so views are shareable and
   // drill-down links (e.g. ?table=X) work. Uses replace to avoid history spam.
+  // Sort fields/pagination only go in the URL when non-default, to keep the
+  // common case's query string short.
   useEffect(() => {
     const sp = new URLSearchParams();
     if (search) sp.set("q", search);
@@ -86,6 +93,9 @@ export function QueryList({ connected }: { connected: boolean }) {
     if (params.errors_only) sp.set("errors_only", "true");
     if (params.log_comment) sp.set("log_comment", params.log_comment);
     if (!params.hide_system_queries) sp.set("hide_system", "false");
+    if (params.offset) sp.set("offset", String(params.offset));
+    if (params.sort_by && params.sort_by !== "event_time") sp.set("sort_by", params.sort_by);
+    if (params.sort_dir && params.sort_dir !== "DESC") sp.set("sort_dir", params.sort_dir);
     setSearchParams(sp, { replace: true });
   }, [search, params, setSearchParams]);
 
@@ -171,6 +181,37 @@ export function QueryList({ connected }: { connected: boolean }) {
     setParams((p) => ({ ...p }));
   };
 
+  // Server-side sort: clicking a new column sorts descending, re-clicking the
+  // active column flips the direction (the same semantics as useTableSort's
+  // client-side toggle). Sorting stays owned by `params` because the request
+  // itself is parameterized by it.
+  const toggleSort = (field: string) =>
+    setParams((p) => ({
+      ...p,
+      sort_by: field,
+      sort_dir: p.sort_by === field && p.sort_dir === "DESC" ? "ASC" : "DESC",
+      offset: 0,
+    }));
+
+  // Export exactly what the current page shows (same columns, same order),
+  // with the time column formatted like the UI.
+  const exportCurrentPage = (format: "csv" | "json") => {
+    downloadTable(
+      format === "csv" ? "queries.csv" : "queries.json",
+      ["Time", "User", "Query", "Duration (ms)", "Memory (bytes)", "Rows Read", "Bytes Read"],
+      queries.map((q) => [
+        formatDateTime(q.query_start_time),
+        q.user,
+        q.query,
+        q.query_duration_ms,
+        q.memory_usage,
+        q.read_rows,
+        q.read_bytes,
+      ]),
+      format,
+    );
+  };
+
   if (!connected) {
     return <NotConnectedState />;
   }
@@ -182,7 +223,31 @@ export function QueryList({ connected }: { connected: boolean }) {
         description={
           total > 0 ? `${formatNumber(total)} queries found` : undefined
         }
-        actions={loading && queries.length > 0 ? <RefreshIndicator elapsed={elapsed} /> : undefined}
+        actions={
+          <>
+            {loading && queries.length > 0 && <RefreshIndicator elapsed={elapsed} />}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => exportCurrentPage("csv")}
+              disabled={queries.length === 0}
+              title="Download this page's rows as CSV"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export CSV
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => exportCurrentPage("json")}
+              disabled={queries.length === 0}
+              title="Download this page's rows as JSON"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export JSON
+            </Button>
+          </>
+        }
       />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -385,41 +450,23 @@ export function QueryList({ connected }: { connected: boolean }) {
         <div className="flex items-center border-b border-[var(--color-border)] bg-[var(--surface-card)] text-sm">
           <div className="w-10 shrink-0 px-2 py-3"></div>
           <div className="w-40 shrink-0 px-4 py-3 font-medium text-[var(--color-text-secondary)]">
-            <span className="inline-flex cursor-pointer items-center gap-1 select-none hover:text-[var(--color-text-primary)]" onClick={() => setParams((p) => ({ ...p, sort_by: "event_time", sort_dir: p.sort_by === "event_time" && p.sort_dir === "DESC" ? "ASC" : "DESC", offset: 0 }))}>
-              Time
-              {params.sort_by === "event_time" && (params.sort_dir === "DESC" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
-            </span>
+            <SortButton field="event_time" activeField={params.sort_by} dir={params.sort_dir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="Time" />
           </div>
           <div className="w-32 shrink-0 px-4 py-3 font-medium text-[var(--color-text-secondary)]">
-            <span className="inline-flex cursor-pointer items-center gap-1 select-none hover:text-[var(--color-text-primary)]" onClick={() => setParams((p) => ({ ...p, sort_by: "user", sort_dir: p.sort_by === "user" && p.sort_dir === "DESC" ? "ASC" : "DESC", offset: 0 }))}>
-              User
-              {params.sort_by === "user" && (params.sort_dir === "DESC" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
-            </span>
+            <SortButton field="user" activeField={params.sort_by} dir={params.sort_dir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="User" />
           </div>
           <div className="flex-1 px-4 py-3 font-medium text-[var(--color-text-secondary)]">Query</div>
           <div className="w-28 shrink-0 px-4 py-3 font-medium text-[var(--color-text-secondary)]">
-            <span className="inline-flex cursor-pointer items-center gap-1 select-none hover:text-[var(--color-text-primary)]" onClick={() => setParams((p) => ({ ...p, sort_by: "query_duration_ms", sort_dir: p.sort_by === "query_duration_ms" && p.sort_dir === "DESC" ? "ASC" : "DESC", offset: 0 }))}>
-              Duration
-              {params.sort_by === "query_duration_ms" && (params.sort_dir === "DESC" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
-            </span>
+            <SortButton field="query_duration_ms" activeField={params.sort_by} dir={params.sort_dir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="Duration" />
           </div>
           <div className="w-28 shrink-0 px-4 py-3 text-right font-medium text-[var(--color-text-secondary)]">
-            <span className="inline-flex cursor-pointer items-center gap-1 select-none hover:text-[var(--color-text-primary)]" onClick={() => setParams((p) => ({ ...p, sort_by: "memory_usage", sort_dir: p.sort_by === "memory_usage" && p.sort_dir === "DESC" ? "ASC" : "DESC", offset: 0 }))}>
-              Memory
-              {params.sort_by === "memory_usage" && (params.sort_dir === "DESC" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
-            </span>
+            <SortButton field="memory_usage" activeField={params.sort_by} dir={params.sort_dir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="Memory" align="right" />
           </div>
           <div className="w-24 shrink-0 px-4 py-3 text-right font-medium text-[var(--color-text-secondary)]">
-            <span className="inline-flex cursor-pointer items-center gap-1 select-none hover:text-[var(--color-text-primary)]" onClick={() => setParams((p) => ({ ...p, sort_by: "read_rows", sort_dir: p.sort_by === "read_rows" && p.sort_dir === "DESC" ? "ASC" : "DESC", offset: 0 }))}>
-              Rows Read
-              {params.sort_by === "read_rows" && (params.sort_dir === "DESC" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
-            </span>
+            <SortButton field="read_rows" activeField={params.sort_by} dir={params.sort_dir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="Rows Read" align="right" />
           </div>
           <div className="w-28 shrink-0 px-4 py-3 text-right font-medium text-[var(--color-text-secondary)]">
-            <span className="inline-flex cursor-pointer items-center gap-1 select-none hover:text-[var(--color-text-primary)]" onClick={() => setParams((p) => ({ ...p, sort_by: "read_bytes", sort_dir: p.sort_by === "read_bytes" && p.sort_dir === "DESC" ? "ASC" : "DESC", offset: 0 }))}>
-              Bytes Read
-              {params.sort_by === "read_bytes" && (params.sort_dir === "DESC" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
-            </span>
+            <SortButton field="read_bytes" activeField={params.sort_by} dir={params.sort_dir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="Bytes Read" align="right" />
           </div>
           <div className="w-20 shrink-0 px-2 py-3"></div>
         </div>
@@ -496,6 +543,7 @@ function VirtualQueryRows({
   onCopy: (text: string, label?: string) => void;
   onSendToEditor: (sql: string) => void;
 }) {
+  const formatDateTime = useDisplayDateTime();
   const parentRef = useRef<HTMLDivElement>(null);
   const rowHeight = 45;
 
@@ -521,29 +569,43 @@ function VirtualQueryRows({
       >
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const q = queries[virtualRow.index];
+          const open = () => onNavigate(q.query_id);
           return (
             <div
               key={q.query_id}
-              onClick={() => onNavigate(q.query_id)}
-              className={`absolute top-0 left-0 w-full flex cursor-pointer items-center border-b border-[var(--color-border)] hover:bg-[var(--surface-hover)] transition-colors ${selected.has(q.query_id) ? "bg-[var(--state-accent)]" : ""}`}
+              onClick={open}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  open();
+                }
+              }}
+              tabIndex={0}
+              role="link"
+              aria-label={`Open query from ${formatDateTime(q.query_start_time)} by ${q.user}`}
+              className={`absolute top-0 left-0 w-full flex cursor-pointer items-center border-b border-[var(--color-border)] hover:bg-[var(--surface-hover)] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)] ${selected.has(q.query_id) ? "bg-[var(--state-accent)]" : ""}`}
               style={{
                 height: `${virtualRow.size}px`,
                 transform: `translateY(${virtualRow.start}px)`,
               }}
             >
-              <div className="w-10 shrink-0 px-2 py-3" onClick={(e) => { e.stopPropagation(); onToggleSelect(q.query_id); }}>
+              <div className="w-10 shrink-0 px-2 py-3" onClick={(e) => { e.stopPropagation(); }}>
                 <input
                   type="checkbox"
                   checked={selected.has(q.query_id)}
-                  disabled={!selected.has(q.query_id) && selected.size >= 2}
-                  readOnly
-                  className="h-4 w-4 rounded border-[var(--color-border)] accent-[var(--color-accent)]"
+                  onChange={(e) => {
+                    e.stopPropagation();
+                    onToggleSelect(q.query_id);
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label="Select query for comparison"
+                  className="h-4 w-4 cursor-pointer rounded border-[var(--color-border)] accent-[var(--color-accent)]"
                 />
               </div>
               <div className="w-40 shrink-0 whitespace-nowrap px-4 py-3 text-[var(--color-text-secondary)]">
                 <div className="flex items-center gap-1">
                   <Clock className="h-3 w-3" />
-                  {formatTime(q.query_start_time)}
+                  {formatDateTime(q.query_start_time)}
                 </div>
               </div>
               <div className="w-32 shrink-0 truncate px-4 py-3 text-[var(--color-text-secondary)]" title={q.user}>{q.user}</div>

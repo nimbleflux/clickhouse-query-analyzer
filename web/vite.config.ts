@@ -21,5 +21,17 @@ export default defineConfig({
   },
   test: {
     environment: "happy-dom",
+    // Playwright specs live in e2e/ and run via `playwright test`
+    // (make e2e). Without excluding them, vitest's default include picks up
+    // *.spec.ts there and fails on Playwright's test()/describe().
+    // Replace-defaults exclude: keep vitest's standard list, then e2e.
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/cypress/**",
+      "**/.{idea,git,cache,output,temp}/**",
+      "**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*",
+      "e2e/**",
+    ],
   },
 });

@@ -13,10 +13,14 @@ import { ApiError } from "@/api/errors";
 import { formatBytes, formatNumber } from "@/utils";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ErrorState } from "@/components/ui/state";
 
 interface ExplainTabProps {
   queryId?: string;
   explain: ExplainResult | null;
+  /** Set when the lazy EXPLAIN fetch failed; renders an ErrorState with a retry. */
+  explainError?: ApiError | null;
+  onRetryExplain?: () => void;
   /** Refetch the plan with the human-readable pretty output (CH ≥ 26.3). */
   onLoadPretty?: () => void;
 }
@@ -50,7 +54,7 @@ function EstimateCard({ estimate }: { estimate: NonNullable<ExplainResult["estim
   );
 }
 
-export function ExplainTab({ queryId, explain, onLoadPretty }: ExplainTabProps) {
+export function ExplainTab({ queryId, explain, explainError, onRetryExplain, onLoadPretty }: ExplainTabProps) {
   const theme = useTheme();
   const cmTheme = theme === "dark" ? oneDark : undefined;
 
@@ -92,6 +96,13 @@ export function ExplainTab({ queryId, explain, onLoadPretty }: ExplainTabProps) 
         </div>
       ) : hasContent ? (
         <>
+          {explainError && (
+            <ErrorState
+              error={explainError}
+              title="Failed to refresh EXPLAIN"
+              onRetry={onRetryExplain}
+            />
+          )}
           <ExplainAnalyzeSection
             queryId={queryId}
             analyze={analyze}
@@ -158,6 +169,12 @@ export function ExplainTab({ queryId, explain, onLoadPretty }: ExplainTabProps) 
           </details>
           {errorEntries.length > 0 && <ExplainErrors errors={explain?.errors || {}} />}
         </>
+      ) : explainError ? (
+        <ErrorState
+          error={explainError}
+          title="Failed to run EXPLAIN"
+          onRetry={onRetryExplain}
+        />
       ) : explain ? (
         <div className="flex flex-col items-center gap-4 rounded-lg border border-[var(--color-error)]/30 bg-[var(--state-error)] px-6 py-10 text-center">
           <AlertCircle className="h-8 w-8 text-[var(--color-error)]" />
