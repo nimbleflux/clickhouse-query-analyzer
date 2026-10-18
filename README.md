@@ -25,6 +25,14 @@ A single-binary tool with a built-in web UI to analyze ClickHouse query executio
 - **Cluster Support** — Auto-detects `system.clusters`, uses `clusterAllReplicas`
 - **Table Optimizer** — Analyze single tables, entire databases, or all databases for ClickHouse optimization opportunities including LowCardinality, integer right-sizing, Nullable removal, ORDER BY/PARTITION BY suggestions, skipping indices, codec recommendations, and table health checks. Generates copy-ready ALTER TABLE DDL. Bulk analysis streams results in real-time via SSE. On ClickHouse ≥ 26.6, skipping-index suggestions are **measured, not guessed**: a session-scoped hypothetical index + `EXPLAIN WHATIF` reports the projected granule skip ratio right on the recommendation card.
 - **Remote-Table Advisor** — Queries that touch S3/URL/Iceberg/… engine tables get an inline warning (remote scans are slow and expensive), with one-click "Add LIMIT 1000" / "Limit to 5 min" actions and per-table 24h read stats.
+- **Backups** — BACKUP/RESTORE activity from `system.backups`: status summary cards, per-backup size/progress/duration, failure causes, and opt-in live auto-refresh.
+- **Table Parts explorer** — per-table `system.parts` drill-down (route `/tables/{db}/{table}/parts`, also linked from the editor's schema sidebar): active parts with rows/size/marks/age, a per-partition part-count rollup, and total-parts truncation indicator.
+- **Result charting** — the SQL editor's result panel offers a Table|Chart toggle for numeric results: pick the X column and one or more Y series, rendered with recharts (first 1000 rows).
+- **Query tagging** — an optional tag in the editor's Query settings is applied as `log_comment` (sanitized server-side), so teams can attribute queries run through ClickLens and filter the Queries page by tag.
+- **Timezone display** — query-history timestamps are server wall-clock strings; a footer toggle converts them to your browser's timezone (DST-correct) when the server zone is known.
+- **EXPLAIN diff** — the Compare page has an EXPLAIN Diff tab: a line-level diff of the two queries' EXPLAIN plans with changed-metric highlighting.
+- **CSV / JSON export** — Query List and Fingerprints offer one-click exports of the current view (formula-injection-safe), alongside the editor result exports.
+- **Access token (optional)** — start with `-auth-token <secret>` to require a bearer token on `/api` and `/metrics`; the UI prompts for it and remembers it for the tab session.
 - **ClickHouse 26 features** — version-gated with graceful fallbacks: `EXPLAIN ANALYZE` (26.7), pretty EXPLAIN output (26.3+), `EXPLAIN WHATIF` + hypothetical indexes (26.6), automatic fallback to `system.user_query_log` when full `query_log` access is denied (26.8), and per-statement server-side query parameters (no version requirement) that replace `{{param}}` string substitution with properly bound values.
 
 ## Screenshots
@@ -71,7 +79,7 @@ docker pull ghcr.io/nimbleflux/clickhouse-query-analyzer:latest
 docker run -p 8080:8080 ghcr.io/nimbleflux/clickhouse-query-analyzer:latest
 ```
 
-Open http://localhost:8080 and enter your ClickHouse connection details in the top bar.
+Open http://localhost:8080 and enter your ClickHouse connection details in the connection bar at the bottom left.
 
 ### Binary
 
@@ -226,22 +234,22 @@ The **Dashboard** page shows current row counts and on-disk sizes for these tabl
 
 ## Security
 
-ClickLens is a developer tool, not a multi-tenant application. The backend has **no built-in authentication**. You must understand the following before deploying:
+ClickLens is a developer tool, not a multi-tenant application. It ships **optional bearer-token authentication** (`-auth-token`); without it, every API endpoint is open. You must understand the following before deploying:
 
 ### Must do
 
-- **Put ClickLens behind an authenticating reverse proxy** (nginx, Caddy, OAuth2 Proxy, Cloudflare Access, etc.). The app itself does not authenticate users. Without a proxy, anyone who can reach the port can run arbitrary SQL against your ClickHouse.
+- **Enable `-auth-token` or put ClickLens behind an authenticating reverse proxy** (nginx, Caddy, OAuth2 Proxy, Cloudflare Access, etc.). Without either, anyone who can reach the port can run arbitrary SQL against your ClickHouse with the configured credentials.
 - **Use TLS**. ClickHouse passwords are sent as HTTP headers on every request. Without TLS (HTTPS), they traverse the network in cleartext. Use a reverse proxy or load balancer that terminates TLS.
 - **Bind to `127.0.0.1`** if running locally (`-port 8080` binds to `0.0.0.0` by default; use a reverse proxy to restrict access).
 
 ### Security model and limitations
 
-- **No authentication**: There is no auth middleware. Every API endpoint is open. The operator-configured `CLICKHOUSE_URL` / `CLICKHOUSE_PASSWORD` env vars are used as fallback for any unauthenticated request that omits `X-CH-URL`, meaning an exposed instance gives attackers full SQL access to your ClickHouse.
-- **Read-only mode is advisory, not a security boundary**: The "Read only" toggle in the connection bar sends an `X-CH-Readonly: 1` header. This is a UX convenience that blocks obvious write statements (INSERT, DROP, ALTER, etc.). It is **trivially bypassable** by omitting the header or using statement forms the prefix-check doesn't catch (comments, CTEs, SET). For real read-only enforcement, create a read-only ClickHouse user and connect with those credentials.
+- **Optional token auth**: Start with `-auth-token <secret>` (or `AUTH_TOKEN`) and every `/api` and `/metrics` request must carry it via `X-Auth-Token` or `Authorization: Bearer`. `/health` stays open for container healthchecks; the SPA itself stays reachable so the browser can show the token prompt. Tokens are compared in constant time. Without the flag there is no auth middleware, and the operator-configured `CLICKHOUSE_URL` / `CLICKHOUSE_PASSWORD` env vars are used as fallback for any request that omits `X-CH-URL`.
+- **Read-only mode is advisory, not a security boundary**: The "Read only" toggle in the connection bar sends an `X-CH-Readonly: 1` header. This is a UX convenience that blocks obvious write statements (INSERT, DROP, ALTER, etc.). It is **trivially bypassable** by omitting the header or using statement forms the prefix-check doesn't catch (CTEs, SET). For real read-only enforcement, create a read-only ClickHouse user and connect with those credentials.
 - **CORS defaults to same-origin**: By default, no CORS headers are emitted, so the API is only accessible from the same origin. Use `-cors-origin` or `CORS_ORIGIN` to allow a specific trusted origin. Using `*` allows cross-origin requests but does **not** advertise the `X-CH-*` credential headers, preventing cross-origin CSRF.
-- **Password stored in browser localStorage**: The connection form persists credentials (including password) in `localStorage` for convenience. This is readable by browser extensions and any XSS on the origin. Clear localStorage after use on shared machines.
-- **SSRF**: The app connects to whatever ClickHouse URL the user provides. An attacker can point it at internal hosts (metadata endpoints, other databases). Restrict network access at the infrastructure level.
-- **Security headers**: The app sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer`. Add a `Content-Security-Policy` via your reverse proxy for full coverage.
+- **Credentials in the browser**: The connection form persists URL/user/database in `localStorage`, but the **password is kept in `sessionStorage` only** — it survives a page refresh, not the browser session, and Disconnect purges it. This is still readable by any XSS on the origin; the built-in Content-Security-Policy (below) is the main mitigation. Clear site data after use on shared machines.
+- **SSRF**: The app connects to whatever ClickHouse URL the user provides. An attacker can point it at internal hosts (metadata endpoints, other databases). Restrict network access at the infrastructure level — `-auth-token` also closes this, since connection attempts require the token.
+- **Security headers**: The app sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and (in production builds) a strict `Content-Security-Policy` restricting scripts, styles, and connections to same-origin.
 
 ### Built-in protections
 
@@ -250,9 +258,11 @@ ClickLens is a developer tool, not a multi-tenant application. The backend has *
 - Trace log queries capped at 10,000 rows
 - Prometheus metrics use route patterns (not raw URLs) to prevent cardinality explosion
 - ClickHouse passwords are never logged (connection URLs are redacted before logging; the SHA-256 hash is only used as an internal pool key)
-- The `/api/config` endpoint does not expose the password (only a `has_password` boolean)
+- The `/api/config` endpoint does not expose the password (only a `has_password` boolean), and `-hide-default-connection` withholds the URL/user entirely
 - POST endpoints require `Content-Type: application/json`, which blocks blind cross-origin "simple request" CSRF
-- Editor queries only accept a whitelisted set of ClickHouse settings (e.g. `max_execution_time`, `max_threads`, `query_plan_*`) — notably `log_comment` cannot be overridden, so ClickLens-internal query tagging can't be spoofed
+- Editor queries only accept a whitelisted set of ClickHouse settings (e.g. `max_execution_time`, `max_threads`, `query_plan_*`) — notably `log_comment` cannot be overridden from settings, so ClickLens-internal query tagging can't be spoofed (the editor's optional query tag goes through a dedicated, sanitized field instead)
+- API responses are `Cache-Control: no-store`; built frontend assets are content-hashed and served `immutable`, `index.html` always revalidates
+- Browser CSV/TSV exports escape spreadsheet formula injection (`=`/`+`/`-`/`@` prefixes)
 
 ### Flags
 
@@ -266,7 +276,32 @@ ClickLens is a developer tool, not a multi-tenant application. The backend has *
 | `-query-timeout` | `QUERY_TIMEOUT` | `120s` | Per-statement budget for SQL editor queries and single-table analyses |
 | `-bulk-analysis-timeout` | `BULK_ANALYSIS_TIMEOUT` | `30m` | Budget for bulk table-analysis streams |
 | `-cors-origin` | `CORS_ORIGIN` | — | Allowed CORS origin (empty = same-origin only) |
+| `-auth-token` | `AUTH_TOKEN` | — | Require this bearer token on `/api` and `/metrics` |
+| `-hide-default-connection` | — | `false` | Withhold the default connection URL/user from `/api/config` |
 | `-dev` | — | `false` | Development mode (proxy frontend to Vite) |
+
+## Testing
+
+```bash
+# Go unit tests (race detector)
+make test-unit
+
+# Go integration tests against the dev ClickHouse (make dev-clickhouse && make seed first)
+make test-integration
+
+# Frontend unit tests (vitest)
+cd web && npm test
+
+# Full browser e2e suite against the real release artifact — builds the
+# frontend, embeds it, compiles the binary, boots two instances (one with
+# -auth-token) and drives the UI with Playwright: connect flow, dashboard,
+# SQL editor (table + chart + parameters), query history + fingerprints +
+# CSV export, Backups page, Parts explorer, and the token-auth flow.
+# Requires the dev ClickHouse: make dev-clickhouse && make seed
+make e2e
+```
+
+CI runs all four (`.github/workflows/ci.yml`).
 
 ## License
 
