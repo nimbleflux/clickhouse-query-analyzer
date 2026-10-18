@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import "./index.css";
@@ -31,6 +31,11 @@ import { testConnection, fetchServerConfig } from "./api/client";
 function App() {
   const [connected, setConnected] = useState(false);
   const [connectionParams, setConnectionParams] = useState<ConnectionParams>(loadConnection);
+  // The operator default derived from /api/config (null until fetched). The
+  // connect form pre-fills from it asynchronously, so a user can click
+  // Connect before it lands — with the app default (localhost:9000) still
+  // in the form. handleSubmit falls back to this when the form is untouched.
+  const serverDefaultRef = useRef<ConnectionParams | null>(null);
 
   const tryConnect = useCallback(async (params: ConnectionParams) => {
     setConnectionHeaders(params);
@@ -68,6 +73,7 @@ function App() {
             readonly: false,
           };
           setConnectionParams(params);
+          serverDefaultRef.current = params;
           if (dc.has_password) {
             // Server has full credentials — auto-connect.
             tryConnect(params);
@@ -90,7 +96,18 @@ function App() {
     return () => { cancelled = true; };
   }, [tryConnect]);
 
-  const handleConnect = (params: ConnectionParams) => {
+  const handleConnect = (rawParams: ConnectionParams) => {
+    // If the form still holds the untouched app default and the operator has
+    // configured a server default, the async pre-fill simply hasn't rendered
+    // yet — connect with the operator's values instead of refusing to reach
+    // whatever localhost:9000 points at (usually nothing).
+    const p = rawParams;
+    const untouched =
+      p.url === DEFAULT_CONNECTION.url &&
+      p.user === DEFAULT_CONNECTION.user &&
+      p.database === DEFAULT_CONNECTION.database &&
+      p.password === DEFAULT_CONNECTION.password;
+    const params = untouched && serverDefaultRef.current ? serverDefaultRef.current : p;
     saveConnection(params);
     setConnectionParams(params);
     setConnectionHeaders(params);
