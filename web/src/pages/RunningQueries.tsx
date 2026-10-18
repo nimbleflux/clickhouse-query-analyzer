@@ -41,6 +41,7 @@ export function RunningQueries({ connected }: { connected: boolean }) {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [killTarget, setKillTarget] = useState<ProcessEntry | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval>>(null);
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null);
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [filterUser, setFilterUser] = useState("");
@@ -55,20 +56,28 @@ export function RunningQueries({ connected }: { connected: boolean }) {
   const elapsed = useElapsedTimer(loading);
 
   const load = useCallback(async () => {
+    // Abort the previous fetch first: two concurrent loads would race, and a
+    // stale .finally(() => setLoading(false)) could cut short the newer
+    // spinner (or an old error could clobber a newer result).
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
     setCanceled(false);
     setLoading(true);
     setError("");
-    const controller = new AbortController();
-    controllerRef.current = controller;
     try {
       const result = await fetchProcesses(controller.signal);
+      if (controller.signal.aborted) return;
       setProcesses(result);
     } catch (e) {
       if (e instanceof ApiError && e.isAbort()) return;
       if (e instanceof DOMException && e.name === "AbortError") return;
+      if (controller.signal.aborted) return;
       setError(e instanceof ApiError ? e.message : (e instanceof Error ? e.message : "Failed to load processes"));
     } finally {
-      setLoading(false);
+      // Only the current load owns the loading flag; a superseded (aborted)
+      // request must leave it alone so the newer spinner isn't cut short.
+      if (controllerRef.current === controller) setLoading(false);
     }
   }, []);
 
@@ -80,20 +89,40 @@ export function RunningQueries({ connected }: { connected: boolean }) {
   useEffect(() => {
     if (!connected) return;
     load();
+    return () => {
+      // Teardown (unmount / disconnect): stop the in-flight load and any
+      // pending kill-refresh so nothing settles into a dead component.
+      if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+      controllerRef.current?.abort();
+    };
   }, [load, connected]);
 
   useEffect(() => {
     if (!connected || !autoRefresh) return;
     intervalRef.current = setInterval(load, 3000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      intervalRef.current = null;
+      // Polling stopped (Live toggled off or unmount): drop any in-flight
+      // poll. load's current-controller guard keeps the loading flag sane.
+      controllerRef.current?.abort();
+    };
   }, [autoRefresh, load, connected]);
+
+  // Kill actions schedule a short-delay reload so the process list has time
+  // to reflect the kill. Track the timer so teardown can cancel it (the Live
+  // toggle deliberately leaves it alone — it should still fire).
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+    refreshTimeoutRef.current = setTimeout(load, 500);
+  }, [load]);
 
   const handleKill = async (queryId: string) => {
     setKilling((prev) => new Set(prev).add(queryId));
     try {
       await killProcess(queryId);
       toast("Query killed", "success");
-      setTimeout(load, 500);
+      scheduleRefresh();
     } catch (e) {
       toast(e instanceof Error ? e.message : "Failed to kill query", "error");
     } finally {
@@ -111,7 +140,7 @@ export function RunningQueries({ connected }: { connected: boolean }) {
     try {
       const res = await killProcessesByUser(user);
       toast(`${res.killed} ${res.killed === 1 ? "query" : "queries"} killed`, "success");
-      setTimeout(load, 500);
+      scheduleRefresh();
     } catch (e) {
       if (e instanceof ApiError && e.isAbort()) return;
       toast(e instanceof Error ? e.message : "Failed to kill queries", "error");

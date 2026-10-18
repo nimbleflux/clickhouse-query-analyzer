@@ -9,8 +9,9 @@ export interface SavedQuery {
 
 const STORAGE_KEY = "ch-saved-queries";
 
-const PARAM_REGEX = /(?<!\\)\{\{(\w+)\}\}/g;
-const ESCAPED_PARAM_REGEX = /\\\{\{/g;
+/** {{param}} placeholder syntax. Shared with the editor (format skips
+ *  placeholders; binding itself happens server-side). */
+export const PARAM_REGEX = /(?<!\\)\{\{(\w+)\}\}/g;
 
 export function loadSavedQueries(): SavedQuery[] {
   try {
@@ -96,15 +97,6 @@ export function detectParams(sql: string): string[] {
     seen.add(match[1]);
   }
   return Array.from(seen);
-}
-
-export function resolveParams(sql: string, values: Record<string, string>): string {
-  let result = sql.replace(PARAM_REGEX, (_match, paramName: string) => {
-    const val = values[paramName];
-    return val !== undefined ? val : `{{${paramName}}}`;
-  });
-  result = result.replace(ESCAPED_PARAM_REGEX, "{{");
-  return result;
 }
 
 export interface ParamSet {

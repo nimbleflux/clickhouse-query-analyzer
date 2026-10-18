@@ -21,6 +21,9 @@ import { Merges } from "./pages/Merges";
 import { UsersAccess } from "./pages/UsersAccess";
 import { SystemMetrics } from "./pages/SystemMetrics";
 import { Trends } from "./pages/Trends";
+import { Backups } from "./pages/Backups";
+import { TableParts } from "./pages/TableParts";
+import { AuthDialog } from "./components/AuthDialog";
 import { loadConnection, saveConnection, setConnectionHeaders, clearConnectionHeaders, DEFAULT_CONNECTION } from "./api/connection";
 import type { ConnectionParams } from "./api/connection";
 import { testConnection, fetchServerConfig } from "./api/client";
@@ -131,8 +134,12 @@ function App() {
             <Route path="/access" element={<UsersAccess connected={connected} />} />
             <Route path="/system-metrics" element={<SystemMetrics connected={connected} />} />
             <Route path="/trends" element={<Trends connected={connected} />} />
+            <Route path="/backups" element={<Backups connected={connected} />} />
+            <Route path="/tables/:db/:table/parts" element={<TableParts connected={connected} />} />
           </Route>
         </Routes>
+        {/* App-level 401 handling: asks for the -auth-token and reloads. */}
+        <AuthDialog />
       </BrowserRouter>
     </ToastProvider>
   );

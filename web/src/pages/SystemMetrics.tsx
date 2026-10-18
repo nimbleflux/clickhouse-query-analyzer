@@ -1,15 +1,14 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { RefreshCw, Search, Gauge } from "lucide-react";
 import { fetchAsyncMetrics } from "../api/client";
-import type { AsyncMetric } from "../api/types";
-import { ApiError } from "../api/errors";
-import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import type { AsyncMetricsOverview } from "../api/types";
+import { usePollingQuery } from "@/hooks/usePollingQuery";
 import { TableSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
-import { formatNumber } from "../utils";
+import { formatBytes, formatNumber } from "../utils";
 
 // Mirrors the backend MetricCategory heuristic so categories are stable between
 // the two layers without an extra round-trip.
@@ -32,56 +31,32 @@ function category(metric: string): string {
 function formatValue(metric: string, v: number): string {
   if (!Number.isFinite(v)) return "-";
   const m = metric;
-  if (m.includes("Bytes") && !m.includes("Per")) return humanBytes(v);
+  if (m.includes("Bytes") && !m.includes("Per")) return formatBytes(v);
   if (m.includes("Seconds") || m.includes("Time")) return `${v.toFixed(v < 10 ? 2 : 0)}s`;
-  if (m.includes("Cache") && m.includes("Size")) return humanBytes(v);
+  if (m.includes("Cache") && m.includes("Size")) return formatBytes(v);
   if (Number.isInteger(v) && Math.abs(v) >= 1000) return formatNumber(v);
   if (Math.abs(v) < 100) return v.toFixed(2);
   return formatNumber(v);
 }
 
-function humanBytes(b: number): string {
-  if (!Number.isFinite(b)) return "-";
-  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-  let i = 0;
-  let n = Math.abs(b);
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-  return `${n.toFixed(n < 10 && i > 0 ? 2 : 1)} ${units[i]}`;
-}
-
 export function SystemMetrics({ connected }: { connected: boolean }) {
-  const [metrics, setMetrics] = useState<AsyncMetric[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [canceled, setCanceled] = useState(false);
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState("");
-  const [hosts, setHosts] = useState<string[]>([]);
   const [host, setHost] = useState(""); // "" = all nodes
-  const controllerRef = useRef<AbortController | null>(null);
-  const elapsed = useElapsedTimer(loading);
 
-  const load = useCallback(async () => {
-    setCanceled(false);
-    setLoading(true);
-    setError(null);
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    try {
-      const res = await fetchAsyncMetrics(controller.signal);
-      setMetrics(res.metrics);
-      setHosts(res.hosts || []);
-    } catch (e) {
-      if (e instanceof ApiError && e.isAbort()) return;
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      setError(e instanceof ApiError ? e : ApiError.wrap(e));
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
-  }, []);
+  const fetcher = useCallback((signal: AbortSignal) => fetchAsyncMetrics(signal), []);
+  const {
+    data,
+    loading,
+    error,
+    canceled,
+    elapsed,
+    cancel,
+    reload,
+  } = usePollingQuery<AsyncMetricsOverview>(fetcher, { enabled: connected });
 
-  useEffect(() => { if (connected) load(); }, [load, connected]);
-  const cancel = useCallback(() => { setCanceled(true); controllerRef.current?.abort(); setLoading(false); }, []);
+  const metrics = data?.metrics ?? [];
+  const hosts = data?.hosts ?? [];
 
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -101,7 +76,7 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
   }, [metrics, host, cat, search]);
 
   if (!connected) return <NotConnectedState />;
-  if (error && metrics.length === 0) return <PageContainer><ErrorState error={error} onRetry={load} /></PageContainer>;
+  if (error && metrics.length === 0) return <PageContainer><ErrorState error={error} onRetry={reload} /></PageContainer>;
 
   return (
     <PageContainer>
@@ -117,7 +92,7 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
               </span>
             )}
             {loading && metrics.length > 0 && <RefreshIndicator elapsed={elapsed} />}
-            <Button variant="secondary" size="md" onClick={load} disabled={loading}>
+            <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               Refresh
             </Button>
@@ -125,7 +100,7 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
         }
       />
 
-      {error && metrics.length > 0 && <div className="mb-4"><ErrorState error={error} onRetry={load} /></div>}
+      {error && metrics.length > 0 && <div className="mb-4"><ErrorState error={error} onRetry={reload} /></div>}
 
       {loading && metrics.length === 0 ? (
         <div className="py-4">
@@ -133,7 +108,7 @@ export function SystemMetrics({ connected }: { connected: boolean }) {
           <LoadingNotice elapsed={elapsed} onCancel={cancel} />
         </div>
       ) : canceled && metrics.length === 0 ? (
-        <LoadingNotice canceled onRetry={load} />
+        <LoadingNotice canceled onRetry={reload} />
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-2">

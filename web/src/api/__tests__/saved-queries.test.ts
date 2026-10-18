@@ -191,44 +191,18 @@ describe("saved-queries", () => {
     });
   });
 
-  describe("resolveParams", () => {
-    it("replaces parameters with values", async () => {
-      const { resolveParams } = await savedQueriesModule();
-      expect(resolveParams("SELECT {{col}} FROM {{tbl}}", { col: "name", tbl: "users" }))
-        .toBe("SELECT name FROM users");
+  describe("PARAM_REGEX", () => {
+    // resolveParams was removed: parameter binding is server-side now
+    // ({{param}} travels as written and is bound by the backend). The regex
+    // stays exported — the editor reuses it (format, detection).
+    it("is exported and matches placeholders", async () => {
+      const { PARAM_REGEX } = await savedQueriesModule();
+      expect("SELECT {{col}} FROM {{tbl}}".match(PARAM_REGEX)).toEqual(["{{col}}", "{{tbl}}"]);
     });
 
-    it("leaves unreplaced params as-is", async () => {
-      const { resolveParams } = await savedQueriesModule();
-      expect(resolveParams("SELECT {{col}} FROM {{tbl}}", { col: "name" }))
-        .toBe("SELECT name FROM {{tbl}}");
-    });
-
-    it("handles empty params", async () => {
-      const { resolveParams } = await savedQueriesModule();
-      expect(resolveParams("SELECT 1", {})).toBe("SELECT 1");
-    });
-
-    it("handles empty string values", async () => {
-      const { resolveParams } = await savedQueriesModule();
-      expect(resolveParams("WHERE x = {{val}}", { val: "" })).toBe("WHERE x = ");
-    });
-
-    it("resolves escaped braces to literal braces", async () => {
-      const { resolveParams } = await savedQueriesModule();
-      expect(resolveParams("SELECT \\{{not_a_param}}", {})).toBe("SELECT {{not_a_param}}");
-    });
-
-    it("resolves params and escapes simultaneously", async () => {
-      const { resolveParams } = await savedQueriesModule();
-      expect(
-        resolveParams("SELECT {{col}}, \\{{literal}} FROM {{tbl}}", { col: "id", tbl: "users" })
-      ).toBe("SELECT id, {{literal}} FROM users");
-    });
-
-    it("handles multiple occurrences of same param", async () => {
-      const { resolveParams } = await savedQueriesModule();
-      expect(resolveParams("{{x}} + {{x}}", { x: "1" })).toBe("1 + 1");
+    it("skips escaped placeholders", async () => {
+      const { PARAM_REGEX } = await savedQueriesModule();
+      expect("SELECT \\{{not_a_param}}".match(PARAM_REGEX)).toBeNull();
     });
   });
 

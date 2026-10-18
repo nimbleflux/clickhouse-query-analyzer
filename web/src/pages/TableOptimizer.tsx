@@ -12,6 +12,8 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState, ErrorState, NotConnectedState } from "@/components/ui/state";
+import { Pagination } from "@/components/ui/Pagination";
+import { formatBytes, formatNumber } from "../utils";
 import { TableSummary } from "./optimizer/TableSummary";
 import { RecommendationCards } from "./optimizer/RecommendationCards";
 import { countBySeverity, severityScore, type AnalysisMode, type SortField } from "./optimizer/types";
@@ -38,6 +40,10 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [expandedTable, setExpandedTable] = useState<string | null>(null);
+  // Client-side pagination for the bulk ("All databases") result table, which
+  // can easily list hundreds of analyzed tables. Reset on a new stream.
+  const [bulkPage, setBulkPage] = useState(1);
+  const [bulkPageSize, setBulkPageSize] = useState(25);
   const [sortField, setSortField] = useState<SortField>("severity");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
@@ -90,6 +96,7 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
       setBulkProgress(null);
       setBulkDone(null);
       setExpandedTable(null);
+      setBulkPage(1);
 
       const db = mode === "database" ? selectedDb : "";
       const ctrl = streamBulkAnalysis(
@@ -141,6 +148,12 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
       default: return 0;
     }
   });
+
+  // Page the sorted bulk results client-side; clamp when the list shrinks
+  // mid-stream or after a page-size change.
+  const bulkTotalPages = Math.max(1, Math.ceil(sortedResults.length / bulkPageSize));
+  const bulkSafePage = Math.min(bulkPage, bulkTotalPages);
+  const pagedResults = sortedResults.slice((bulkSafePage - 1) * bulkPageSize, bulkSafePage * bulkPageSize);
 
   const allRecs: Recommendation[] = bulkResults.flatMap((r) => r.recommendations || []);
   const singleRecs = singleResult?.recommendations || [];
@@ -308,7 +321,7 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
               </tr>
             </thead>
             <tbody>
-              {sortedResults.map((r) => {
+              {pagedResults.map((r) => {
                 const key = `${r.database}.${r.table}`;
                 const isExpanded = expandedTable === key;
                 const recs = r.recommendations || [];
@@ -326,8 +339,8 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
                         </span>
                       </td>
                       <td className="px-3 py-2 text-[var(--color-text-secondary)]">{r.engine}</td>
-                      <td className="px-3 py-2 text-right text-[var(--color-text-secondary)]">{r.total_rows}</td>
-                      <td className="px-3 py-2 text-right text-[var(--color-text-secondary)]">{r.total_bytes}</td>
+                      <td className="px-3 py-2 text-right text-[var(--color-text-secondary)]">{formatNumber(r.total_rows)}</td>
+                      <td className="px-3 py-2 text-right text-[var(--color-text-secondary)]">{formatBytes(r.total_bytes)}</td>
                       <td className="px-3 py-2 text-right">{recs.length}</td>
                       <td className="px-3 py-2 text-center">
                         {recs.length > 0 ? (
@@ -363,6 +376,17 @@ export function TableOptimizer({ connected }: { connected: boolean }) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {sortedResults.length > bulkPageSize && (
+        <Pagination
+          page={bulkSafePage}
+          pageSize={bulkPageSize}
+          total={sortedResults.length}
+          pageSizeOptions={[25, 50, 100, 200]}
+          onPage={setBulkPage}
+          onPageSize={(s) => { setBulkPageSize(s); setBulkPage(1); }}
+        />
       )}
 
       {!loading && !singleResult && bulkResults.length === 0 && !error && (

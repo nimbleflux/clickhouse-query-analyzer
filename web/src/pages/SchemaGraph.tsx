@@ -15,7 +15,7 @@ import { sendToEditor } from "@/lib/send-to-editor";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { formatNumber, formatBytes } from "@/utils";
-import type { ApiError } from "@/api/errors";
+import { ApiError } from "@/api/errors";
 
 const ALL_KINDS = Object.keys(KIND_HUES) as SchemaKind[];
 const LOAD_OPTIONS = [
@@ -49,6 +49,7 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
   const [dbFilter, setDbFilter] = useState<string | null>(null);
   const [allTables, setAllTables] = useState(false);
   const dbTouchedRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, 200);
   const [visibleKinds, setVisibleKinds] = useState<Set<SchemaKind>>(new Set(ALL_KINDS));
@@ -58,23 +59,42 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
 
   const load = useCallback(() => {
     if (!connected) return;
+    // Abort the previous fetch: two concurrent loads would race, and a stale
+    // .finally(() => setLoading(false)) could stick over a newer in-flight
+    // one (e.g. Refresh clicked while the initial load was still running).
+    abortRef.current?.abort();
     const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     setError(null);
     fetchSchemaGraph(loadDays, allTables ? null : dbFilter, allTables, controller.signal)
       .then((data) => {
+        if (abortRef.current !== controller) return;
         setGraph(data);
         setFitSignal((n) => n + 1);
       })
       .catch((e) => {
+        if (abortRef.current !== controller) return;
+        if (e instanceof ApiError && e.isAbort()) return;
         if (e instanceof DOMException && e.name === "AbortError") return;
-        setError(e ?? null);
+        setError(e instanceof ApiError ? e : ApiError.wrap(e));
       })
-      .finally(() => setLoading(false));
-    return () => controller.abort();
+      .finally(() => {
+        if (abortRef.current !== controller) return;
+        setLoading(false);
+      });
   }, [connected, loadDays, dbFilter, allTables]);
 
-  useEffect(() => load(), [load]);
+  // The effect and the Refresh/Retry buttons go through the same entry point:
+  // the ref stays current across filter changes, so a click can never run a
+  // stale closure or dodge the abort-the-previous-load logic.
+  const loadRef = useRef(load);
+  useEffect(() => {
+    loadRef.current = load;
+    load();
+    return () => abortRef.current?.abort();
+  }, [load]);
+  const refresh = useCallback(() => loadRef.current(), []);
 
   // The database the graph is currently scoped to: the user's explicit
   // choice, or the server's auto-pick reported in the response.
@@ -150,7 +170,7 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
                 <option key={m.value} value={m.value}>{m.label}</option>
               ))}
             </Select>
-            <Button variant="secondary" onClick={load} disabled={loading}>
+            <Button variant="secondary" onClick={refresh} disabled={loading}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               Refresh
             </Button>
@@ -159,7 +179,7 @@ export function SchemaGraph({ connected }: { connected: boolean }) {
       />
 
       {error && graph === null ? (
-        <ErrorState error={error} onRetry={load} />
+        <ErrorState error={error} onRetry={refresh} />
       ) : graph === null ? (
         <LoadingNotice elapsed={elapsed} />
       ) : graph.nodes.length === 0 ? (

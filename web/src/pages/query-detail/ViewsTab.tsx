@@ -1,14 +1,28 @@
 import { Eye } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { EmptyState } from "@/components/ui/state";
+import { EmptyState, ErrorState } from "@/components/ui/state";
 import { formatBytes, formatDuration, formatNumber } from "@/utils";
 import type { ViewLogEntry } from "@/api/types";
+import type { ApiError } from "@/api/errors";
 
 interface ViewsTabProps {
   views: ViewLogEntry[];
+  /** Set when the views fetch failed; renders an ErrorState instead of the "no views" hint. */
+  viewsError?: ApiError | null;
+  onRetryViews?: () => void;
 }
 
-export function ViewsTab({ views }: ViewsTabProps) {
+export function ViewsTab({ views, viewsError, onRetryViews }: ViewsTabProps) {
+  if (viewsError) {
+    return (
+      <ErrorState
+        error={viewsError}
+        title="Failed to load views"
+        onRetry={onRetryViews}
+      />
+    );
+  }
+
   if (views.length === 0) {
     return (
       <EmptyState

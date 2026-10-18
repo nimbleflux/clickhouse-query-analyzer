@@ -1,45 +1,21 @@
-import { useState, useEffect, useCallback, useRef, useMemo, memo } from "react";
+import { useState, useCallback, useMemo, memo } from "react";
 import { Server, AlertTriangle, RefreshCw, Network, Clock, ListChecks, FlaskConical, Pause, Play, KeyRound } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { fetchReplication } from "../api/client";
 import type { ReplicationStatus, ReplicationMetricPoint } from "../api/types";
-import { ApiError } from "../api/errors";
 import { formatNumber } from "../utils";
-import { useTheme } from "../api/theme";
+import { useChartTheme } from "@/hooks/useChartTheme";
 import { CardSkeleton, TableSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/input";
-import { Card } from "@/components/ui/card";
+import { Card, StatCard, ChartCard } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
-import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice, PartialErrorsBanner } from "@/components/ui/state";
+import { usePollingQuery, type PollFetchKind } from "@/hooks/usePollingQuery";
 import { TableName } from "@/components/TableName";
 import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
-
-interface StatCardProps {
-  label: string;
-  value: string;
-  icon: React.ReactNode;
-  tone?: "default" | "warning" | "error";
-}
-
-function StatCard({ label, value, icon, tone = "default" }: StatCardProps) {
-  const color =
-    tone === "error" ? "text-[var(--color-error)]" :
-    tone === "warning" ? "text-[var(--color-warning)]" :
-    "text-[var(--color-text-primary)]";
-  return (
-    <Card className="p-4">
-      <div className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
-        {icon}
-        {label}
-      </div>
-      <div className={`mt-1 font-mono text-lg font-semibold ${color}`}>{value}</div>
-    </Card>
-  );
-}
 
 function formatDelay(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "-";
@@ -52,81 +28,49 @@ function formatDelay(seconds: number): string {
   return mm > 0 ? `${h}h ${mm}m` : `${h}h`;
 }
 
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <Card className="p-4">
-      <div className="mb-3 text-xs font-medium text-[var(--color-text-secondary)]">{title}</div>
-      {children}
-    </Card>
-  );
-}
-
 export function Replication({ connected }: { connected: boolean }) {
-  const [data, setData] = useState<ReplicationStatus | null>(null);
   const [history, setHistory] = useState<ReplicationMetricPoint[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [canceled, setCanceled] = useState(false);
+  const [database, setDatabase] = useState("");
+  const [refreshInterval, setRefreshInterval] = useState(10);
+
+  const fetcher = useCallback(async (signal: AbortSignal, kind: PollFetchKind) => {
+    // includeHistory defaults to true: the initial load and manual refreshes
+    // pull the 24h chart data. Live auto-refresh ticks pass false so polling
+    // only re-fetches the cheap live tables, not the (large) history.
+    const includeHistory = kind !== "live";
+    const result = await fetchReplication(
+      { database: database || undefined, include_history: includeHistory },
+      signal,
+    );
+    if (includeHistory && result.metric_history?.length > 0) setHistory(result.metric_history);
+    return result;
+  }, [database]);
+
   // Live refresh is opt-in: the page is heavy enough (charts + multi-table)
   // that silently polling every few seconds is a poor default. The user
   // clicks "Live" when they're actively watching a replication incident.
-  const [autoRefresh, setAutoRefresh] = useState(false);
-  const [refreshInterval, setRefreshInterval] = useState(10);
-  const intervalRef = useRef<ReturnType<typeof setInterval>>(null);
-  const controllerRef = useRef<AbortController | null>(null);
-  const elapsed = useElapsedTimer(loading);
-
-  const [database, setDatabase] = useState("");
-
-  // includeHistory defaults to true: the initial load and manual refreshes
-  // pull the 24h chart data. The auto-refresh tick passes false so live
-  // polling only re-fetches the cheap live tables, not the (large) history.
-  const load = useCallback(async (signal?: AbortSignal, includeHistory = true) => {
-    setCanceled(false);
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await fetchReplication(
-        { database: database || undefined, include_history: includeHistory },
-        signal,
-      );
-      setData(result);
-      if (includeHistory && result.metric_history?.length > 0) setHistory(result.metric_history);
-    } catch (e) {
-      if (e instanceof ApiError && e.isAbort()) return;
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      setError(e instanceof ApiError ? e : ApiError.wrap(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [database]);
-
-  useEffect(() => {
-    if (!connected) return;
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    load(controller.signal);
-    return () => controller.abort();
-  }, [load, connected]);
-
-  const cancel = useCallback(() => {
-    setCanceled(true);
-    controllerRef.current?.abort();
-  }, []);
-
-  useEffect(() => {
-    if (!connected || !autoRefresh) return;
-    const controller = new AbortController();
-    intervalRef.current = setInterval(() => load(controller.signal, false), refreshInterval * 1000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); controller.abort(); };
-  }, [autoRefresh, refreshInterval, load, connected]);
+  const {
+    data,
+    loading,
+    error,
+    canceled,
+    elapsed,
+    cancel,
+    reload,
+    live: autoRefresh,
+    setLive: setAutoRefresh,
+  } = usePollingQuery<ReplicationStatus>(fetcher, {
+    deps: [database],
+    enabled: connected,
+    intervalMs: refreshInterval * 1000,
+  });
 
   if (!connected) return <NotConnectedState />;
 
   if (error && !data) {
     return (
       <PageContainer>
-        <ErrorState error={error} onRetry={() => load()} />
+        <ErrorState error={error} onRetry={reload} />
       </PageContainer>
     );
   }
@@ -163,7 +107,7 @@ export function Replication({ connected }: { connected: boolean }) {
               {autoRefresh ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
               Live
             </Button>
-            <Button variant="secondary" size="md" onClick={() => load()} disabled={loading}>
+            <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               Refresh
             </Button>
@@ -172,13 +116,7 @@ export function Replication({ connected }: { connected: boolean }) {
       />
 
       {data?.partial_errors && data.partial_errors.length > 0 && (
-        <div
-          className="flex items-start gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)] px-4 py-2 text-xs text-[var(--color-text-secondary)]"
-          title={data.partial_errors.map((t) => `${t}: ${data.partial_error_details?.[t] ?? ""}`).join("\n")}
-        >
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
-          <span>Some sections are unavailable ({data.partial_errors.join(", ")}). Hover for details.</span>
-        </div>
+        <PartialErrorsBanner errors={data.partial_errors} details={data.partial_error_details} />
       )}
 
       <ClusterNoteBanner note={data?.cluster_note} />
@@ -193,7 +131,7 @@ export function Replication({ connected }: { connected: boolean }) {
           <LoadingNotice elapsed={elapsed} onCancel={cancel} />
         </>
       ) : canceled && !data ? (
-        <LoadingNotice canceled onRetry={() => load()} />
+        <LoadingNotice canceled onRetry={reload} />
       ) : data ? (
         <>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
@@ -508,19 +446,9 @@ function KeeperCard({ keeper }: { keeper: ReplicationStatus["keeper"] }) {
   const connected = keeper.length > 0 && !expired;
   const maxUptime = keeper.reduce((m, k) => Math.max(m, k.session_uptime_seconds), 0);
   const tone = expired ? "error" : connected ? "default" : "warning";
-  const color =
-    tone === "error" ? "text-[var(--color-error)]" :
-    tone === "warning" ? "text-[var(--color-warning)]" :
-    "text-[var(--color-text-primary)]";
   const value = expired ? "EXPIRED" : connected ? formatDelay(maxUptime) : "offline";
   return (
-    <Card className="p-4">
-      <div className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
-        <KeyRound className="h-3 w-3" />
-        Keeper
-      </div>
-      <div className={`mt-1 font-mono text-lg font-semibold ${color}`}>{value}</div>
-    </Card>
+    <StatCard label="Keeper" value={value} icon={<KeyRound className="h-3 w-3" />} tone={tone} />
   );
 }
 
@@ -528,11 +456,8 @@ function KeeperCard({ keeper }: { keeper: ReplicationStatus["keeper"] }) {
 // auto-refresh tick skips it), so the charts don't re-render every few seconds
 // while the live tables update around them.
 const MetricCharts = memo(function MetricCharts({ history }: { history: ReplicationMetricPoint[] }) {
-  const theme = useTheme();
-  const isDark = theme === "dark";
-  const gridColor = isDark ? "#334155" : "#e2e8f0";
-  const textColor = isDark ? "#94a3b8" : "#64748b";
-  const tooltipStyle = { background: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 };
+  const { gridColor, textColor, series, tooltipStyle } = useChartTheme();
+  const [accent, , error, warning, success] = series;
 
   // Hide when metric_log is absent or entirely flat — a wall of zero-lines on
   // an idle cluster reads as broken rather than healthy. Any nonzero sample
@@ -559,7 +484,7 @@ const MetricCharts = memo(function MetricCharts({ history }: { history: Replicat
             <XAxis dataKey="event_time" tickFormatter={fmtTime} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" minTickGap={40} />
             <YAxis allowDecimals={false} tick={{ fill: textColor, fontSize: 10 }} width={28} />
             <Tooltip contentStyle={tooltipStyle} labelFormatter={(l) => fmtTime(String(l))} />
-            <Area type="monotone" dataKey="readonly_replica" stroke="#ef4444" fill="#ef444420" strokeWidth={1.5} name="Read-only" />
+            <Area type="monotone" dataKey="readonly_replica" stroke={error} fill={`${error}20`} strokeWidth={1.5} name="Read-only" />
           </AreaChart>
         </ResponsiveContainer>
       </ChartCard>
@@ -571,9 +496,9 @@ const MetricCharts = memo(function MetricCharts({ history }: { history: Replicat
             <XAxis dataKey="event_time" tickFormatter={fmtTime} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" minTickGap={40} />
             <YAxis allowDecimals={false} tick={{ fill: textColor, fontSize: 10 }} width={28} />
             <Tooltip contentStyle={tooltipStyle} labelFormatter={(l) => fmtTime(String(l))} />
-            <Area type="monotone" dataKey="replicated_fetch" stackId="a" stroke="#3b82f6" fill="#3b82f640" strokeWidth={1} name="Fetch" />
-            <Area type="monotone" dataKey="replicated_send" stackId="a" stroke="#10b981" fill="#10b98140" strokeWidth={1} name="Send" />
-            <Area type="monotone" dataKey="replicated_checks" stackId="a" stroke="#f59e0b" fill="#f59e0b40" strokeWidth={1} name="Checks" />
+            <Area type="monotone" dataKey="replicated_fetch" stackId="a" stroke={accent} fill={`${accent}40`} strokeWidth={1} name="Fetch" />
+            <Area type="monotone" dataKey="replicated_send" stackId="a" stroke={success} fill={`${success}40`} strokeWidth={1} name="Send" />
+            <Area type="monotone" dataKey="replicated_checks" stackId="a" stroke={warning} fill={`${warning}40`} strokeWidth={1} name="Checks" />
           </AreaChart>
         </ResponsiveContainer>
       </ChartCard>
@@ -585,8 +510,8 @@ const MetricCharts = memo(function MetricCharts({ history }: { history: Replicat
             <XAxis dataKey="event_time" tickFormatter={fmtTime} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" minTickGap={40} />
             <YAxis allowDecimals={false} tick={{ fill: textColor, fontSize: 10 }} width={28} />
             <Tooltip contentStyle={tooltipStyle} labelFormatter={(l) => fmtTime(String(l))} />
-            <Area type="monotone" dataKey="zk_session" stroke="#3b82f6" fill="#3b82f620" strokeWidth={1.5} name="Sessions" />
-            <Area type="monotone" dataKey="zk_session_expired" stroke="#ef4444" fill="#ef444420" strokeWidth={1.5} name="Expired" />
+            <Area type="monotone" dataKey="zk_session" stroke={accent} fill={`${accent}20`} strokeWidth={1.5} name="Sessions" />
+            <Area type="monotone" dataKey="zk_session_expired" stroke={error} fill={`${error}20`} strokeWidth={1.5} name="Expired" />
           </AreaChart>
         </ResponsiveContainer>
       </ChartCard>

@@ -9,6 +9,12 @@ export function formatDuration(ms: number): string {
   return `${min}m ${sec}s`;
 }
 
+/**
+ * Canonical byte formatter for the whole app: binary units (1024 division)
+ * with a single decimal, e.g. 512.0 B / 1.0 KB / 1.0 MB / 1.0 GB / 1.0 TB.
+ * (The labels say KB/MB but the math is binary — this is the historical
+ * behavior of the monitoring pages and is kept as-is on purpose.)
+ */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes === 0) return "0 B";
   const abs = Math.abs(bytes);
@@ -27,6 +33,33 @@ export function formatNumber(n: number): string {
   return `${(n / 1_000_000_000).toFixed(2)}B`;
 }
 
+/**
+ * Locale-aware date + time for log timestamps ("when did this run?").
+ * Parses both ISO strings and ClickHouse's "YYYY-MM-DD HH:MM:SS" (normalized
+ * to ISO so every browser treats it as local time). The year is included only
+ * when the timestamp is not in the current year, so recent queries stay
+ * compact ("Jan 5, 14:03:22") while old ones stay unambiguous
+ * ("Dec 24, 2024, 09:12:45"). Unparseable input is returned unchanged.
+ */
+export function formatDateTime(s: string): string {
+  if (!s) return "";
+  const normalized = s.includes(" ") && !s.includes("T") ? s.replace(" ", "T") : s;
+  const d = new Date(normalized);
+  if (Number.isNaN(d.getTime())) return s;
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  const date = d.toLocaleDateString(
+    undefined,
+    sameYear ? { month: "short", day: "numeric" } : { year: "numeric", month: "short", day: "numeric" },
+  );
+  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return `${date}, ${time}`;
+}
+
+/**
+ * @deprecated Use {@link formatDateTime} instead — this fixed MM/DD HH:MM:SS
+ * format is US-only and drops the year. Kept only for files outside the
+ * ux-consistency refactor's scope that still render it.
+ */
 export function formatTime(ts: string): string {
   const d = new Date(ts);
   const mm = String(d.getMonth() + 1).padStart(2, "0");

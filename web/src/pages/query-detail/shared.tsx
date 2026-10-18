@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import { formatBytes, formatDuration, formatNumber } from "@/utils";
+import { StatCard, type StatTone } from "@/components/ui/card";
+import { readSeriesColors, chartTooltipStyle } from "@/hooks/useChartTheme";
 
 export function ChartSection({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -10,16 +12,24 @@ export function ChartSection({ title, children }: { title: string; children: Rea
   );
 }
 
+// Map the legacy free-form color class (usually a durationColor/memoryColor
+// output) onto the shared StatCard's semantic tone.
+function toneFromColorClass(color?: string): StatTone {
+  if (!color) return "default";
+  if (color.includes("--color-error")) return "error";
+  if (color.includes("--color-warning")) return "warning";
+  if (color.includes("--color-success")) return "success";
+  if (color.includes("--color-accent")) return "accent";
+  return "default";
+}
+
+/**
+ * @deprecated Thin wrapper over the shared {@link StatCard}. Kept only because
+ * QueryDetail (outside the ux-consistency refactor's file scope) still calls it;
+ * use StatCard directly in new code.
+ */
 export function MetricCard({ icon, label, value, color }: { icon: ReactNode; label: string; value: string; color?: string }) {
-  return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)] p-4">
-      <div className="mb-1 flex items-center gap-2 text-[var(--color-text-secondary)]">
-        {icon}
-        <span className="text-xs">{label}</span>
-      </div>
-      <div className={`text-lg font-semibold ${color || "text-[var(--color-text-primary)]"}`}>{value}</div>
-    </div>
-  );
+  return <StatCard label={label} value={value} icon={icon} tone={toneFromColorClass(color)} />;
 }
 
 export function settingEnabled(settings: Record<string, string> | undefined, key: string): boolean {
@@ -49,12 +59,9 @@ export function labelFmt(fn: (l: string) => string) {
   return (label: any) => fn(String(label));
 }
 
-export const TOOLTIP_STYLE = {
-  backgroundColor: "var(--surface-card)",
-  border: "1px solid var(--color-border)",
-  borderRadius: 8,
-  fontSize: 12,
-};
+// Single source: both derive from the token-reading chart theme module so
+// the query-detail charts and the page-level charts stay in sync per theme.
+export const TOOLTIP_STYLE = chartTooltipStyle();
 
 export interface MetricDelta {
   time: string;
@@ -100,7 +107,10 @@ export function getTopProfileEvents(events: Record<string, number>): [string, nu
     .map(([name, value]) => [name, value, categorizeEvent(name)]);
 }
 
-export const PIE_COLORS = ["#3b82f6", "#8b5cf6", "#ef4444", "#f59e0b", "#22c55e", "#06b6d4", "#ec4899", "#f97316"];
+// Order: [accent, violet, error, warning, success, cyan, pink, orange].
+// Token-backed hues are read from the CSS custom properties so they follow
+// the active theme; hues without a token stay fixed (see useChartTheme).
+export const PIE_COLORS = readSeriesColors();
 
 export function extractMemoryCategories(events: Record<string, number>): { name: string; value: number; count: number }[] {
   const categoryMap = new Map<string, { value: number; count: number }>();

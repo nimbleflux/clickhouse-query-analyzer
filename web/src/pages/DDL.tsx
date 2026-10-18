@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef, memo, useMemo } from "react";
+import { useState, memo, useMemo, useCallback } from "react";
 import { Fragment } from "react";
 import { useNavigate } from "react-router-dom";
-import { Layers, AlertTriangle, RefreshCw, CheckCircle2, ArrowRight, FlaskConical, Timer, ChevronRight, ChevronDown, Copy } from "lucide-react";
+import { Layers, AlertTriangle, RefreshCw, CheckCircle2, ArrowRight, FlaskConical, Timer, ChevronRight, ChevronDown, Copy, Pause, Play } from "lucide-react";
 import CodeMirror from "@uiw/react-codemirror";
 import { sql } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -9,19 +9,20 @@ import { format as formatSQL } from "sql-formatter";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { fetchDDL } from "../api/client";
 import type { DDLStatus } from "../api/types";
-import { ApiError } from "../api/errors";
-import { formatDuration, formatNumber } from "../utils";
+import { formatDuration, formatNumber, formatDateTime } from "../utils";
 import { useTheme } from "../api/theme";
+import { useChartTheme } from "@/hooks/useChartTheme";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
+import { usePollingQuery } from "@/hooks/usePollingQuery";
 import { CardSkeleton, TableSkeleton } from "../components/Skeleton";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
+import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice, PartialErrorsBanner } from "@/components/ui/state";
 import { useTableSort, SortableHeader } from "@/components/ui/table-sort";
 import { ClusterNoteBanner } from "@/components/ClusterNoteBanner";
-import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 
 const TIMEFRAMES: { label: string; hours: number }[] = [
@@ -53,7 +54,7 @@ function highlightSQL(text: string): React.ReactNode[] {
   TOKEN_RE.lastIndex = 0;
   while ((m = TOKEN_RE.exec(text)) !== null) {
     if (m[1]) out.push(<span key={i++} className="italic text-[var(--color-text-secondary)]">{m[1]}</span>);
-    else if (m[2]) out.push(<span key={i++} className="text-emerald-500">{m[2]}</span>);
+    else if (m[2]) out.push(<span key={i++} className="text-[var(--color-success)]">{m[2]}</span>);
     else if (m[3]) out.push(<span key={i++} className="text-purple-500">{m[3]}</span>);
     else if (m[4]) {
       const upper = m[4].toUpperCase();
@@ -70,7 +71,7 @@ function highlightSQL(text: string): React.ReactNode[] {
 function statusTone(status: string, exception: string): { color: string; label: string } {
   if (exception) return { color: "text-[var(--color-error)]", label: "Failed" };
   switch (status) {
-    case "Finished": return { color: "text-emerald-500", label: "Finished" };
+    case "Finished": return { color: "text-[var(--color-success)]", label: "Finished" };
     case "Active": return { color: "text-[var(--color-accent)]", label: "Active" };
     case "Inactive": return { color: "text-[var(--color-text-secondary)]", label: "Queued" };
     case "Removing": return { color: "text-[var(--color-warning)]", label: "Removing" };
@@ -93,49 +94,36 @@ function oldestUnfinishedAgeSec(entries: DDLStatus["distributed_ddl"]): number {
 
 export function DDL({ connected }: { connected: boolean }) {
   const navigate = useNavigate();
-  const [data, setData] = useState<DDLStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [canceled, setCanceled] = useState(false);
   const [hours, setHours] = useState(24);
-  const controllerRef = useRef<AbortController | null>(null);
-  const elapsed = useElapsedTimer(loading);
+  const [refreshInterval, setRefreshInterval] = useState(10);
 
-  const load = useCallback(async (signal?: AbortSignal) => {
-    setCanceled(false);
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await fetchDDL({ hours }, signal);
-      setData(result);
-    } catch (e) {
-      if (e instanceof ApiError && e.isAbort()) return;
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      setError(e instanceof ApiError ? e : ApiError.wrap(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [hours]);
+  const fetcher = useCallback((signal: AbortSignal) => fetchDDL({ hours }, signal), [hours]);
 
-  useEffect(() => {
-    if (!connected) return;
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    load(controller.signal);
-    return () => controller.abort();
-  }, [load, connected]);
-
-  const cancel = useCallback(() => {
-    setCanceled(true);
-    controllerRef.current?.abort();
-  }, []);
+  // Live refresh is opt-in: the page is heavy enough (charts + multi-table)
+  // that silently polling every few seconds is a poor default. The user
+  // clicks "Live" when they're actively watching the distributed DDL queue.
+  const {
+    data,
+    loading,
+    error,
+    canceled,
+    elapsed,
+    cancel,
+    reload,
+    live: autoRefresh,
+    setLive: setAutoRefresh,
+  } = usePollingQuery<DDLStatus>(fetcher, {
+    deps: [hours],
+    enabled: connected,
+    intervalMs: refreshInterval * 1000,
+  });
 
   if (!connected) return <NotConnectedState />;
 
   if (error && !data) {
     return (
       <PageContainer>
-        <ErrorState error={error} onRetry={() => load()} />
+        <ErrorState error={error} onRetry={reload} />
       </PageContainer>
     );
   }
@@ -151,7 +139,21 @@ export function DDL({ connected }: { connected: boolean }) {
         actions={
           <>
             {loading && data && <RefreshIndicator elapsed={elapsed} />}
-            <Button variant="secondary" size="md" onClick={() => load()} disabled={loading}>
+            <Select
+              value={refreshInterval}
+              onChange={(e) => setRefreshInterval(Number(e.target.value))}
+              disabled={!autoRefresh}
+              className={!autoRefresh ? "opacity-50" : ""}
+            >
+              <option value={5}>5s</option>
+              <option value={10}>10s</option>
+              <option value={30}>30s</option>
+            </Select>
+            <Button variant={autoRefresh ? "primary" : "secondary"} size="md" onClick={() => setAutoRefresh(!autoRefresh)}>
+              {autoRefresh ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+              Live
+            </Button>
+            <Button variant="secondary" size="md" onClick={reload} disabled={loading}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               Refresh
             </Button>
@@ -173,13 +175,7 @@ export function DDL({ connected }: { connected: boolean }) {
       </div>
 
       {data?.partial_errors && data.partial_errors.length > 0 && (
-        <div
-          className="flex items-start gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--state-warning)] px-4 py-2 text-xs text-[var(--color-text-secondary)]"
-          title={data.partial_errors.map((t) => `${t}: ${data.partial_error_details?.[t] ?? ""}`).join("\n")}
-        >
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-warning)]" />
-          <span>Some sections are unavailable ({data.partial_errors.join(", ")}). Hover for details.</span>
-        </div>
+        <PartialErrorsBanner errors={data.partial_errors} details={data.partial_error_details} />
       )}
 
       <ClusterNoteBanner note={data?.cluster_note} />
@@ -194,7 +190,7 @@ export function DDL({ connected }: { connected: boolean }) {
           <LoadingNotice elapsed={elapsed} onCancel={cancel} />
         </>
       ) : canceled && !data ? (
-        <LoadingNotice canceled onRetry={() => load()} />
+        <LoadingNotice canceled onRetry={reload} />
       ) : data ? (
         <>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -277,11 +273,8 @@ export function DDL({ connected }: { connected: boolean }) {
 }
 
 const DDLTrendChart = memo(function DDLTrendChart({ trend, hours }: { trend: DDLStatus["trend"]; hours: number }) {
-  const theme = useTheme();
-  const isDark = theme === "dark";
-  const gridColor = isDark ? "#334155" : "#e2e8f0";
-  const textColor = isDark ? "#94a3b8" : "#64748b";
-  const tooltipStyle = { background: "var(--color-bg-secondary)", border: "1px solid var(--color-border)", borderRadius: 8, fontSize: 12 };
+  const { gridColor, textColor, series, tooltipStyle } = useChartTheme();
+  const [, , error, , success] = series;
 
   // DDL is sparse; hide the chart entirely when there's no activity in the
   // window rather than render an empty grid that reads as broken.
@@ -293,7 +286,7 @@ const DDLTrendChart = memo(function DDLTrendChart({ trend, hours }: { trend: DDL
     try {
       const d = new Date(v.replace(" ", "T"));
       return hours <= 24
-        ? d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+        ? formatDateTime(v)
         : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
     } catch {
       return v;
@@ -309,8 +302,8 @@ const DDLTrendChart = memo(function DDLTrendChart({ trend, hours }: { trend: DDL
           <XAxis dataKey="bucket" tickFormatter={fmtBucket} tick={{ fill: textColor, fontSize: 10 }} interval="preserveStartEnd" minTickGap={40} />
           <YAxis allowDecimals={false} tick={{ fill: textColor, fontSize: 10 }} width={28} />
           <Tooltip contentStyle={tooltipStyle} cursor={false} labelFormatter={(l) => fmtBucket(String(l))} />
-          <Bar dataKey="ok" stackId="a" fill="#10b98180" name="ok" radius={[0, 0, 0, 0]} />
-          <Bar dataKey="failed" stackId="a" fill="#ef4444" name="failed" radius={[2, 2, 0, 0]} />
+          <Bar dataKey="ok" stackId="a" fill={`${success}80`} name="ok" radius={[0, 0, 0, 0]} />
+          <Bar dataKey="failed" stackId="a" fill={error} name="failed" radius={[2, 2, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>
     </Card>

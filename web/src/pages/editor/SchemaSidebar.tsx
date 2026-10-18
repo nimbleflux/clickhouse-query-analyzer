@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Loader2, RefreshCw, AlertTriangle, ChevronDown, ChevronRight, Table2, ExternalLink, Database, Search, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Loader2, RefreshCw, AlertTriangle, ChevronDown, ChevronRight, Table2, ExternalLink, Database, Search, ChevronsDownUp, ChevronsUpDown, ListTree } from "lucide-react";
 import { formatNumber } from "@/utils";
 import type { SchemaData } from "@/api/schema-cache";
 import { AccordionHeader } from "./AccordionSection";
@@ -106,6 +107,14 @@ export function SchemaSidebar({
                     >
                       <ExternalLink className="h-3 w-3" />
                     </button>
+                    <Link
+                      to={`/tables/${encodeURIComponent(dbName)}/${encodeURIComponent(t.name)}/parts`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="mr-1 shrink-0 rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--color-accent)]"
+                      title="Browse parts"
+                    >
+                      <ListTree className="h-3 w-3" />
+                    </Link>
                     <DdlButton database={dbName} table={t.name} />
                   </div>
                   {expanded.has(`tbl:${dbName}.${t.name}`) && (

@@ -1,4 +1,4 @@
-import type { QueryProgress, QueryResult } from "@/api/types";
+import type { DetachedJob, QueryProgress, QueryResult } from "@/api/types";
 
 export interface EditorTab {
   id: string;
@@ -7,7 +7,12 @@ export interface EditorTab {
   results: QueryResult[];
   errors: string[];
   running: boolean;
-  resultPage: number;
+  /**
+   * Current page per result, parallel to results/statements (0s after a run).
+   * Results are positional across a multi-statement run, so paging result i
+   * re-executes only statements[i] — each result keeps its own page.
+   */
+  resultPages?: number[];
   paramValues: Record<string, string>;
   statements?: string[];
   pageLoading?: boolean;
@@ -17,6 +22,12 @@ export interface EditorTab {
   runningQueryId?: string;
   /** Statement currently executing (1-based, shown while running). */
   runningStatement?: number;
+  /**
+   * Detached execution job for THIS tab (each tab runs its own job; a poll
+   * keyed by tab id keeps running when the user switches tabs). Editor state
+   * only — saveTabs strips it so it never reaches localStorage.
+   */
+  detachedJob?: DetachedJob;
 }
 
 export interface SidebarSections {
@@ -50,6 +61,10 @@ export const PAGE_SIZE_KEY = "ch-editor-page-size";
 export const SETTINGS_KEY = "ch-editor-settings";
 export const SIDEBAR_SECTIONS_KEY = "ch-editor-sidebar-sections";
 export const HISTORY_KEY = "ch-editor-history";
+export const MAX_EXEC_KEY = "ch-editor-max-exec";
+export const SIDEBAR_WIDTH_KEY = "ch-editor-sidebar-width";
+export const EDITOR_HEIGHT_KEY = "ch-editor-editor-height";
+export const SECTION_HEIGHTS_KEY = "ch-editor-section-heights";
 export const MAX_HISTORY = 100;
 
 export function uid(): string {
@@ -64,7 +79,7 @@ export function makeEmptyTab(name = "Query 1"): EditorTab {
     results: [],
     errors: [],
     running: false,
-    resultPage: 0,
+    resultPages: [],
     paramValues: {},
   };
 }
@@ -74,7 +89,14 @@ export function loadTabs(): EditorTab[] {
     const raw = localStorage.getItem(TABS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // Tabs persisted before resultPages/detachedJob existed lack them.
+        return parsed.map((t: EditorTab) => ({
+          ...t,
+          resultPages: Array.isArray(t.resultPages) ? t.resultPages : [],
+          detachedJob: undefined,
+        }));
+      }
     }
   } catch {}
   return [makeEmptyTab()];
@@ -89,6 +111,7 @@ export function saveTabs(tabs: EditorTab[]) {
     progress: null,
     runningQueryId: undefined,
     runningStatement: undefined,
+    detachedJob: undefined,
   }));
   try { localStorage.setItem(TABS_KEY, JSON.stringify(serializable)); } catch {}
 }

@@ -7,26 +7,55 @@ export function splitQueries(sql: string): string[] {
   let inSingle = false;
   let inDouble = false;
   let inBacktick = false;
+  // Block comments nest in ClickHouse (/* /* */ */), so track depth rather
+  // than a boolean — the first `*/` must not close an outer comment.
+  let blockDepth = 0;
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i];
+    const next = sql[i + 1];
+    if (blockDepth > 0) {
+      if (ch === '/' && next === '*') {
+        blockDepth++;
+        current += "/*";
+        i++;
+      } else if (ch === '*' && next === '/') {
+        blockDepth--;
+        current += "*/";
+        i++;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    // Backslash escapes the next character inside quoted strings, so \' and
+    // \" never close the literal ('a\'b;SELECT' stays one statement).
+    if ((inSingle || inDouble) && ch === '\\' && i + 1 < sql.length) {
+      current += ch + next;
+      i++;
+      continue;
+    }
     if (ch === "'" && !inDouble && !inBacktick) {
       inSingle = !inSingle;
       current += ch;
-      if (inSingle && i + 1 < sql.length && sql[i + 1] === "'") {
+      if (inSingle && next === "'") {
         current += "'";
         i++;
       }
     } else if (ch === '"' && !inSingle && !inBacktick) {
       inDouble = !inDouble;
       current += ch;
-      if (inDouble && i + 1 < sql.length && sql[i + 1] === '"') {
+      if (inDouble && next === '"') {
         current += '"';
         i++;
       }
     } else if (ch === '`' && !inSingle && !inDouble) {
       inBacktick = !inBacktick;
       current += ch;
-    } else if (ch === '-' && !inSingle && !inDouble && !inBacktick && i + 1 < sql.length && sql[i + 1] === '-') {
+    } else if (ch === '/' && next === '*' && !inSingle && !inDouble && !inBacktick) {
+      blockDepth++;
+      current += "/*";
+      i++;
+    } else if (ch === '-' && !inSingle && !inDouble && !inBacktick && next === '-') {
       while (i < sql.length && sql[i] !== '\n') i++;
       current += ' ';
     } else if (ch === ';' && !inSingle && !inDouble && !inBacktick) {
@@ -40,6 +69,34 @@ export function splitQueries(sql: string): string[] {
   const trimmed = current.trim();
   if (trimmed) stmts.push(trimmed);
   return stmts;
+}
+
+/**
+ * Strip leading SQL comments (`-- …` and `/* … *\/`) so statement
+ * classification (destructive-statement detection) sees the real keyword.
+ * Mirrors the backend's StripLeadingComments in
+ * internal/clickhouse/execute.go: stacked comments are handled in a loop,
+ * and an unterminated `/*` returns "" — such a query is a syntax error
+ * anyway, and failing closed is the safe default.
+ */
+export function stripLeadingComments(query: string): string {
+  let trimmed = query.trim();
+  for (;;) {
+    trimmed = trimmed.trim();
+    if (trimmed.startsWith("--")) {
+      const nl = trimmed.indexOf("\n");
+      if (nl < 0) return "";
+      trimmed = trimmed.slice(nl + 1);
+      continue;
+    }
+    if (trimmed.startsWith("/*")) {
+      const end = trimmed.indexOf("*/");
+      if (end < 0) return "";
+      trimmed = trimmed.slice(end + 2);
+      continue;
+    }
+    return trimmed;
+  }
 }
 
 export function formatElapsed(ms: number): string {
@@ -68,6 +125,24 @@ export function errorText(e: unknown): string {
   return e instanceof Error ? e.message : "Query failed";
 }
 
+/**
+ * Quote one CSV/TSV cell (RFC-4180 style: wrap and double quotes when the
+ * value contains the separator, a quote, or a newline) and neutralise
+ * spreadsheet formula injection: a leading =, +, - or @ would execute as a
+ * formula when the file opens in Excel/Sheets, so it gets a single-quote
+ * prefix that forces text interpretation.
+ */
+export function escapeCell(val: unknown, sep: string): string {
+  const s = val === null || val === undefined ? "" : String(val);
+  let out = s.includes(sep) || s.includes('"') || s.includes('\n')
+    ? `"${s.replace(/"/g, '""')}"`
+    : s;
+  // Test the raw value: quoting hides a leading '=' behind '"', but the
+  // spreadsheet still sees the formula once it strips the quotes.
+  if (/^[=+\-@]/.test(s)) out = `'${out}`;
+  return out;
+}
+
 export function exportResult(result: QueryResult, format: "csv" | "json" | "tsv") {
   let content: string;
   let mimeType: string;
@@ -79,15 +154,9 @@ export function exportResult(result: QueryResult, format: "csv" | "json" | "tsv"
     ext = "json";
   } else {
     const sep = format === "csv" ? "," : "\t";
-    const escape = (val: unknown) => {
-      const s = val === null || val === undefined ? "" : String(val);
-      return s.includes(sep) || s.includes('"') || s.includes('\n')
-        ? `"${s.replace(/"/g, '""')}"`
-        : s;
-    };
-    const header = result.columns.map((c) => escape(c.name)).join(sep);
+    const header = result.columns.map((c) => escapeCell(c.name, sep)).join(sep);
     const rows = result.rows.map((row) =>
-      result.columns.map((c) => escape(row[c.name])).join(sep)
+      result.columns.map((c) => escapeCell(row[c.name], sep)).join(sep)
     );
     content = [header, ...rows].join("\n");
     mimeType = format === "csv" ? "text/csv" : "text/tab-separated-values";

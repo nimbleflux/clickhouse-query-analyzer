@@ -1,16 +1,19 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { useNavigate } from "react-router-dom";
-import { Fingerprint, Search, Clock, MemoryStick, ArrowUp, ArrowDown, Filter, ChevronLeft, ChevronRight, AlertTriangle, BarChart3 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Fingerprint, Search, Clock, MemoryStick, AlertTriangle, ChevronLeft, ChevronRight, Filter, BarChart3, Download } from "lucide-react";
 import { fetchFingerprints } from "../api/client";
 import type { FingerprintListResponse } from "../api/types";
-import { formatDuration, formatBytes, formatNumber, formatTime, durationColor, memoryColor } from "../utils";
+import { formatDuration, formatBytes, formatNumber, durationColor, memoryColor } from "../utils";
+import { useDisplayDateTime } from "../hooks/useAppSettings";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
+import { usePollingQuery } from "@/hooks/usePollingQuery";
+import { downloadTable } from "@/lib/export";
 import { PageContainer, PageHeader } from "@/components/ui/page";
 import { Button } from "@/components/ui/button";
 import { Input, Checkbox } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { EmptyState, ErrorState, NotConnectedState, RefreshIndicator, LoadingNotice } from "@/components/ui/state";
-import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { SortableHeader } from "@/components/ui/table-sort";
 import { TimeframeSelector } from "@/components/ui/TimeframeSelector";
 
 const DATE_PRESETS: { label: string; hours: number }[] = [
@@ -27,100 +30,85 @@ function toCHDateTime(d: Date): string {
 
 type SortField = "last_seen" | "execution_count" | "avg_duration_ms" | "p95_duration_ms" | "max_duration_ms" | "avg_memory_usage" | "max_memory_usage" | "error_count" | "avg_read_rows";
 
-interface SortableHeaderProps {
-  field: SortField;
-  sortBy: SortField;
-  sortDir: "DESC" | "ASC";
-  onToggle: (field: SortField) => void;
-  label: string;
-  align?: "left" | "right";
-}
+const SORT_FIELDS: SortField[] = [
+  "last_seen", "execution_count", "avg_duration_ms", "p95_duration_ms", "max_duration_ms",
+  "avg_memory_usage", "max_memory_usage", "error_count", "avg_read_rows",
+];
 
-function SortableHeader({ field, sortBy, sortDir, onToggle, label, align = "left" }: SortableHeaderProps) {
-  const active = sortBy === field;
-  return (
-    <th
-      className={`cursor-pointer px-4 py-2.5 font-medium text-[var(--color-text-secondary)] ${align === "right" ? "text-right" : "text-left"}`}
-      onClick={() => onToggle(field)}
-    >
-      <span className="inline-flex select-none items-center gap-1 hover:text-[var(--color-text-primary)]">
-        {label}
-        {active && (sortDir === "ASC" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
-      </span>
-    </th>
-  );
+// The ?sort_by= param is user-editable, so validate it before trusting it.
+function sortFieldFromParam(v: string): SortField {
+  return (SORT_FIELDS as string[]).includes(v) ? (v as SortField) : "last_seen";
 }
 
 export function QueryFingerprints({ connected }: { connected: boolean }) {
+  // Honors the display-timezone setting (Layout footer Globe toggle).
+  const formatDateTime = useDisplayDateTime();
   const navigate = useNavigate();
-  const [data, setData] = useState<FingerprintListResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [canceled, setCanceled] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlParam = (k: string) => searchParams.get(k) ?? "";
   const [showFilters, setShowFilters] = useState(false);
-  const [search, setSearch] = useState("");
-  const [user, setUser] = useState("");
-  const [logComment, setLogComment] = useState("");
-  const [sortBy, setSortBy] = useState<SortField>("last_seen");
-  const [sortDir, setSortDir] = useState<"DESC" | "ASC">("DESC");
-  const [currentPage, setCurrentPage] = useState(1);
+  const [search, setSearch] = useState(urlParam("q"));
+  const [user, setUser] = useState(urlParam("user"));
+  const [logComment, setLogComment] = useState(urlParam("log_comment"));
+  const [sortBy, setSortBy] = useState<SortField>(sortFieldFromParam(urlParam("sort_by")));
+  const [sortDir, setSortDir] = useState<"DESC" | "ASC">(urlParam("sort_dir") === "ASC" ? "ASC" : "DESC");
+  const [currentPage, setCurrentPage] = useState(() => Math.max(1, Number(urlParam("page")) || 1));
   const [showSystem, setShowSystem] = useState(false);
-  const [fromTime, setFromTime] = useState<string>(toCHDateTime(new Date(Date.now() - 24 * 3600 * 1000)));
-  const [toTime, setToTime] = useState<string>("");
+  const [fromTime, setFromTime] = useState<string>(
+    () => urlParam("from_time") || toCHDateTime(new Date(Date.now() - 24 * 3600 * 1000)),
+  );
+  const [toTime, setToTime] = useState<string>(urlParam("to_time"));
   const [cachedTotal, setCachedTotal] = useState<number | null>(null);
   const pageSize = 50;
   const debouncedSearch = useDebouncedValue(search, 300);
-  const controllerRef = useRef<AbortController | null>(null);
-  const elapsed = useElapsedTimer(loading);
 
   const isFirstPage = currentPage === 1;
   const hasDateFilter = !!(fromTime || toTime);
   const wantsCount = isFirstPage && hasDateFilter;
 
-  const load = useCallback(async (signal?: AbortSignal) => {
-    setCanceled(false);
-    setLoading(true);
-    setError("");
-    try {
-      const result = await fetchFingerprints({
-        search: debouncedSearch || undefined,
-        user: user || undefined,
-        log_comment: logComment || undefined,
-        sort_by: sortBy,
-        sort_dir: sortDir,
-        limit: pageSize,
-        offset: (currentPage - 1) * pageSize,
-        hide_system_queries: showSystem ? false : true,
-        from_time: fromTime || undefined,
-        to_time: toTime || undefined,
-        include_count: wantsCount,
-        no_clamp: !fromTime ? true : undefined,
-      }, signal);
-      if (signal?.aborted) return;
-      setData(result);
-      if (wantsCount) setCachedTotal(result.total);
-    } catch (e) {
-      if (signal?.aborted) return;
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      setError(e instanceof Error ? e.message : "Failed to load fingerprints");
-    } finally {
-      if (!signal?.aborted) setLoading(false);
-    }
+  const fetcher = useCallback(async (signal: AbortSignal) => {
+    const result = await fetchFingerprints({
+      search: debouncedSearch || undefined,
+      user: user || undefined,
+      log_comment: logComment || undefined,
+      sort_by: sortBy,
+      sort_dir: sortDir,
+      limit: pageSize,
+      offset: (currentPage - 1) * pageSize,
+      hide_system_queries: showSystem ? false : true,
+      from_time: fromTime || undefined,
+      to_time: toTime || undefined,
+      include_count: wantsCount,
+      no_clamp: !fromTime ? true : undefined,
+    }, signal);
+    if (wantsCount) setCachedTotal(result.total);
+    return result;
   }, [debouncedSearch, user, logComment, sortBy, sortDir, currentPage, showSystem, fromTime, toTime, wantsCount]);
 
-  const cancel = useCallback(() => {
-    setCanceled(true);
-    controllerRef.current?.abort();
-    setLoading(false);
-  }, []);
+  const {
+    data,
+    loading,
+    error,
+    canceled,
+    elapsed,
+    cancel,
+    reload,
+  } = usePollingQuery<FingerprintListResponse>(fetcher, { enabled: connected });
 
+  // Keep the URL in sync with the active filters so views are shareable and
+  // drill-down links (e.g. ?user=X) work. Uses replace to avoid history spam.
   useEffect(() => {
-    if (!connected) return;
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    load(controller.signal);
-    return () => controller.abort();
-  }, [load, connected]);
+    const sp = new URLSearchParams();
+    if (search) sp.set("q", search);
+    if (user) sp.set("user", user);
+    if (logComment) sp.set("log_comment", logComment);
+    if (fromTime) sp.set("from_time", fromTime);
+    if (toTime) sp.set("to_time", toTime);
+    if (sortBy !== "last_seen") sp.set("sort_by", sortBy);
+    if (sortDir !== "DESC") sp.set("sort_dir", sortDir);
+    if (currentPage > 1) sp.set("page", String(currentPage));
+    setSearchParams(sp, { replace: true });
+  }, [search, user, logComment, fromTime, toTime, sortBy, sortDir, currentPage, setSearchParams]);
 
   const displayTotal = cachedTotal ?? (data?.total ?? 0);
   const totalPages = displayTotal > 0 ? Math.ceil(displayTotal / pageSize) : 0;
@@ -137,6 +125,31 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
 
   // Which quick-range preset is active (null = a custom From/To range is set).
   const [preset, setPreset] = useState<number | null>(24);
+
+  const openFingerprint = useCallback((hash: string, sampleQuery: string) => {
+    navigate(`/fingerprints/${hash}`, { state: { query: sampleQuery } });
+  }, [navigate]);
+
+  // Export exactly what the current page shows (same columns, same order),
+  // with the time column formatted like the UI.
+  const fingerprints = data?.fingerprints ?? [];
+  const exportCurrentPage = (format: "csv" | "json") => {
+    downloadTable(
+      format === "csv" ? "query-fingerprints.csv" : "query-fingerprints.json",
+      ["Last Seen", "Count", "Avg Duration (ms)", "P95 Duration (ms)", "Avg Memory (bytes)", "Avg Rows", "Errors", "Query"],
+      fingerprints.map((f) => [
+        formatDateTime(f.last_seen),
+        f.execution_count,
+        f.avg_duration_ms,
+        f.p95_duration_ms,
+        f.avg_memory_usage,
+        f.avg_read_rows,
+        f.error_count,
+        f.sample_query,
+      ]),
+      format,
+    );
+  };
 
   const applyDatePreset = (hours: number) => {
     setPreset(hours);
@@ -159,7 +172,31 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
       <PageHeader
         title="Query Fingerprints"
         description={displayTotal > 0 ? `${formatNumber(displayTotal)} unique queries` : undefined}
-        actions={loading && data ? <RefreshIndicator elapsed={elapsed} /> : undefined}
+        actions={
+          <>
+            {loading && data ? <RefreshIndicator elapsed={elapsed} /> : null}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => exportCurrentPage("csv")}
+              disabled={fingerprints.length === 0}
+              title="Download this page's rows as CSV"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export CSV
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => exportCurrentPage("json")}
+              disabled={fingerprints.length === 0}
+              title="Download this page's rows as JSON"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export JSON
+            </Button>
+          </>
+        }
       />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -239,7 +276,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
         </Card>
       )}
 
-      {error && <ErrorState error={error} onRetry={load} />}
+      {error && <ErrorState error={error} onRetry={reload} />}
 
       {loading && !data ? (
         <Card className="p-4">
@@ -260,7 +297,7 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
           <LoadingNotice elapsed={elapsed} onCancel={cancel} />
         </Card>
       ) : canceled && !data ? (
-        <LoadingNotice canceled onRetry={load} />
+        <LoadingNotice canceled onRetry={reload} />
       ) : data && data.fingerprints.length === 0 ? (
         <EmptyState
           icon={Fingerprint}
@@ -273,13 +310,13 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--color-border)] bg-[var(--surface-elevated)]">
-                  <SortableHeader field="last_seen" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="Last Seen" />
-                  <SortableHeader field="execution_count" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="Count" align="right" />
-                  <SortableHeader field="avg_duration_ms" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="Avg Duration" align="right" />
-                  <SortableHeader field="p95_duration_ms" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="P95 Duration" align="right" />
-                  <SortableHeader field="avg_memory_usage" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="Avg Memory" align="right" />
-                  <SortableHeader field="avg_read_rows" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="Avg Rows" align="right" />
-                  <SortableHeader field="error_count" sortBy={sortBy} sortDir={sortDir} onToggle={toggleSort} label="Errors" align="right" />
+                  <SortableHeader field="last_seen" activeField={sortBy} dir={sortDir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="Last Seen" className="px-4 py-2.5" />
+                  <SortableHeader field="execution_count" activeField={sortBy} dir={sortDir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="Count" align="right" className="px-4 py-2.5" />
+                  <SortableHeader field="avg_duration_ms" activeField={sortBy} dir={sortDir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="Avg Duration" align="right" className="px-4 py-2.5" />
+                  <SortableHeader field="p95_duration_ms" activeField={sortBy} dir={sortDir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="P95 Duration" align="right" className="px-4 py-2.5" />
+                  <SortableHeader field="avg_memory_usage" activeField={sortBy} dir={sortDir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="Avg Memory" align="right" className="px-4 py-2.5" />
+                  <SortableHeader field="avg_read_rows" activeField={sortBy} dir={sortDir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="Avg Rows" align="right" className="px-4 py-2.5" />
+                  <SortableHeader field="error_count" activeField={sortBy} dir={sortDir === "ASC" ? "asc" : "desc"} onToggle={toggleSort} label="Errors" align="right" className="px-4 py-2.5" />
                   <th className="px-4 py-2.5 font-medium text-[var(--color-text-secondary)]">Query</th>
                 </tr>
               </thead>
@@ -287,13 +324,22 @@ export function QueryFingerprints({ connected }: { connected: boolean }) {
                 {data.fingerprints.map((f) => (
                   <tr
                     key={f.normalized_query_hash}
-                    onClick={() => navigate(`/fingerprints/${f.normalized_query_hash}`, { state: { query: f.sample_query } })}
-                    className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)] transition-colors"
+                    onClick={() => openFingerprint(f.normalized_query_hash, f.sample_query)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openFingerprint(f.normalized_query_hash, f.sample_query);
+                      }
+                    }}
+                    tabIndex={0}
+                    role="link"
+                    aria-label={`Open fingerprint from ${formatDateTime(f.last_seen)}`}
+                    className="cursor-pointer border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--surface-hover)] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]"
                   >
                     <td className="whitespace-nowrap px-4 py-3 text-[var(--color-text-secondary)]">
                       <div className="flex items-center gap-1">
                         <Clock className="h-3 w-3" />
-                        {formatTime(f.last_seen)}
+                        {formatDateTime(f.last_seen)}
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-[var(--color-text-primary)]">

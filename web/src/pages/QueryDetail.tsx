@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom";
 import CodeMirror from "@uiw/react-codemirror";
 import { clickhouseSql } from "./editor/clickhouseDialect";
@@ -49,9 +49,13 @@ export function QueryDetail({ connected }: { connected: boolean }) {
   const copy = useCopyToClipboard();
   const [query, setQuery] = useState<QueryLogEntry | null>(null);
   const [metrics, setMetrics] = useState<MetricPoint[]>([]);
+  const [metricsError, setMetricsError] = useState<ApiError | null>(null);
   const [threads, setThreads] = useState<ThreadEntry[]>([]);
+  const [threadsError, setThreadsError] = useState<ApiError | null>(null);
   const [views, setViews] = useState<ViewLogEntry[]>([]);
+  const [viewsError, setViewsError] = useState<ApiError | null>(null);
   const [explain, setExplain] = useState<ExplainResult | null>(null);
+  const [explainError, setExplainError] = useState<ApiError | null>(null);
   const initialTab = TABS.find((t) => t.key === searchParams.get("tab"))?.key ?? "overview";
   const [tab, setTab] = useState<Tab>(initialTab);
   const [loading, setLoading] = useState(true);
@@ -63,24 +67,38 @@ export function QueryDetail({ connected }: { connected: boolean }) {
   const [flameAttempted, setFlameAttempted] = useState(false);
   const [activeFlameType, setActiveFlameType] = useState<string>("Real");
 
-  useEffect(() => {
-    if (!connected) return;
+  // Load (or reload) the query and its side resources. Extracted from the
+  // mount effect so the page-level ErrorState can retry in place instead of
+  // falling back to window.location.reload() (which drops the SPA route).
+  const load = useCallback(() => {
+    if (!connected || !queryId) return;
     const controller = new AbortController();
     let aborted = false;
-    if (!queryId) return;
     setLoading(true);
     setError(null);
+    setMetricsError(null);
+    setThreadsError(null);
+    setViewsError(null);
+    // Side resources fail soft: each gets its own {data, error} pair (rendered
+    // as an ErrorState inside its tab) instead of masking a failure as an
+    // empty result. Only the primary fetchQuery failure blanks the page.
+    const settle = <T,>(p: Promise<T>): Promise<{ data: T | null; error: ApiError | null }> =>
+      p.then((data) => ({ data, error: null }))
+        .catch((e) => ({ data: null, error: e instanceof ApiError ? e : ApiError.wrap(e) }));
     Promise.all([
       fetchQuery(queryId, controller.signal),
-      fetchQueryMetrics(queryId, controller.signal).catch(() => []),
-      fetchQueryThreads(queryId, controller.signal).catch(() => []),
-      fetchQueryViews(queryId, controller.signal).catch(() => []),
+      settle(fetchQueryMetrics(queryId, controller.signal)),
+      settle(fetchQueryThreads(queryId, controller.signal)),
+      settle(fetchQueryViews(queryId, controller.signal)),
     ]).then(([q, m, t, v]) => {
       if (aborted) return;
       setQuery(q);
-      setMetrics(m || []);
-      setThreads(t || []);
-      setViews(v || []);
+      setMetrics(m.data || []);
+      setMetricsError(m.error);
+      setThreads(t.data || []);
+      setThreadsError(t.error);
+      setViews(v.data || []);
+      setViewsError(v.error);
     }).catch((e) => {
       if (aborted) return;
       setError(e instanceof ApiError ? e : ApiError.wrap(e));
@@ -92,14 +110,19 @@ export function QueryDetail({ connected }: { connected: boolean }) {
     return () => { aborted = true; controller.abort(); };
   }, [queryId, connected]);
 
+  useEffect(() => load(), [load]);
+
   const loadExplain = async (pretty?: boolean) => {
     if (!queryId) return;
     // without an explicit pretty flag, only fetch once (lazy tab open)
     if (pretty === undefined && explain) return;
+    setExplainError(null);
     try {
       const e = await fetchExplain(queryId, pretty === true);
       setExplain(e);
-    } catch {}
+    } catch (e) {
+      setExplainError(e instanceof ApiError ? e : ApiError.wrap(e));
+    }
   };
 
   const loadFlameGraph = async () => {
@@ -180,7 +203,7 @@ export function QueryDetail({ connected }: { connected: boolean }) {
       <PageContainer>
         <ErrorState
           error={error || "Query not found"}
-          onRetry={() => window.location.reload()}
+          onRetry={load}
         />
       </PageContainer>
     );
@@ -288,10 +311,10 @@ export function QueryDetail({ connected }: { connected: boolean }) {
           ))}
         </TabsList>
 
-        <TabsContent value="overview"><OverviewTab query={query} metrics={metrics} /></TabsContent>
-        <TabsContent value="memory"><MemoryTab query={query} metrics={metrics} /></TabsContent>
+        <TabsContent value="overview"><OverviewTab query={query} metrics={metrics} metricsError={metricsError} onRetryMetrics={load} /></TabsContent>
+        <TabsContent value="memory"><MemoryTab query={query} metrics={metrics} metricsError={metricsError} onRetryMetrics={load} /></TabsContent>
         <TabsContent value="threads">
-          <ThreadsTab queryId={query.query_id} threads={threads} pipelineStr={explain?.pipeline} querySettings={query.settings} />
+          <ThreadsTab queryId={query.query_id} threads={threads} threadsError={threadsError} onRetryThreads={load} pipelineStr={explain?.pipeline} querySettings={query.settings} />
         </TabsContent>
         <TabsContent value="storage"><StorageTab events={query.profile_events} /></TabsContent>
         <TabsContent value="flamegraph">
@@ -305,8 +328,8 @@ export function QueryDetail({ connected }: { connected: boolean }) {
             activeType={activeFlameType}
           />
         </TabsContent>
-        <TabsContent value="explain"><ExplainTab queryId={query.query_id} explain={explain} onLoadPretty={() => loadExplain(true)} /></TabsContent>
-        <TabsContent value="views"><ViewsTab views={views} /></TabsContent>
+        <TabsContent value="explain"><ExplainTab queryId={query.query_id} explain={explain} explainError={explainError} onRetryExplain={() => loadExplain()} onLoadPretty={() => loadExplain(true)} /></TabsContent>
+        <TabsContent value="views"><ViewsTab views={views} viewsError={viewsError} onRetryViews={load} /></TabsContent>
         <TabsContent value="settings"><SettingsTab settings={query.settings} /></TabsContent>
       </Tabs>
     </PageContainer>

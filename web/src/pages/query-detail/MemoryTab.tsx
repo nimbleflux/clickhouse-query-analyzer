@@ -5,14 +5,19 @@ import {
 } from "recharts";
 import { formatBytes, formatNumber, memoryColor } from "@/utils";
 import type { QueryLogEntry, MetricPoint } from "@/api/types";
+import type { ApiError } from "@/api/errors";
+import { ErrorState } from "@/components/ui/state";
 import { ChartSection, SettingHint, extractMemoryCategories, PIE_COLORS, tooltipFmt, TOOLTIP_STYLE } from "./shared";
 
 interface MemoryTabProps {
   query: QueryLogEntry;
   metrics: MetricPoint[];
+  /** Set when the metrics fetch failed; renders an ErrorState instead of the "no data" hint. */
+  metricsError?: ApiError | null;
+  onRetryMetrics?: () => void;
 }
 
-export function MemoryTab({ query, metrics }: MemoryTabProps) {
+export function MemoryTab({ query, metrics, metricsError, onRetryMetrics }: MemoryTabProps) {
   const memCategories = extractMemoryCategories(query.profile_events);
 
   const memOverTime = metrics.length > 1
@@ -124,7 +129,15 @@ export function MemoryTab({ query, metrics }: MemoryTabProps) {
         </ChartSection>
       )}
 
-      {memCategories.length === 0 && memOverTime.length === 0 && (
+      {metricsError && memOverTime.length === 0 && (
+        <ErrorState
+          error={metricsError}
+          title="Failed to load memory metrics"
+          onRetry={onRetryMetrics}
+        />
+      )}
+
+      {memCategories.length === 0 && memOverTime.length === 0 && !metricsError && (
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--surface-card)] p-8 text-center text-sm text-[var(--color-text-secondary)]">
           No detailed memory data available.
           <br />
