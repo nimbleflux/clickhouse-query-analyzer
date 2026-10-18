@@ -8,8 +8,10 @@ test.describe.serial("app shell", () => {
   test("connects via the connection bar and renders the dashboard", async ({ page }) => {
     await connectViaUI(page);
 
-    // Dashboard stat cards and sections render with live data.
-    await expect(page.getByText("Uptime", { exact: false })).toBeVisible();
+    // Dashboard stat cards and sections render with live data. Exact match:
+    // a freshly started server also renders a "clickhouse uptime: 0m"
+    // warning, which substring-matching would trip the strict-mode check.
+    await expect(page.getByText("Uptime", { exact: true })).toBeVisible();
     await expect(page.getByText("System Log Tables")).toBeVisible();
     await expect(page.getByText("Database Sizes")).toBeVisible();
   });
