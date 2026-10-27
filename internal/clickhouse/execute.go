@@ -63,9 +63,6 @@ type QueryResult struct {
 	// Output holds that text and the editor renders it verbatim.
 	IsText bool   `json:"is_text"`
 	Output string `json:"output"`
-	// Advisor is set when the executed SQL appears to read remote-backed
-	// tables (S3/URL/Iceberg/…); it carries warnings and quick actions.
-	Advisor *QueryAdvisor `json:"advisor,omitempty"`
 }
 
 // isSelectLike returns true if the query looks like a SELECT (or WITH/EXPLAIN/VALUES)

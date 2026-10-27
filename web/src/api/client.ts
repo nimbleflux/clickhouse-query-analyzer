@@ -14,6 +14,7 @@ import type {
   ThreadProfile,
   QueryResult,
   QueryProgress,
+  QueryAdvisor,
   ExecuteStreamEvent,
   TableAnalysis,
   BulkEvent,
@@ -259,14 +260,17 @@ export function normalizeQueryResult(r: QueryResult): QueryResult {
     ...r,
     columns: r.columns ?? [],
     rows: r.rows ?? [],
-    advisor: r.advisor
-      ? {
-          ...r.advisor,
-          tables: r.advisor.tables ?? [],
-          warnings: r.advisor.warnings ?? [],
-          suggestions: r.advisor.suggestions ?? [],
-        }
-      : undefined,
+    advisor: r.advisor ? normalizeQueryAdvisor(r.advisor) : undefined,
+  };
+}
+
+/** Same null-guarding as normalizeQueryResult, for late advisor events. */
+function normalizeQueryAdvisor(a: NonNullable<QueryResult["advisor"]>): NonNullable<QueryResult["advisor"]> {
+  return {
+    ...a,
+    tables: a.tables ?? [],
+    warnings: a.warnings ?? [],
+    suggestions: a.suggestions ?? [],
   };
 }
 
@@ -281,6 +285,7 @@ export async function executeQuery(
   onStarted?: (queryId: string) => void,
   params?: Record<string, string>,
   tag?: string,
+  onAdvisor?: (advisor: QueryAdvisor, queryId?: string) => void,
 ): Promise<QueryResult> {
   const headers: Record<string, string> = {
     ...getConnectionHeaders(),
@@ -306,49 +311,89 @@ export async function executeQuery(
     throw await ApiError.fromResponse(res);
   }
 
-  // Consume the NDJSON event stream: started → progress* → result|error.
-  // The first event arrives before the query runs, which keeps reverse-proxy
-  // read timeouts from firing on long-running queries.
+  // Consume the NDJSON event stream: started → progress* → result|error,
+  // then optionally one trailing advisor event. The first event arrives
+  // before the query runs, which keeps reverse-proxy read timeouts from
+  // firing on long-running queries.
   if (!res.body) {
     throw new ApiError("Query stream unavailable", res.status, "NETWORK_ERROR", "", true);
   }
+
+  // The promise settles at the "result" event. The advisor is derived
+  // AFTER the rows are streamed (its per-table query_log scans can take
+  // seconds), so it arrives as a trailing event on a stream that keeps
+  // running after the caller already has its result — drain it in the
+  // background and hand it to onAdvisor.
+  let settled = false;
+  let resolveResult!: (r: QueryResult) => void;
+  let rejectResult!: (e: unknown) => void;
+  const resultPromise = new Promise<QueryResult>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      let evt: ExecuteStreamEvent;
-      try {
-        evt = JSON.parse(trimmed);
-      } catch {
-        continue;
-      }
-      switch (evt.type) {
-        case "started":
-          if (evt.query_id) onStarted?.(evt.query_id);
-          break;
-        case "progress":
-          if (evt.progress) onProgress?.(evt.progress);
-          break;
-        case "result":
-          return normalizeQueryResult(evt.result!);
-        case "error": {
-          const e = evt.error;
-          const code = (e?.code ?? "CH_EXCEPTION") as ApiErrorCode;
-          const status = code === "QUERY_TIMEOUT" ? 504 : 502;
-          throw new ApiError(e?.error || "Query failed", status, code, e?.hint ?? "", e?.retry ?? false);
-        }
+
+  const handleEvent = (evt: ExecuteStreamEvent): void => {
+    switch (evt.type) {
+      case "started":
+        if (evt.query_id) onStarted?.(evt.query_id);
+        break;
+      case "progress":
+        if (evt.progress) onProgress?.(evt.progress);
+        break;
+      case "advisor":
+        if (evt.advisor) onAdvisor?.(normalizeQueryAdvisor(evt.advisor), evt.query_id);
+        break;
+      case "result":
+        settled = true;
+        resolveResult(normalizeQueryResult(evt.result!));
+        break;
+      case "error": {
+        const e = evt.error;
+        const code = (e?.code ?? "CH_EXCEPTION") as ApiErrorCode;
+        const status = code === "QUERY_TIMEOUT" ? 504 : 502;
+        throw new ApiError(e?.error || "Query failed", status, code, e?.hint ?? "", e?.retry ?? false);
       }
     }
-  }
-  throw new ApiError("Query stream ended without a result", 0, "NETWORK_ERROR", "", true);
+  };
+
+  void (async () => {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          let evt: ExecuteStreamEvent;
+          try {
+            evt = JSON.parse(trimmed);
+          } catch {
+            continue;
+          }
+          handleEvent(evt);
+        }
+      }
+      if (!settled) {
+        rejectResult(new ApiError("Query stream ended without a result", 0, "NETWORK_ERROR", "", true));
+      }
+    } catch (e) {
+      // After the result has been delivered the only thing left on the
+      // stream is the trailing advisor — losing it to a read error (abort,
+      // proxy close) must not reject a settled query. Rejections before
+      // that keep the raw error shape (AbortError stays a DOMException;
+      // callers check for it).
+      if (!settled) rejectResult(e);
+    }
+  })();
+
+  return resultPromise;
 }
 
 /**
