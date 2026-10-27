@@ -229,10 +229,14 @@ func corsMiddleware(origin string) func(http.Handler) http.Handler {
 // securityHeadersMiddleware sets conservative headers on every response.
 // The Content-Security-Policy locks the SPA down to same-origin scripts and
 // styles; 'unsafe-inline' on styles is required because CodeMirror and React
-// inject style attributes at runtime. In dev mode the CSP is skipped — the
-// Vite dev server needs HMR websockets and transformed-module sources.
+// inject style attributes at runtime. 'wasm-unsafe-eval' on scripts is
+// required by viz-js (Graphviz compiled to WebAssembly) which renders the
+// schema graph and pipeline diagrams client-side — it allows wasm
+// compilation without re-enabling JS eval(). In dev mode the CSP is
+// skipped — the Vite dev server needs HMR websockets and transformed-module
+// sources.
 func securityHeadersMiddleware(devMode bool) func(http.Handler) http.Handler {
-	csp := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+	csp := "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
 		"img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; " +
 		"object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
 	return func(next http.Handler) http.Handler {
