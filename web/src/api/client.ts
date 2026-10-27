@@ -249,6 +249,27 @@ export async function fetchThreadProfile(queryId: string, threadId: number, sign
   return fetchJSON<ThreadProfile>(`${BASE}/queries/${encodeURIComponent(queryId)}/threads/${threadId}/profile`, { signal });
 }
 
+/**
+ * Go marshals empty slices as JSON null, so a 0-row result can arrive with
+ * `rows: null` (and the advisor with null arrays). The editor reads .length
+ * on all of these, so normalize at the single point results enter the app.
+ */
+export function normalizeQueryResult(r: QueryResult): QueryResult {
+  return {
+    ...r,
+    columns: r.columns ?? [],
+    rows: r.rows ?? [],
+    advisor: r.advisor
+      ? {
+          ...r.advisor,
+          tables: r.advisor.tables ?? [],
+          warnings: r.advisor.warnings ?? [],
+          suggestions: r.advisor.suggestions ?? [],
+        }
+      : undefined,
+  };
+}
+
 export async function executeQuery(
   query: string,
   limit: number,
@@ -317,7 +338,7 @@ export async function executeQuery(
           if (evt.progress) onProgress?.(evt.progress);
           break;
         case "result":
-          return evt.result!;
+          return normalizeQueryResult(evt.result!);
         case "error": {
           const e = evt.error;
           const code = (e?.code ?? "CH_EXCEPTION") as ApiErrorCode;
@@ -393,7 +414,8 @@ export async function executeDetached(
 }
 
 export async function fetchJob(jobId: string, signal?: AbortSignal): Promise<DetachedJob> {
-  return fetchJSON(`${BASE}/jobs/${encodeURIComponent(jobId)}`, { signal });
+  const job = await fetchJSON<DetachedJob>(`${BASE}/jobs/${encodeURIComponent(jobId)}`, { signal });
+  return { ...job, result: job.result ? normalizeQueryResult(job.result) : undefined };
 }
 
 export async function cancelJob(jobId: string, signal?: AbortSignal): Promise<{ status: string }> {

@@ -622,7 +622,10 @@ func (c *Client) executeQueryHTTP(ctx context.Context, opts *ExecuteOptions) (*Q
 
 	columns := columnsFromNamesTypes(names, types)
 
-	var result []map[string]any
+	// Non-nil from the start: a nil slice marshals as JSON null, and a 0-row
+	// result would then ship "rows": null, which crashes the editor's result
+	// table (reading 'length'). The native path below does the same.
+	result := make([]map[string]any, 0, min(opts.Limit, 64))
 	rowIdx := 0
 	for dec.More() {
 		var vals []json.RawMessage

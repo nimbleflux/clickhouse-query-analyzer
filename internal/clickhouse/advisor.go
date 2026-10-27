@@ -191,7 +191,9 @@ func (c *Client) AdviseForQuery(ctx context.Context, query string) *QueryAdvisor
 		return nil
 	}
 
-	advisor := &QueryAdvisor{Tables: matched}
+	// Warnings/Suggestions start as empty slices, not nil: a nil slice
+	// marshals as JSON null and the UI reads .length on both.
+	advisor := &QueryAdvisor{Tables: matched, Warnings: []string{}, Suggestions: []string{}}
 	names := make([]string, len(matched))
 	for i, t := range matched {
 		names[i] = fmt.Sprintf("%s.%s (engine %s)", t.Database, t.Table, t.Engine)
