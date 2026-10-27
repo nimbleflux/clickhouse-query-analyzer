@@ -2,6 +2,10 @@ package clickhouse
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -236,5 +240,50 @@ func TestCountQueryRowsRejectsNonSelect(t *testing.T) {
 		if n != -1 {
 			t.Fatalf("%q: want -1, got %d", q, n)
 		}
+	}
+}
+
+// A 0-row result over the HTTP protocol must marshal "rows": [], not null —
+// the editor's result table reads .length on it and crashes on null.
+// (Regression: the row slice was declared with var, stayed nil for 0 rows,
+// and shipped "rows": null — "Uncaught TypeError: Cannot read properties of
+// null (reading 'length')" the moment a query matched nothing.)
+func TestExecuteQueryHTTPEmptyResultRowsNotEmpty(t *testing.T) {
+	// JSONCompactEachRowWithNamesAndTypes payload of a SELECT matching zero
+	// rows: names line, types line, no data lines.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/tab-separated-values; charset=UTF-8")
+		fmt.Fprint(w, "[\"n\",\"s\"]\n[\"UInt64\",\"String\"]\n")
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		httpClient: srv.Client(),
+		connURL:    srv.URL,
+		connUser:   "u",
+		connPass:   "p",
+		isHTTP:     true,
+	}
+
+	res, err := c.ExecuteQuery(context.Background(), ExecuteOptions{Query: "SELECT n, s FROM t WHERE 0", Limit: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Rows == nil {
+		t.Fatal("Rows must be a non-nil empty slice for a 0-row result")
+	}
+	if res.Columns == nil {
+		t.Fatal("Columns must be a non-nil slice for a 0-row result")
+	}
+	if len(res.Columns) != 2 || len(res.Rows) != 0 || res.RowCount != 0 {
+		t.Fatalf("unexpected result shape: %d columns, %d rows, row_count %d", len(res.Columns), len(res.Rows), res.RowCount)
+	}
+
+	b, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("marshaling result: %v", err)
+	}
+	if strings.Contains(string(b), `"rows":null`) {
+		t.Fatalf(`result marshals "rows": null, which crashes the editor: %s`, b)
 	}
 }
