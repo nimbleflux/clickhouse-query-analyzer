@@ -10,7 +10,7 @@ import { acceptCompletion } from "@codemirror/autocomplete";
 import { format as sqlFormat } from "sql-formatter";
 import { Play, Loader2, Square, Plus, X, Bookmark, BookmarkCheck, Settings2, Share2, Clock } from "lucide-react";
 import { executeQuery, executeDetached, fetchJob, cancelJob, cancelExecuteQuery, fetchDatabases, fetchTables, fetchColumns } from "@/api/client";
-import type { QueryResult, QueryProgress, DetachedJob } from "@/api/types";
+import type { QueryResult, QueryProgress, QueryAdvisor, DetachedJob } from "@/api/types";
 import { useTheme } from "@/api/theme";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { NotConnectedState, ErrorState } from "@/components/ui/state";
@@ -141,6 +141,22 @@ export function QueryEditor({ connected }: { connected: boolean }) {
       return { ...t, paramValues: next };
     }));
   }, [activeTab.id]);
+
+  // Merge a late advisor event into result `index` of one tab. Advisor
+  // events trail their result on the execute stream, so they can arrive
+  // after the run has committed — or after it was replaced by a newer run.
+  // The query_id match keeps a stale advisor from attaching to a result it
+  // wasn't computed for.
+  const applyAdvisor = useCallback((tabId: string, index: number, queryId: string | undefined, advisor: QueryAdvisor) => {
+    setTabs((prev) => prev.map((t) => {
+      if (t.id !== tabId) return t;
+      const target = t.results[index];
+      if (!target || (queryId && target.query_id !== queryId)) return t;
+      const results = [...t.results];
+      results[index] = { ...target, advisor };
+      return { ...t, results };
+    }));
+  }, []);
 
   const toggleSection = useCallback((key: keyof SidebarSections) => {
     setSidebarSections((prev) => {
@@ -318,6 +334,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
     offset: number,
     signal: AbortSignal | undefined,
     onProgress: ((p: QueryProgress) => void) | undefined,
+    onAdvisor?: (advisor: QueryAdvisor, queryId?: string) => void,
   ): Promise<QueryResult> => {
     return executeQuery(
       stmt, pageSize, offset, buildSettingsMap(), settings.readonly, signal,
@@ -325,6 +342,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
       (queryId) => updateTab(activeTab.id, { runningQueryId: queryId }),
       settings.enable_params ? paramValues : undefined,
       logTag,
+      onAdvisor,
     );
   }, [buildSettingsMap, settings.readonly, settings.enable_params, paramValues, pageSize, activeTab.id, updateTab, logTag]);
 
@@ -335,13 +353,22 @@ export function QueryEditor({ connected }: { connected: boolean }) {
 
     const allResults: QueryResult[] = [];
     const allErrors: string[] = [];
+    // Advisor events trail their result (see executeQuery): while later
+    // statements are still running there are no committed results to merge
+    // into, so park them per statement and fold them in at commit time.
+    const pendingAdvisors = new Map<number, { queryId: string; advisor: QueryAdvisor }>();
 
     for (let i = 0; i < stmts.length; i++) {
       updateTab(activeTab.id, { runningStatement: i + 1 });
       try {
-        const r = await runOneStatement(stmts[i], 0, abortRef.current?.signal, (p) => {
-          updateTab(activeTab.id, { progress: p });
-        });
+        const r = await runOneStatement(
+          stmts[i], 0, abortRef.current?.signal,
+          (p) => { updateTab(activeTab.id, { progress: p }); },
+          (advisor, queryId) => {
+            if (queryId) pendingAdvisors.set(i, { queryId, advisor });
+            applyAdvisor(activeTab.id, i, queryId, advisor);
+          },
+        );
         allResults.push(r);
         allErrors.push("");
       } catch (e) {
@@ -351,14 +378,20 @@ export function QueryEditor({ connected }: { connected: boolean }) {
       }
     }
 
-    updateTab(activeTab.id, { results: allResults, errors: allErrors, running: false, resultPages: stmts.map(() => 0), progress: null, runningQueryId: undefined, runningStatement: undefined });
+    // Commit with any advisors that arrived while later statements ran.
+    // Advisors that land after this point merge via applyAdvisor directly.
+    const finalized = allResults.map((r, i) => {
+      const p = pendingAdvisors.get(i);
+      return p && p.queryId === r.query_id ? { ...r, advisor: p.advisor } : r;
+    });
+    updateTab(activeTab.id, { results: finalized, errors: allErrors, running: false, resultPages: stmts.map(() => 0), progress: null, runningQueryId: undefined, runningStatement: undefined });
     stopTimer();
     abortRef.current = null;
     if (!allErrors.every((e) => e)) {
       addToHistory(historyInput);
       setQueryHistory(loadHistory());
     }
-  }, [activeTab.id, updateTab, startTimer, stopTimer, runOneStatement]);
+  }, [activeTab.id, updateTab, startTimer, stopTimer, runOneStatement, applyAdvisor]);
 
   // Paging result i re-executes ONLY statements[i] at the new offset and
   // splices it back into results[i]/errors[i]. Results from a multi-statement
@@ -384,7 +417,10 @@ export function QueryEditor({ connected }: { connected: boolean }) {
       }));
     };
     try {
-      const r = await runOneStatement(tabStmts[index], offset, abortRef.current?.signal, undefined);
+      const r = await runOneStatement(
+        tabStmts[index], offset, abortRef.current?.signal, undefined,
+        (advisor, queryId) => applyAdvisor(activeTab.id, index, queryId, advisor),
+      );
       splice(r, "");
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
@@ -394,7 +430,7 @@ export function QueryEditor({ connected }: { connected: boolean }) {
       );
     }
     abortRef.current = null;
-  }, [activeTab.id, activeTab.statements, activeTab.resultPages, setTabs, updateTab, runOneStatement, pageSize]);
+  }, [activeTab.id, activeTab.statements, activeTab.resultPages, setTabs, updateTab, runOneStatement, applyAdvisor, pageSize]);
 
   const runSelection = useCallback(async () => {
     const view = (editorRef.current as { view?: { state: { selection: { main: { from: number; to: number; head: number } }; sliceDoc: (from: number, to: number) => string; doc: { toString: () => string } } } })?.view;

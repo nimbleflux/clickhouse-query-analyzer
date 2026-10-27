@@ -426,12 +426,17 @@ func (a *API) CompareQueries(w http.ResponseWriter, r *http.Request) {
 // response. The response always starts with a "started" event (flushed
 // immediately, so reverse proxies see bytes right away and their read
 // timeouts never fire), zero or more "progress" events, and exactly one
-// terminal "result" or "error" event.
+// terminal "result" or "error" event. After a successful "result" on the
+// first page, one trailing "advisor" event may follow: the advisor derives
+// remote-table stats from query_log, which can take seconds, so it is
+// streamed after the rows rather than delaying the result the user waits
+// for.
 type executeStreamEvent struct {
-	Type     string                    `json:"type"` // started | progress | result | error
+	Type     string                    `json:"type"` // started | progress | result | advisor | error
 	QueryID  string                    `json:"query_id,omitempty"`
 	Progress *clickhouse.QueryProgress `json:"progress,omitempty"`
 	Result   *clickhouse.QueryResult   `json:"result,omitempty"`
+	Advisor  *clickhouse.QueryAdvisor  `json:"advisor,omitempty"`
 	Error    *ApiError                 `json:"error,omitempty"`
 }
 
@@ -577,14 +582,21 @@ func (a *API) ExecuteQuery(w http.ResponseWriter, r *http.Request) {
 		writeEvent(executeStreamEvent{Type: "error", QueryID: queryID, Error: apiErrorFromErr(err, a.queryTimeout)})
 		return
 	}
+	// Stream the rows the moment the query finishes. The advisor below can
+	// take seconds (per-remote-table 24h query_log scans) and used to run
+	// before this event — the UI spun for a query ClickHouse had long
+	// finished while timing_ms said milliseconds. It now trails as a
+	// separate "advisor" event.
+	writeEvent(executeStreamEvent{Type: "result", QueryID: queryID, Result: result})
 	// Advisor is best-effort, computed on the first page only (pagination
 	// re-runs shouldn't re-derive it), and must never fail the query.
 	if offset == 0 {
 		actx, acancel := context.WithTimeout(context.Background(), 5*time.Second)
-		result.Advisor = ch.AdviseForQuery(actx, req.Query)
+		if advisor := ch.AdviseForQuery(actx, req.Query); advisor != nil {
+			writeEvent(executeStreamEvent{Type: "advisor", QueryID: queryID, Advisor: advisor})
+		}
 		acancel()
 	}
-	writeEvent(executeStreamEvent{Type: "result", QueryID: queryID, Result: result})
 }
 
 // ExecuteCount runs the (formerly automatic) `SELECT count() FROM (user query)`

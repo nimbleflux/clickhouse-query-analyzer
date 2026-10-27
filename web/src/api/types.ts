@@ -246,12 +246,18 @@ export interface QueryProgress {
   is_running: boolean;
 }
 
-/** One NDJSON line of the /api/execute streaming response. */
+/**
+ * One NDJSON line of the /api/execute streaming response. An "advisor"
+ * event may trail the terminal "result": the advisor derives remote-table
+ * stats from query_log, which can take seconds, so it streams after the
+ * rows rather than delaying them.
+ */
 export interface ExecuteStreamEvent {
-  type: "started" | "progress" | "result" | "error";
+  type: "started" | "progress" | "result" | "advisor" | "error";
   query_id?: string;
   progress?: QueryProgress;
   result?: QueryResult;
+  advisor?: QueryAdvisor;
   error?: { error?: string; code?: string; hint?: string; retry?: boolean };
 }
 
