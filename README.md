@@ -143,6 +143,12 @@ ClickLens connects to ClickHouse from the browser, so TLS certificates must be t
         - ./certs/tls.key:/etc/nginx/tls.key:ro
   ```
 
+  > **Security note:** If you front ClickLens with nginx, run a patched build: the
+  > November 2026 HTTP/2 RCE vulnerabilities (CVE-2026-123007, CVE-2026-123633) are fixed
+  > in **nginx ≥ 1.31.9 (mainline)** and **≥ 1.30.7 (stable)**. Run `docker compose pull nginx`
+  > to refresh a cached image. Exposure requires `http2` to be enabled — if you can't
+  > upgrade yet, disable HTTP/2 on the proxy as a stopgap.
+
 ## Dev Environment
 
 ```bash
