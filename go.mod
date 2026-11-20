@@ -3,7 +3,7 @@ module github.com/nimbleflux/clickhouse-query-analyzer
 go 1.27.3
 
 require (
-	github.com/ClickHouse/clickhouse-go/v2 v2.49.0
+	github.com/ClickHouse/clickhouse-go/v2 v2.50.0
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/prometheus/client_golang v1.25.0
 )
